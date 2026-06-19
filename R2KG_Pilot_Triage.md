@@ -89,3 +89,37 @@ debt, pretax tag), add the early-XBRL earliest-filed fallback, and the vintage m
 deleted. No surprises that aren't explained. This is "clean enough to proceed to the production
 build" — not yet "clean enough to scale to 3,400," which comes after fixes 1–4 land and re-pass
 the regression set.
+
+---
+
+## Revision v2 results — re-scored vs ground truth (112 cells)
+
+Fixes implemented and validated live: pretax priority reorder; equity identity repair
+(parent = inclNCI − NCI); cash combined-minus-restricted derivation; debt assembly; early-XBRL
+earliest-filed fallback (time-bounded to 540 days so retro-tags can't contaminate);
+**revenue = the `Revenues` total-revenues element when tagged** (it is the presented total —
+larger than RFCwC for non-606-revenue filers like BE, smaller for filers netting a derivative
+line like PDCE; either way it is the reported total); bank carve-out only when no `Revenues`
+line exists (keeps StoneX-type financials off it); zero-asset shell years blanked.
+
+**Score: 105 / 112 (93.8%). Zero clean pilot bugs.** The 7 residuals:
+
+| Cell | Category | Disposition |
+|---|---|---|
+| CMC 2024 revenue | **GT data error** | GT dropped a digit (7,925,972 is correct) — pilot right |
+| MGLN 2019 cash | **GT stale** | excl-restricted 178,794 confirmed correct — pilot right |
+| MKSI 2024 cash | **GT recorded gross** | pilot 420,000 = excl-restricted (policy); GT = combined line |
+| MKSI 2024 net income | **Re-verify** | XBRL `NetIncomeLoss`=`ProfitLoss`=190M at original accn vs GT 38M |
+| AMRX 2024 net income | **Definitional (Up-C)** | pilot `NetIncomeLoss` (parent) is §2.2-correct; GT chose "before NCI accretion" |
+| BE 2024 net income | **Definitional** | pilot parent NI is §2.2-correct; GT chose "attributable to common" |
+| PLXS 2024 revenue | **Genuine override** | anomalous tagging (RFCwC-excl > RFCwC-incl, no `Revenues`); needs a value override |
+
+Net: the engine is correct on ~110/112 cells once GT data errors are fixed and the two
+policy-correct definitional choices are credited; **PLXS 2024 is the single genuine override**
+and **MKSI 2024 net income needs a 10-K re-check**. Known architectural item deferred to
+production: a small set of filers where even `Revenues` is absent and the contract tag is
+mis-presented (PLXS) needs the presentation linkbase (pre.txt) or an override — flagged via
+`revenue_FACE_FLAG`, not silently chosen.
+
+**Verdict: clean enough to scale.** Recommended gate before the full ~3,400 run: (a) correct
+the 3 GT cells, (b) record the PLXS override, (c) re-verify MKSI net income.
