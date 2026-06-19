@@ -1,0 +1,23 @@
+cik,ticker,name,reason,focus_year,focus_metric
+0000031235,KODK,Eastman Kodak Co,revenue undercount: priority Revenues < true SalesRevenueNet top line,2010,revenue
+0000022444,CMC,Commercial Metals Co,net income: continuing-ops vs total NetIncomeLoss,2018,net_income
+0000096869,TRC,Tejon Ranch Co,pretax sign disagreement across sibling tags,2016,pretax_income
+0000077877,PDCE,PDC Energy Inc,revenue: Revenues vs RFCwC definitional,2016,revenue
+0000704532,NANO,Nanometrics Inc,net income comparative-vintage pollution (NANO case),2019,net_income
+0000918541,NNBR,NN Inc,"equity: parent vs incl-NCI, suspected vintage/scale bug",2020,stockholders_equity
+0000020212,CHDN,Churchill Downs Inc,revenue=0 miss; SalesRevenueServicesNet top line,2011,revenue
+0000277509,FSS,Federal Signal Corp,revenue: Revenues vs SalesRevenueNet face top line,2011,revenue
+0000019411,MGLN,Magellan Health Inc,cash incl-restricted vs excl-restricted,2019,cash
+0001049502,MKSI,MKS Instruments Inc,cash incl-restricted vs excl-restricted,2024,cash
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,shell-year balance sheet (native assets=0),2017,total_assets
+0001484565,SLNO,Soleno Therapeutics Inc,pretax sign error in original XBRL,2017,pretax_income
+0000785786,PLXS,Plexus Corp,revenue: negative elimination mis-tagged under Revenues,2018,revenue
+0000050493,IMKTA,Ingles Markets Inc Class A,cross-filing scale (thousands vs dollars),2014,revenue
+0000913760,SNEX,StoneX Group Inc,large legit distributor revenue (sanity-bound test),2022,revenue
+0001845337,DAWN,Day One Biopharmaceuticals Inc,net income 1000x scale via amendment (synonym rescue),2021,net_income
+0001664703,BE,Bloom Energy Corp Class A,clean control (large weight),2023,revenue
+0001375365,SMCI,Super Micro Computer Inc,clean control (large weight),2023,revenue
+0001807794,CRDO,Credo Technology Group Holding Ltd,clean control (large weight),2023,revenue
+0001408710,FN,Fabrinet,clean control (large weight),2023,revenue
+0001575515,SFM,Sprouts Farmers Market Inc,clean control (large weight),2023,revenue
+0001477449,TDOC,Teladoc Health Inc,clean control (large weight),2023,revenue

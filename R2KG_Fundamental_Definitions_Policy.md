@@ -149,8 +149,13 @@ ROIC's tax adjustment uses the 21% statutory rate (loss‑year benefit not annua
 NCI** (Compustat `SEQ`). `StockholdersEquity` primary; LLC/LP equivalents (`MembersEquity`,
 `PartnersCapital`) for non‑corporate filers.
 *Resolves the equity fork:* DERA's `…IncludingPortionAttributableToNoncontrollingInterest`
-is **rejected** — it would mismatch the parent net‑income numerator and overstate the ROE
-denominator (Master rule). Use the **average** of FY0 and FY‑1 in ROE (§1.3).
+is **rejected as a primary** — it would mismatch the parent net‑income numerator and overstate
+the ROE denominator (Master rule). **Fallback:** when a filer does not tag `StockholdersEquity`
+at all (common where there is no NCI, so parent = total), use the incl‑NCI concept — the two are
+then equal — and **flag the cell when NCI is material** so a genuine parent/total gap is reviewed,
+not silently absorbed. *(Pilot finding: NN Inc FY2020 tagged only the incl‑NCI concept; the
+fallback recovers the as‑reported $254.2M that a parent‑only rule returned blank.)* Use the
+**average** of FY0 and FY‑1 in ROE (§1.3).
 
 **3.2 Total Assets.** `Assets`. Average of FY0/FY‑1 where used as a ratio denominator.
 

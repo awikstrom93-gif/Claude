@@ -1,0 +1,111 @@
+cik,ticker,name,fiscal_year,metric,expected_value,source_page,edgar_url
+0000031235,KODK,Eastman Kodak Co,2010,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=31235&type=10-K&dateb=&owner=include&count=40
+0000031235,KODK,Eastman Kodak Co,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=31235&type=10-K&dateb=&owner=include&count=40
+0000031235,KODK,Eastman Kodak Co,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=31235&type=10-K&dateb=&owner=include&count=40
+0000031235,KODK,Eastman Kodak Co,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=31235&type=10-K&dateb=&owner=include&count=40
+0000031235,KODK,Eastman Kodak Co,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=31235&type=10-K&dateb=&owner=include&count=40
+0000022444,CMC,Commercial Metals Co,2018,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=22444&type=10-K&dateb=&owner=include&count=40
+0000022444,CMC,Commercial Metals Co,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=22444&type=10-K&dateb=&owner=include&count=40
+0000022444,CMC,Commercial Metals Co,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=22444&type=10-K&dateb=&owner=include&count=40
+0000022444,CMC,Commercial Metals Co,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=22444&type=10-K&dateb=&owner=include&count=40
+0000022444,CMC,Commercial Metals Co,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=22444&type=10-K&dateb=&owner=include&count=40
+0000096869,TRC,Tejon Ranch Co,2016,pretax_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=96869&type=10-K&dateb=&owner=include&count=40
+0000096869,TRC,Tejon Ranch Co,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=96869&type=10-K&dateb=&owner=include&count=40
+0000096869,TRC,Tejon Ranch Co,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=96869&type=10-K&dateb=&owner=include&count=40
+0000096869,TRC,Tejon Ranch Co,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=96869&type=10-K&dateb=&owner=include&count=40
+0000096869,TRC,Tejon Ranch Co,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=96869&type=10-K&dateb=&owner=include&count=40
+0000077877,PDCE,PDC Energy Inc,2016,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=77877&type=10-K&dateb=&owner=include&count=40
+0000077877,PDCE,PDC Energy Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=77877&type=10-K&dateb=&owner=include&count=40
+0000077877,PDCE,PDC Energy Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=77877&type=10-K&dateb=&owner=include&count=40
+0000077877,PDCE,PDC Energy Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=77877&type=10-K&dateb=&owner=include&count=40
+0000077877,PDCE,PDC Energy Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=77877&type=10-K&dateb=&owner=include&count=40
+0000704532,NANO,Nanometrics Inc,2019,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=704532&type=10-K&dateb=&owner=include&count=40
+0000704532,NANO,Nanometrics Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=704532&type=10-K&dateb=&owner=include&count=40
+0000704532,NANO,Nanometrics Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=704532&type=10-K&dateb=&owner=include&count=40
+0000704532,NANO,Nanometrics Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=704532&type=10-K&dateb=&owner=include&count=40
+0000704532,NANO,Nanometrics Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=704532&type=10-K&dateb=&owner=include&count=40
+0000918541,NNBR,NN Inc,2020,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=918541&type=10-K&dateb=&owner=include&count=40
+0000918541,NNBR,NN Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=918541&type=10-K&dateb=&owner=include&count=40
+0000918541,NNBR,NN Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=918541&type=10-K&dateb=&owner=include&count=40
+0000918541,NNBR,NN Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=918541&type=10-K&dateb=&owner=include&count=40
+0000918541,NNBR,NN Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=918541&type=10-K&dateb=&owner=include&count=40
+0000020212,CHDN,Churchill Downs Inc,2011,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=20212&type=10-K&dateb=&owner=include&count=40
+0000020212,CHDN,Churchill Downs Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=20212&type=10-K&dateb=&owner=include&count=40
+0000020212,CHDN,Churchill Downs Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=20212&type=10-K&dateb=&owner=include&count=40
+0000020212,CHDN,Churchill Downs Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=20212&type=10-K&dateb=&owner=include&count=40
+0000020212,CHDN,Churchill Downs Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=20212&type=10-K&dateb=&owner=include&count=40
+0000277509,FSS,Federal Signal Corp,2011,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=277509&type=10-K&dateb=&owner=include&count=40
+0000277509,FSS,Federal Signal Corp,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=277509&type=10-K&dateb=&owner=include&count=40
+0000277509,FSS,Federal Signal Corp,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=277509&type=10-K&dateb=&owner=include&count=40
+0000277509,FSS,Federal Signal Corp,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=277509&type=10-K&dateb=&owner=include&count=40
+0000277509,FSS,Federal Signal Corp,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=277509&type=10-K&dateb=&owner=include&count=40
+0000019411,MGLN,Magellan Health Inc,2019,cash,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=19411&type=10-K&dateb=&owner=include&count=40
+0000019411,MGLN,Magellan Health Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=19411&type=10-K&dateb=&owner=include&count=40
+0000019411,MGLN,Magellan Health Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=19411&type=10-K&dateb=&owner=include&count=40
+0000019411,MGLN,Magellan Health Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=19411&type=10-K&dateb=&owner=include&count=40
+0000019411,MGLN,Magellan Health Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=19411&type=10-K&dateb=&owner=include&count=40
+0001049502,MKSI,MKS Instruments Inc,2024,cash,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1049502&type=10-K&dateb=&owner=include&count=40
+0001049502,MKSI,MKS Instruments Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1049502&type=10-K&dateb=&owner=include&count=40
+0001049502,MKSI,MKS Instruments Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1049502&type=10-K&dateb=&owner=include&count=40
+0001049502,MKSI,MKS Instruments Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1049502&type=10-K&dateb=&owner=include&count=40
+0001049502,MKSI,MKS Instruments Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1049502&type=10-K&dateb=&owner=include&count=40
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,2017,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1723128&type=10-K&dateb=&owner=include&count=40
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1723128&type=10-K&dateb=&owner=include&count=40
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1723128&type=10-K&dateb=&owner=include&count=40
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1723128&type=10-K&dateb=&owner=include&count=40
+0001723128,AMRX,Amneal Pharmaceuticals Inc Ordinary Shares - Class A,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1723128&type=10-K&dateb=&owner=include&count=40
+0001484565,SLNO,Soleno Therapeutics Inc,2017,pretax_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1484565&type=10-K&dateb=&owner=include&count=40
+0001484565,SLNO,Soleno Therapeutics Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1484565&type=10-K&dateb=&owner=include&count=40
+0001484565,SLNO,Soleno Therapeutics Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1484565&type=10-K&dateb=&owner=include&count=40
+0001484565,SLNO,Soleno Therapeutics Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1484565&type=10-K&dateb=&owner=include&count=40
+0001484565,SLNO,Soleno Therapeutics Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1484565&type=10-K&dateb=&owner=include&count=40
+0000785786,PLXS,Plexus Corp,2018,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=785786&type=10-K&dateb=&owner=include&count=40
+0000785786,PLXS,Plexus Corp,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=785786&type=10-K&dateb=&owner=include&count=40
+0000785786,PLXS,Plexus Corp,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=785786&type=10-K&dateb=&owner=include&count=40
+0000785786,PLXS,Plexus Corp,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=785786&type=10-K&dateb=&owner=include&count=40
+0000785786,PLXS,Plexus Corp,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=785786&type=10-K&dateb=&owner=include&count=40
+0000050493,IMKTA,Ingles Markets Inc Class A,2014,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=50493&type=10-K&dateb=&owner=include&count=40
+0000050493,IMKTA,Ingles Markets Inc Class A,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=50493&type=10-K&dateb=&owner=include&count=40
+0000050493,IMKTA,Ingles Markets Inc Class A,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=50493&type=10-K&dateb=&owner=include&count=40
+0000050493,IMKTA,Ingles Markets Inc Class A,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=50493&type=10-K&dateb=&owner=include&count=40
+0000050493,IMKTA,Ingles Markets Inc Class A,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=50493&type=10-K&dateb=&owner=include&count=40
+0000913760,SNEX,StoneX Group Inc,2022,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=913760&type=10-K&dateb=&owner=include&count=40
+0000913760,SNEX,StoneX Group Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=913760&type=10-K&dateb=&owner=include&count=40
+0000913760,SNEX,StoneX Group Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=913760&type=10-K&dateb=&owner=include&count=40
+0000913760,SNEX,StoneX Group Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=913760&type=10-K&dateb=&owner=include&count=40
+0000913760,SNEX,StoneX Group Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=913760&type=10-K&dateb=&owner=include&count=40
+0001845337,DAWN,Day One Biopharmaceuticals Inc,2021,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1845337&type=10-K&dateb=&owner=include&count=40
+0001845337,DAWN,Day One Biopharmaceuticals Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1845337&type=10-K&dateb=&owner=include&count=40
+0001845337,DAWN,Day One Biopharmaceuticals Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1845337&type=10-K&dateb=&owner=include&count=40
+0001845337,DAWN,Day One Biopharmaceuticals Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1845337&type=10-K&dateb=&owner=include&count=40
+0001845337,DAWN,Day One Biopharmaceuticals Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1845337&type=10-K&dateb=&owner=include&count=40
+0001664703,BE,Bloom Energy Corp Class A,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1664703&type=10-K&dateb=&owner=include&count=40
+0001664703,BE,Bloom Energy Corp Class A,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1664703&type=10-K&dateb=&owner=include&count=40
+0001664703,BE,Bloom Energy Corp Class A,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1664703&type=10-K&dateb=&owner=include&count=40
+0001664703,BE,Bloom Energy Corp Class A,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1664703&type=10-K&dateb=&owner=include&count=40
+0001664703,BE,Bloom Energy Corp Class A,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1664703&type=10-K&dateb=&owner=include&count=40
+0001375365,SMCI,Super Micro Computer Inc,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1375365&type=10-K&dateb=&owner=include&count=40
+0001375365,SMCI,Super Micro Computer Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1375365&type=10-K&dateb=&owner=include&count=40
+0001375365,SMCI,Super Micro Computer Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1375365&type=10-K&dateb=&owner=include&count=40
+0001375365,SMCI,Super Micro Computer Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1375365&type=10-K&dateb=&owner=include&count=40
+0001375365,SMCI,Super Micro Computer Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1375365&type=10-K&dateb=&owner=include&count=40
+0001807794,CRDO,Credo Technology Group Holding Ltd,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1807794&type=10-K&dateb=&owner=include&count=40
+0001807794,CRDO,Credo Technology Group Holding Ltd,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1807794&type=10-K&dateb=&owner=include&count=40
+0001807794,CRDO,Credo Technology Group Holding Ltd,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1807794&type=10-K&dateb=&owner=include&count=40
+0001807794,CRDO,Credo Technology Group Holding Ltd,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1807794&type=10-K&dateb=&owner=include&count=40
+0001807794,CRDO,Credo Technology Group Holding Ltd,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1807794&type=10-K&dateb=&owner=include&count=40
+0001408710,FN,Fabrinet,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1408710&type=10-K&dateb=&owner=include&count=40
+0001408710,FN,Fabrinet,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1408710&type=10-K&dateb=&owner=include&count=40
+0001408710,FN,Fabrinet,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1408710&type=10-K&dateb=&owner=include&count=40
+0001408710,FN,Fabrinet,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1408710&type=10-K&dateb=&owner=include&count=40
+0001408710,FN,Fabrinet,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1408710&type=10-K&dateb=&owner=include&count=40
+0001575515,SFM,Sprouts Farmers Market Inc,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1575515&type=10-K&dateb=&owner=include&count=40
+0001575515,SFM,Sprouts Farmers Market Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1575515&type=10-K&dateb=&owner=include&count=40
+0001575515,SFM,Sprouts Farmers Market Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1575515&type=10-K&dateb=&owner=include&count=40
+0001575515,SFM,Sprouts Farmers Market Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1575515&type=10-K&dateb=&owner=include&count=40
+0001575515,SFM,Sprouts Farmers Market Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1575515&type=10-K&dateb=&owner=include&count=40
+0001477449,TDOC,Teladoc Health Inc,2023,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1477449&type=10-K&dateb=&owner=include&count=40
+0001477449,TDOC,Teladoc Health Inc,2024,net_income,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1477449&type=10-K&dateb=&owner=include&count=40
+0001477449,TDOC,Teladoc Health Inc,2024,revenue,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1477449&type=10-K&dateb=&owner=include&count=40
+0001477449,TDOC,Teladoc Health Inc,2024,stockholders_equity,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1477449&type=10-K&dateb=&owner=include&count=40
+0001477449,TDOC,Teladoc Health Inc,2024,total_assets,,,https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=1477449&type=10-K&dateb=&owner=include&count=40
