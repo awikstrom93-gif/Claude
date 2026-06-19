@@ -201,8 +201,25 @@ improvements + oil‑&‑gas property), not a single tag.
 multi‑line filers (the 170/57/56‑row capex forks); single‑tag extraction is the special
 case, not the rule. Sign‑normalized to a positive outflow.
 
-**4.3 Free Cash Flow.** FCF = CFO − Capex (the simple/levered FCF convention used in quality
-screens). Computed only where CFO is present; capex absent is treated as 0 but kept visible.
+**4.3 Free Cash Flow (simple / levered).**
+*Definition:* FCF = **CFO − Capex**. Because US‑GAAP CFO is already after cash interest paid
+and after cash taxes, this is a *levered, after‑tax* free cash flow — cash available to
+equity holders and for debt paydown after maintaining the asset base. Computed only where CFO
+is present; capex absent is treated as 0 but kept visible.
+*Why levered, not FCFF:* both of this study's FCF use‑cases want the levered number — (a) the
+biotech **cash‑runway/burn** metric must reflect *actual* cash leaving the firm including debt
+service (FCFF would add interest back and overstate runway), and (b) the **"GAAP‑unprofitable
+but cash‑generative" cohort flag** is an inherently levered self‑funding question. FCFF
+(`CFO + interest×(1−tax) − Capex`) is also low‑value here: the universe is mostly debt‑free, so
+FCFF ≈ simple FCF for most names, while the interest/effective‑tax inputs add coverage loss and
+loss‑year noise. If a capital‑structure‑neutral cross‑sectional quality comparison is later
+wanted, add **FCFF as a secondary field**, do not replace the headline.
+*Caveat (applies to CFO and both FCF measures equally):* US‑GAAP CFO **adds back stock‑based
+compensation**, which is large for growth/biotech constituents — so reported CFO/FCF flatters
+true cash earnings for SBC‑heavy names. This does not affect the simple‑vs‑FCFF choice but
+should be surfaced in the README.
+*IFRS note:* IFRS permits interest paid in *financing* rather than operating, so foreign‑filer
+CFO/FCF requires normalization before mixing with US‑GAAP names.
 
 ---
 
@@ -251,5 +268,10 @@ disagreements. Only bucket 3 reaches a human.
   (§2.2); reintroduce only for a dedicated per‑share/earnings‑to‑common analysis.
 - **DERA‑only coverage gaps** (~6.4k cells where the pipeline is blank but DERA has a value)
   are a *completeness* item, tracked separately from value disagreements.
+- **FCFF** is an optional secondary field, not the headline FCF (§4.3); add only if a
+  leverage‑neutral quality comparison is needed.
+- **Stock‑based compensation add‑back** inflates CFO/FCF for SBC‑heavy growth/biotech names
+  (§4.3); surface this in the README and consider an SBC‑adjusted CFO view if it materially
+  moves the cash‑generative cohort.
 - **Foreign filers / IFRS** mapped parent‑first to mirror these definitions; reconciled
   against the same standard.
