@@ -84,7 +84,8 @@ STI_AFS_NEW, STI_AFS_OLD = "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "A
 STI_OTHER = ["HeldToMaturitySecuritiesCurrent", "EquitySecuritiesFvNiCurrent", "TradingSecuritiesCurrent",
     "AvailableForSaleSecuritiesEquitySecuritiesCurrent", "OtherMarketableSecuritiesCurrent", "OtherShortTermInvestments"]
 LTI_AFS_NEW, LTI_AFS_OLD = "AvailableForSaleSecuritiesDebtSecuritiesNoncurrent", "AvailableForSaleSecuritiesNoncurrent"
-LTI_OTHER = ["MarketableSecuritiesNoncurrent", "HeldToMaturitySecuritiesNoncurrent", "OtherLongTermInvestments"]
+LTI_ROLLUP = ["MarketableSecuritiesNoncurrent"]   # roll-up: already includes the AFS line -> use alone
+LTI_OTHER = ["HeldToMaturitySecuritiesNoncurrent", "OtherLongTermInvestments"]
 DEBT_LTNC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"]
 DEBT_LTTOT = ["LongTermDebt"]
 DEBT_LTCUR = ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"]
@@ -258,9 +259,25 @@ def classify_sector(usgaap):
 
 
 def select_revenue(usgaap, fye, accn, sector):
-    rv, _, rb = asfiled(usgaap, ["Revenues"], DURATION, fye, accn)
-    if rv is not None and rv > 0 and rb == "asfiled":
-        return rv, "Revenues"
+    # gather all revenue candidates (native preferred; fallback only if no native exists)
+    allc = []
+    for t in REVENUE_TAGS:
+        v,_,b = asfiled(usgaap, [t], DURATION, fye, accn)
+        if v is not None: allc.append((t, v, b))
+    native = [(t, v) for t, v, b in allc if b == "asfiled"]
+    pool = native if native else [(t, v) for t, v, b in allc]
+    pos = [(t, v) for t, v in pool if v > 0]
+    # `Revenues` is the us-gaap TOTAL-revenues element -- prefer it, BUT only when it is not a
+    # FRAGMENT: it must be >= 70% of the largest other revenue total. Keeps PDCE (Revenues net
+    # of a derivative contra, ~90% of the gross contract tag) and BE (Revenues > contract tag)
+    # on Revenues, while rejecting filers where `Revenues` is a tiny "other revenue" line and the
+    # real total sits elsewhere (AIT: Revenues 20M vs SalesRevenueNet 2.46B).
+    rev = next((v for t, v in pos if t == "Revenues"), None)
+    if rev is not None:
+        others = [v for t, v in pos if t != "Revenues"]
+        if rev >= 0.7 * (max(others) if others else 0):
+            return rev, "Revenues"
+    # depository bank with no usable total-revenue line -> NII + noninterest carve-out
     if sector == "bank":
         nii,_,_ = asfiled(usgaap, BANK_NII, DURATION, fye, accn)
         if nii is None:
@@ -270,20 +287,15 @@ def select_revenue(usgaap, fye, accn, sector):
         noni,_,_ = asfiled(usgaap, BANK_NONI, DURATION, fye, accn)
         if nii is not None or noni is not None:
             return (nii or 0)+(noni or 0), "bank:NII+noninterest"
-    cands = []
-    for t in REVENUE_TAGS:
-        if t == "Revenues": continue
-        v,_,b = asfiled(usgaap, [t], DURATION, fye, accn)
-        if v is not None: cands.append((t, v, b))
-    if not cands:
-        return (rv, "Revenues(fallback)") if (rv is not None and rv > 0) else (None, None)
-    native = [(t, v) for t, v, b in cands if b == "asfiled"]
-    pool = native if native else [(t, v) for t, v, b in cands]
-    ctag, cval = pool[0]
-    if cval <= 0:
-        pos = [(t, v) for t, v in pool if v > 0]
-        if pos: ctag, cval = pos[0]
-    return cval, ctag
+    # else the LARGEST real total among NON-Revenues candidates (rejects segment fragments like
+    # ABG's services line); if none positive, the priority pick (preserves a genuine negative).
+    nonrev_pos = [(t, v) for t, v in pos if t != "Revenues"]
+    if nonrev_pos:
+        ctag, cval = max(nonrev_pos, key=lambda x: x[1])
+        return cval, ctag
+    nonrev = [(t, v) for t, v in pool if t != "Revenues"]
+    if nonrev: return nonrev[0][1], nonrev[0][0]
+    return (rev, "Revenues") if rev is not None else (None, None)
 
 
 def select_equity(usgaap, fye, accn):
@@ -339,7 +351,7 @@ def extract_sti(usgaap, fye, accn):
 
 
 def extract_lti(usgaap, fye, accn):
-    return _sum_components(usgaap, fye, accn, [], LTI_AFS_NEW, LTI_AFS_OLD, LTI_OTHER)
+    return _sum_components(usgaap, fye, accn, LTI_ROLLUP, LTI_AFS_NEW, LTI_AFS_OLD, LTI_OTHER)
 
 
 def extract_total_debt(usgaap, fye, accn):
