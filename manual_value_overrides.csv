@@ -1,0 +1,2 @@
+cik,fiscal_year,metric,value,source,note
+785786,2024,revenue,3960827000,"10-K FY2024 Consolidated Statements of Comprehensive Income, Net sales, p.43","anomalous tagging: RFCwC-excl(4,078,149K) > RFCwC-incl(3,960,827K) and no Revenues tag; face top line is RFCwC-incl"
