@@ -165,26 +165,34 @@ def asfiled(usgaap, tags, kind, fye, accn, fallback=True):
 
 
 def select_revenue(usgaap, fye, accn, bank):
-    # `Revenues` is the us-gaap TOTAL-revenues element. When a filer tags it, it is the
-    # presented income-statement top line -- LARGER than the contract-revenue tag for
-    # non-606-revenue filers (BE: financing/electricity) and SMALLER for filers with a
-    # negative contra line inside total revenue (PDCE: net of commodity derivatives).
-    # Either way it is the reported total, so prefer it. (A real depository bank has no
-    # `Revenues` line, so this also keeps StoneX-type financials off the bank carve-out.)
-    revtot,_,_ = asfiled(usgaap, ["Revenues"], DURATION, fye, accn)
-    if revtot is not None and revtot > 0:
-        return revtot, "Revenues"
+    # `Revenues` is the us-gaap TOTAL-revenues element. When NATIVELY tagged (original
+    # accession) it is the presented top line -- larger than the contract tag for non-606-
+    # revenue filers (BE), smaller for filers netting a contra line (PDCE) -- so prefer it.
+    rv, _, rb = asfiled(usgaap, ["Revenues"], DURATION, fye, accn)
+    if rv is not None and rv > 0 and rb == "asfiled":
+        return rv, "Revenues"
+    # A real depository bank has no `Revenues` line -> NII + noninterest carve-out.
     if bank:
         nii,_,_ = asfiled(usgaap, BANK_NII, DURATION, fye, accn)
         noni,_,_ = asfiled(usgaap, BANK_NONI, DURATION, fye, accn)
         if nii is not None or noni is not None:
             return (nii or 0)+(noni or 0), "bank:NII+noninterest"
-    cands = [(t, asfiled(usgaap,[t],DURATION,fye,accn)[0]) for t in REVENUE_TAGS if t != "Revenues"]
-    cands = [(t,v) for t,v in cands if v is not None]
-    if not cands: return None, None
-    ctag, cval = cands[0]
+    cands = []
+    for t in REVENUE_TAGS:
+        if t == "Revenues": continue
+        v,_,b = asfiled(usgaap, [t], DURATION, fye, accn)
+        if v is not None: cands.append((t, v, b))
+    if not cands:
+        return (rv, "Revenues(fallback)") if (rv is not None and rv > 0) else (None, None)
+    # PREFER NATIVE over fallback across tags: a value from the original accession beats a
+    # higher-priority tag whose only value is a (possibly retro-tagged) fallback. This is the
+    # NANO 2017 fix -- the contract tag's retro-tagged ASC-606 fragment must not outrank the
+    # natively-filed SalesRevenueNet total.
+    native = [(t, v) for t, v, b in cands if b == "asfiled"]
+    pool = native if native else [(t, v) for t, v, b in cands]
+    ctag, cval = pool[0]
     if cval <= 0:                                   # prefer-positive (neg contra mis-tag)
-        pos = [(t,v) for t,v in cands if v > 0]
+        pos = [(t, v) for t, v in pool if v > 0]
         if pos: ctag, cval = pos[0]
     return cval, ctag
 
@@ -273,8 +281,11 @@ def extract_company(cik):
         if row.get("capex") is not None: row["capex"] = abs(row["capex"])
         cfo = row.get("operating_cash_flow")
         row["free_cash_flow"] = (cfo - (row.get("capex") or 0)) if cfo is not None else None
-        if row.get("total_assets") == 0:           # shell-year signature (AMRX 2017): blank it
-            row["total_assets"] = None
+        if row.get("total_assets") == 0:           # shell-year signature (AMRX 2017): native
+            # total assets == 0 means a pre-combination shell. Blank ALL balance-sheet items --
+            # any non-zero instant value is a cross-vintage recast contaminant (e.g. debt
+            # back-filled from the post-combination vintage).
+            row["total_assets"] = row["stockholders_equity"] = row["cash"] = row["total_debt"] = None
         out[y] = row
     return name, out, prov
 
