@@ -336,14 +336,18 @@ def _sum_components(usgaap, fye, accn, rollup, afs_new, afs_old, others):
     for t in rollup:
         v,_,_ = asfiled(usgaap, [t], INSTANT, fye, accn)
         if v is not None: return v
-    s, got = 0.0, False
+    added = []
     afs,_,_ = asfiled(usgaap, [afs_new], INSTANT, fye, accn)
     if afs is None: afs,_,_ = asfiled(usgaap, [afs_old], INSTANT, fye, accn)
-    if afs is not None: s += afs; got = True
+    if afs is not None: added.append(afs)
     for t in others:
         v,_,_ = asfiled(usgaap, [t], INSTANT, fye, accn)
-        if v is not None: s += v; got = True
-    return s if got else None
+        # skip a component that DUPLICATES an already-counted value -- some filers tag an
+        # "Other...Investments"/roll-up line equal to the AFS line, which would double-count
+        # (ALLO: OtherLongTermInvestments == AFS-noncurrent, both 261,966K).
+        if v is not None and not any(abs(v - a) <= max(abs(a), 1) * 0.01 for a in added):
+            added.append(v)
+    return sum(added) if added else None
 
 
 def extract_sti(usgaap, fye, accn):
