@@ -87,39 +87,41 @@ def per_row_checks(d):
     return out
 
 
-def foots_check(cik, year, ta):
-    """Total assets ~= Liabilities + total equity, pulled fresh at the original accession."""
-    if ta is None or ta <= 0: return None
+def foots_for_company(cik, year_ta):
+    """Yield (year, detail) for BS_FOOTS breaks at one company. Loads companyfacts + the
+    original-accession map ONCE per company (not once per company-year)."""
     c = str(int(cik)).zfill(10)
     cf = _fetch(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{c}.json", CF_CACHE / f"CIK{c}.json")
     usg = cf.get("facts", {}).get("us-gaap", {})
-    if not usg: return None
+    if not usg: return
     orig, _, _ = original_filing_map(cik, ("10-K",))
-    cand = [fy for fy in orig if keyed_year(fy) == int(year)]
-    if not cand: return None
-    fye, accn = cand[0], orig[cand[0]][0]
-    liab,_,_ = asfiled(usg, ["Liabilities"], INSTANT, fye, accn)
-    etot,_,_ = asfiled(usg, [EQUITY_TOTAL], INSTANT, fye, accn)
-    if etot is None:
-        par,_,_ = asfiled(usg, ["StockholdersEquity"], INSTANT, fye, accn)
-        nci,_,_ = asfiled(usg, NCI_TAGS, INSTANT, fye, accn)
-        if par is not None: etot = par + (nci or 0)
-    # PRIMARY: Assets must equal the balance sheet's own grand total
-    # (LiabilitiesAndStockholdersEquity), which already INCLUDES temporary/mezzanine equity
-    # (redeemable preferred / redeemable NCI). This is temp-equity-proof and catches a
-    # mis-scaled or wrong-tag total-assets directly. (Decomposing A = L + permanent-equity
-    # falsely fails on the many small-cap-growth filers with redeemable instruments.)
-    lase,_,_ = asfiled(usg, ["LiabilitiesAndStockholdersEquity"], INSTANT, fye, accn)
-    if lase is not None:
-        lhs, rhs = ta, lase
-    elif liab is not None and etot is not None:        # fallback when no LASE total tagged
-        lhs, rhs = ta, liab + etot
-    else:
-        return None
-    denom = max(abs(lhs), abs(rhs), ABS_FLOOR)
-    if abs(lhs - rhs) / denom > REL_TOL and abs(lhs - rhs) > ABS_FLOOR:
-        return ("BS_FOOTS", "ERROR", f"TA {lhs:,.0f} vs L+E {rhs:,.0f} (L {liab:,.0f} + E {etot:,.0f})")
-    return None
+    for year, ta in year_ta:
+        if ta is None or ta <= 0: continue
+        cand = [fy for fy in orig if keyed_year(fy) == int(year)]
+        if not cand: continue
+        fye, accn = cand[0], orig[cand[0]][0]
+        # PRIMARY: Assets must equal the balance sheet's own grand total
+        # (LiabilitiesAndStockholdersEquity), which already INCLUDES temporary/mezzanine equity
+        # (redeemable preferred / NCI) -- temp-equity-proof, and catches a mis-scaled total_assets.
+        lase,_,_ = asfiled(usg, ["LiabilitiesAndStockholdersEquity"], INSTANT, fye, accn)
+        liab = etot = None
+        if lase is not None:
+            rhs = lase
+        else:                                          # fallback when no LASE total is tagged
+            liab,_,_ = asfiled(usg, ["Liabilities"], INSTANT, fye, accn)
+            etot,_,_ = asfiled(usg, [EQUITY_TOTAL], INSTANT, fye, accn)
+            if etot is None:
+                par,_,_ = asfiled(usg, ["StockholdersEquity"], INSTANT, fye, accn)
+                nci,_,_ = asfiled(usg, NCI_TAGS, INSTANT, fye, accn)
+                if par is not None: etot = par + (nci or 0)
+            if liab is None or etot is None: continue
+            rhs = liab + etot
+        denom = max(abs(ta), abs(rhs), ABS_FLOOR)
+        if abs(ta - rhs) / denom > REL_TOL and abs(ta - rhs) > ABS_FLOOR:
+            detail = f"TA {ta:,.0f} vs Liab+Equity total {rhs:,.0f}"
+            if liab is not None and etot is not None:
+                detail += f" (L {liab:,.0f} + E {etot:,.0f})"
+            yield (year, detail)
 
 
 def main():
@@ -154,13 +156,17 @@ def main():
                                      f"{metric} {av:,.0f} > {OUTLIER_MULT}x median {med:,.0f}"])
     # balance-sheet foot check (fetch-based)
     if DO_FOOTS:
-        print("  running balance-sheet foot check (uses companyfacts cache)...")
+        print(f"  running balance-sheet foot check over {len(by_co)} companies...")
         seen = 0
-        for d in parsed:
-            res = foots_check(d["cik"], d["fiscal_year"], d["total_assets"])
-            if res: findings.append([res[1], res[0], d["ticker"], d["cik"], d["fiscal_year"], res[2]])
+        for cik, drows in by_co.items():
+            tk = drows[0]["ticker"]
+            try:
+                for year, detail in foots_for_company(cik, [(x["fiscal_year"], x["total_assets"]) for x in drows]):
+                    findings.append(["ERROR", "BS_FOOTS", tk, cik, year, detail])
+            except Exception as e:
+                findings.append(["WARN", "BS_FOOTS_SKIP", tk, cik, "", f"{type(e).__name__}: {str(e)[:50]}"])
             seen += 1
-            if seen % 2000 == 0: print(f"    footed {seen}/{len(parsed)}")
+            if seen % 500 == 0: print(f"    footed {seen}/{len(by_co)} companies")
 
     findings.sort(key=lambda x: (x[0] != "ERROR", x[1], x[2]))
     with open(OUT, "w", newline="", encoding="utf-8") as fo:
