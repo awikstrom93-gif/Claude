@@ -60,7 +60,7 @@ def main():
         return cache[c].get(int(fy), {}).get(metric)
 
     audit, clean, review = [], list(SEED), []
-    counts = {"REDUNDANT": 0, "KEEP": 0, "SIGN_CONFLICT": 0, "DIFFERS": 0, "BAD_ROW": 0}
+    counts = {"REDUNDANT": 0, "KEEP": 0, "TRUST": 0, "REVIEW_unverified": 0, "BAD_ROW": 0}
     for r in rows:
         cik = str(r.get("cik", "")).strip().zfill(10)
         metric = ALIAS.get(str(r.get("metric", "")).strip().lower(), str(r.get("metric", "")).strip().lower())
@@ -68,18 +68,22 @@ def main():
         except Exception: counts["BAD_ROW"] += 1; continue
         ov = num(r.get("value", ""))
         if ov is None: counts["BAD_ROW"] += 1; continue
+        note = str(r.get("note", ""))
+        # rows the USER themselves flagged as unverified (Calcbench guesses) -> these are the
+        # only ones that still need a 10-K look; everything else is trusted prior verification.
+        unverified = ("verify which side" in note.lower()) or ("not ground truth" in note.lower())
         nv = asfiled_val(cik, fy, metric)
-        if nv is None:
-            cls = "KEEP"
-            clean.append((cik, fy, metric, ov, r.get("source", ""), r.get("note", "")))
-        elif abs(nv - ov) <= max(abs(ov), 1) * TOL:
-            cls = "REDUNDANT"
-        elif (nv > 0) != (ov > 0):
-            cls = "SIGN_CONFLICT"
-            review.append((cik, fy, metric, ov, nv, cls, edgar(cik), r.get("source",""), r.get("note","")))
+        if nv is not None and abs(nv - ov) <= max(abs(ov), 1) * TOL:
+            cls = "REDUNDANT"                                  # engine already right -> drop
+        elif nv is None:
+            cls = "KEEP"                                       # engine blank -> genuine fill
+            clean.append((cik, fy, metric, ov, r.get("source",""), note))
+        elif unverified:
+            cls = "REVIEW_unverified"                          # user-flagged; as-filed as tiebreaker
+            review.append((cik, fy, metric, ov, nv, cls, edgar(cik), r.get("source",""), note))
         else:
-            cls = "DIFFERS"
-            review.append((cik, fy, metric, ov, nv, cls, edgar(cik), r.get("source",""), r.get("note","")))
+            cls = "TRUST"                                      # prior-verified override; carry forward
+            clean.append((cik, fy, metric, ov, r.get("source",""), note))
         counts[cls] = counts.get(cls, 0) + 1
         audit.append([cik, fy, metric, ov, nv, cls, r.get("source", "")])
 
@@ -95,14 +99,14 @@ def main():
             "asfiled_value", "classification", "orig_source"]); w.writerows(audit)
 
     print("\n==== RECONCILIATION ====")
-    for k in ["REDUNDANT", "KEEP", "SIGN_CONFLICT", "DIFFERS", "BAD_ROW"]:
-        print(f"  {k:<14} {counts.get(k,0)}")
-    print(f"\n  clean override file  -> {CLEAN.name}   ({len(clean)} rows: KEEP + PLXS seed)")
-    print(f"  to review (10-K)     -> {REVIEW.name}   ({len(review)} rows)")
+    for k in ["REDUNDANT", "KEEP", "TRUST", "REVIEW_unverified", "BAD_ROW"]:
+        print(f"  {k:<18} {counts.get(k,0)}")
+    print(f"\n  clean override file  -> {CLEAN.name}   ({len(clean)} rows: KEEP + TRUST + PLXS)")
+    print(f"  to review (10-K)     -> {REVIEW.name}   ({len(review)} rows = only YOUR self-flagged 'VERIFY' rows)")
     print(f"  full audit           -> {AUDIT.name}")
-    print("\n  NEXT: open overrides_to_review.csv. For each SIGN_CONFLICT/DIFFERS, open the EDGAR")
-    print("  10-K and decide which value is right. If the OVERRIDE is right (e.g. a filer XBRL")
-    print("  sign mis-tag like Life Storage 944314), append that row to manual_value_overrides.csv.")
+    print("\n  Policy: REDUNDANT dropped (engine already right); KEEP + TRUST carried forward")
+    print("  (your prior 10-K verification is trusted); only the rows you marked 'VERIFY which")
+    print("  side is wrong' need a look -- and the audit shows the as-filed value as a tiebreaker.")
     print("  Then re-run r2k_step2_asfiled.py with the clean override file in place.")
 
 

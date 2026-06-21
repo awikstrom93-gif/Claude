@@ -58,8 +58,18 @@ DURATION, INSTANT = "duration", "instant"
 # ---- tag dictionaries (priority order; ported from the validated pilot + legacy) ----
 REVENUE_TAGS = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
     "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
-    "SalesRevenueGoodsNet", "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense"]
-EQUITY_PARENT = ["StockholdersEquity", "MembersEquity", "PartnersCapital"]
+    "SalesRevenueGoodsNet", "RevenuesNetOfInterestExpense",
+    # industry-specific TOP-LINE fallbacks (each a reliable consolidated total for a filer
+    # type; segment/component tags like CasinoRevenue/PassengerRevenue are excluded by design).
+    "SalesRevenueServicesNet",
+    "HealthCareOrganizationRevenueNetOfPatientServiceRevenueProvisions",
+    "HealthCareOrganizationRevenue", "HealthCareOrganizationPatientServiceRevenue",
+    "RegulatedAndUnregulatedOperatingRevenue", "ContractsRevenue", "RealEstateRevenueNet",
+    "RefiningAndMarketingRevenue", "OilAndGasRevenue", "OilAndGasSalesRevenue",
+    "RevenueMineralSales", "RevenuesExcludingInterestAndDividends"]
+EQUITY_PARENT = ["StockholdersEquity", "MembersEquity",
+    "LimitedLiabilityCompanyLlcMembersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    "PartnersCapital"]
 EQUITY_TOTAL  = "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
 NCI_TAGS = ["MinorityInterest"]
 CASH_PRIMARY = ["CashAndCashEquivalentsAtCarryingValue",
@@ -84,14 +94,15 @@ BANK_NII, BANK_NONI = ["InterestIncomeExpenseNet"], ["NoninterestIncome"]
 BANK_TII, BANK_TIE = ["InterestAndDividendIncomeOperating"], ["InterestExpenseOperating"]
 
 TAGS = {
-    "net_income": (DURATION, ["NetIncomeLoss", "ProfitLoss"]),
+    "net_income": (DURATION, ["NetIncomeLoss", "ProfitLoss",
+        "IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest"]),
     "operating_income": (DURATION, ["OperatingIncomeLoss"]),
     "gross_profit": (DURATION, ["GrossProfit"]),
     "pretax_income": (DURATION, [
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic"]),
-    "tax_expense": (DURATION, ["IncomeTaxExpenseBenefit"]),
+    "tax_expense": (DURATION, ["IncomeTaxExpenseBenefit", "CurrentIncomeTaxExpenseBenefit"]),
     "total_assets": (INSTANT, ["Assets"]),
     "operating_cash_flow": (DURATION, ["NetCashProvidedByUsedInOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]),
