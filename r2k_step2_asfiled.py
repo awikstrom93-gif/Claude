@@ -153,7 +153,7 @@ IFRS_LT_DEBT = ["NoncurrentBorrowings", "BorrowingsNoncurrent", "LongtermBorrowi
 IFRS_ST_DEBT = ["CurrentBorrowings", "BorrowingsCurrent", "ShorttermBorrowings"]
 IFRS_FORMS = ("20-F", "40-F")
 
-OUTPUT_FIELDS = ["cik","ticker","name","fiscal_year","fye_date","revenue","net_income",
+OUTPUT_FIELDS = ["cik","ticker","name","fiscal_year","fye_date","filed_date","revenue","net_income",
     "operating_income","gross_profit","tax_expense","pretax_income","stockholders_equity",
     "total_assets","cash","short_term_investments","long_term_investments","restricted_cash",
     "total_debt","operating_cash_flow","capex","free_cash_flow","reporting_basis","currency","sector"]
@@ -377,7 +377,7 @@ def extract_usgaap(usgaap, orig, name):
     for fye, (accn, fdate) in sorted(orig.items()):
         y = keyed_year(fye)
         if y < MIN_YEAR or y > MAX_YEAR: continue
-        row = {"fye_date": fye, "filed": fdate, "reporting_basis": "us-gaap",
+        row = {"fye_date": fye, "filed_date": fdate, "reporting_basis": "us-gaap",
                "currency": "USD", "sector": sector}
         for metric, (kind, tags) in TAGS.items():
             v, tag, basis = asfiled(usgaap, tags, kind, fye, accn)
@@ -422,7 +422,7 @@ def extract_ifrs(ifrs, orig, name):
     for fye, (accn, fdate) in sorted(orig.items()):
         y = keyed_year(fye)
         if y < MIN_YEAR or y > MAX_YEAR: continue
-        row = {"fye_date": fye, "filed": fdate, "reporting_basis": "ifrs",
+        row = {"fye_date": fye, "filed_date": fdate, "reporting_basis": "ifrs",
                "currency": currency, "sector": "general"}
         for metric, (kind, tags) in IFRS_TAGS.items():
             v, tag, basis = asfiled(ifrs, tags, kind, fye, accn, currency)
