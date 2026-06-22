@@ -36,7 +36,7 @@ from r2k_perf_io import load_performance, load_monthly_holdings, BASE
 
 OUT = BASE / "R2000G_Concentration.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
-WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "30"))
+WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
 TOP_NS = [1, 5, 10, 25, 50]
 

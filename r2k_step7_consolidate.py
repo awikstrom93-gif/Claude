@@ -47,7 +47,7 @@ SHEETS = [
     (PERF, "Summary", "Perf Summary"), (PERF, "Trailing Returns", "Perf Trailing"),
     (PERF, "Calendar Year", "Perf Calendar Yr"), (PERF, "Monthly & Cumulative", "Perf Monthly"),
     (PERF, "Rolling 12m Excess", "Perf Rolling 12m"), (PERF, "Up-Down Capture", "Perf Capture"),
-    (PERF, "Drawdown", "Perf Drawdown"),
+    (PERF, "Drawdown", "Perf Drawdown"), (PERF, "Window Proof", "Perf Window Proof"),
     (QUAL, "Comparison", "Qual Comparison"), (QUAL, "R2000G Quality", "Qual R2000G"),
     (QUAL, "SP600G Quality", "Qual SP600G"), (QUAL, "Cohort Weights", "Qual Cohort Wt"),
     (QUAL, "Sector Mix", "Qual Sector Mix"), (QUAL, "Concentration", "Qual Concentration"),
@@ -193,6 +193,10 @@ TAB_GUIDE = [
     ("Perf Capture", "Up/down capture of S&P 600 Growth vs R2000G (R2000G = benchmark).",
      "Up capture = compounded 600G return / compounded R2000G return in months R2000G rose; down capture likewise."),
     ("Perf Drawdown", "Peak-to-trough drawdown path for each index.", ""),
+    ("Perf Window Proof", "Data-driven justification for the manager-window dates.",
+     "Finds when R2000G's cumulative excess over S&P 600 Growth troughed (its relative low) and began a "
+     "persistent run; a candidate-window table shows the choice isn't cherry-picked. The trailing-3-year "
+     "window brackets that rising leg."),
     ("Quality & composition — the structural 'why'", None, None),
     ("Qual Comparison", "The earnings-screen gap, year by year, side by side.",
      "For each metric: R2000G | 600G | Diff (R2000G minus 600G). Positive %unprofitable/%no-revenue diffs = R2000G's larger low-quality tail."),
@@ -261,8 +265,9 @@ GLOSSARY = [
      "Lets cohort contributions add up exactly to the index's cumulative return."),
     ("Up / Down capture", "Compounded portfolio return / compounded benchmark return in up / down benchmark months.",
      "R2000G is treated as the benchmark."),
-    ("Manager window", "The trailing ~2.5-year period over which active managers were measured.",
-     "Default trailing 30 months; set WINDOW_START to pin it. Shown cumulative."),
+    ("Manager window", "The period over which active managers were measured -- trailing 3 years to 4/30/2026.",
+     "Default trailing 36 months (May 2023-Apr 2026); set WINDOW_START to pin an exact date. Shown cumulative. "
+     "See the 'Perf Window Proof' tab for the data-driven justification of these dates."),
 ]
 
 

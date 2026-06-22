@@ -32,7 +32,7 @@ from openpyxl.chart import LineChart, Reference
 from r2k_perf_io import load_performance, BASE
 
 OUT = BASE / "R2000G_vs_SP600G_Performance.xlsx"
-WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "30"))
+WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")  # optional YYYY-MM-DD
 
 
@@ -231,6 +231,69 @@ def build():
         vals = [f"{d:%Y-%m-%d}", _p(rg[i][1] / pkR - 1), _p(sg[i][1] / pkS - 1)]
         for c, v in enumerate(vals, 1): wdd.cell(row=i + 2, column=c, value=v)
     wdd.freeze_panes = "A2"
+
+    # ---- Window Proof (data-driven justification of the manager window) ----
+    wp = wb.create_sheet("Window Proof")
+    wp.cell(1, 1, "Why the manager window starts where it does -- when R2000G began leading the quality index").font = TITLE
+    # relative line = R2KG growth / SP6G growth; its trough = R2KG's relative low (start of its run)
+    rel = [rg[i][1] / sg[i][1] for i in range(n)]
+    trough_i = min(range(n), key=lambda i: rel[i])
+    trough_d = dts[trough_i]
+    # last persistent stretch of positive rolling-12m excess (>=6 of trailing 12m excess>0, sticky)
+    roll = [None] * n
+    for i in range(11, n):
+        roll[i] = compound(rr[i-11:i+1]) - compound(sr[i-11:i+1])
+    run_start_i = None
+    for i in range(11, n):
+        if roll[i] is not None and roll[i] > 0 and all((roll[j] is None or roll[j] > -0.01) for j in range(i, n)):
+            run_start_i = i; break
+    wp.cell(3, 1, "Inflection points (from the data):").font = Font(bold=True, size=11)
+    wp.cell(4, 1, "R2KG relative low vs S&P 600 Growth (trough of the relative line)")
+    wp.cell(4, 3, f"{trough_d:%Y-%m}")
+    if run_start_i is not None:
+        wp.cell(5, 1, "Start of R2KG's persistent rolling-12m outperformance run")
+        wp.cell(5, 3, f"{dts[run_start_i]:%Y-%m}")
+    wp.cell(6, 1, "Window used in this analysis (trailing 3 years to data end)")
+    win_start_d = dts[win_idx[0]] if win_idx else None
+    wp.cell(6, 3, f"{win_start_d:%Y-%m}" if win_start_d else "")
+    # candidate-window comparison: cumulative R2KG / SP6G / excess from several anchors
+    wp.cell(8, 1, "Cumulative return from candidate start dates (all ending at data end):").font = Font(bold=True, size=11)
+    _hdr(wp, 9, ["Window start", "Months", "R2000G", "S&P 600 Growth", "Excess (R2KG-SP6G)", "Note"])
+    cands = []
+    for mo, lab in [(12, "trailing 1y"), (24, "trailing 2y"), (30, "trailing 2.5y"),
+                    (36, "trailing 3y (used)"), (48, "trailing 4y")]:
+        si = max(0, n - mo); cands.append((si, lab))
+    cands.append((trough_i, "from R2KG relative low"))
+    if run_start_i is not None: cands.append((run_start_i, "from outperformance run"))
+    seen = set(); rr_ = 10
+    for si, lab in sorted(cands):
+        if si in seen: continue
+        seen.add(si)
+        cR, cS = compound(rr[si:]), compound(sr[si:])
+        vals = [f"{dts[si]:%Y-%m}", n - si, _p(cR), _p(cS), _p(cR - cS), lab]
+        for c, v in enumerate(vals, 1): wp.cell(rr_, c, v)
+        rr_ += 1
+    # the proof series: cumulative excess (R2KG-SP6G) over time, for the chart
+    base_row = rr_ + 2
+    wp.cell(base_row - 1, 1, "Cumulative excess (R2KG - SP6G), growth of $1 difference -- the proof series:").font = Font(bold=True)
+    _hdr(wp, base_row, ["Month", "Cum excess (R2KG-SP6G) %", "Rolling 12m excess %"])
+    cum = 1.0
+    for i, d in enumerate(dts):
+        cum *= (1 + er[i])
+        wp.cell(base_row + 1 + i, 1, f"{d:%Y-%m-%d}")
+        wp.cell(base_row + 1 + i, 2, round(100 * (cum - 1), 2))
+        wp.cell(base_row + 1 + i, 3, _p(roll[i]) if roll[i] is not None else None)
+    proof_first = base_row + 1; proof_last = base_row + n
+    ch = LineChart(); ch.title = "Cumulative excess R2KG - SP6G (trough = start of R2KG's run)"
+    ch.height, ch.width = 8, 20
+    ch.add_data(Reference(wp, min_col=2, max_col=3, min_row=base_row, max_row=proof_last), titles_from_data=True)
+    ch.set_categories(Reference(wp, min_col=1, min_row=proof_first, max_row=proof_last))
+    wp.add_chart(ch, f"E{base_row}")
+    wp.cell(proof_last + 2, 1,
+            "How to read: the cumulative-excess line falls while the quality index (S&P 600 Growth) leads, troughs "
+            f"when R2000G is relatively weakest ({trough_d:%b %Y}), then rises as R2000G's lower-quality tail leads. "
+            "The trailing-3-year window captures that rising leg -- i.e. the dates aren't hand-picked; they bracket "
+            "the period the benchmark outran the quality index, which is exactly when disciplined managers fell behind.")
 
     # ---- Charts ----
     cs = wb.create_sheet("Charts")

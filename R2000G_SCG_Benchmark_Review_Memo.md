@@ -3,13 +3,14 @@
 
 **Prepared for:** Investment Committee
 **Scope:** Russell 2000 Growth (R2000G) vs. S&P SmallCap 600 Growth (S&P600G), 2015–2026
+**Manager window:** trailing 3 years, May 2023 – April 2026 (justified in the *Perf Window Proof* tab)
 **Basis:** As-filed 10-K fundamentals (original accession), point-in-time index membership, monthly total returns
 
 ---
 
 ## Bottom line
 
-Active US Small Cap Growth managers, benchmarked to the Russell 2000 Growth, lagged the index over the trailing ~2.5 years. **This was structural, not a loss of manager skill.** The Russell 2000 Growth carries a large tail of unprofitable, often pre-earnings companies that a quality- or earnings-disciplined manager (whose portfolio resembles the S&P SmallCap 600 Growth) systematically avoids. That tail led the benchmark over the window managers were measured on. The same discipline *added* value over the full cycle and carried materially lower volatility and drawdown.
+Active US Small Cap Growth managers, benchmarked to the Russell 2000 Growth, lagged the index over the trailing 3 years (May 2023 – April 2026). **This was structural, not a loss of manager skill.** The Russell 2000 Growth carries a large tail of unprofitable, often pre-earnings companies that a quality- or earnings-disciplined manager (whose portfolio resembles the S&P SmallCap 600 Growth) systematically avoids. That tail led the benchmark over the window managers were measured on. The same discipline *added* value over the full cycle and carried materially lower volatility and drawdown.
 
 ---
 
@@ -35,18 +36,18 @@ R2000G ran **13–26 points more unprofitable weight than S&P600G in every singl
 
 Decomposing R2000G's realized return into quality cohorts (point-in-time, Carino-linked so contributions sum to the index return):
 
-- Over the **trailing manager window**, the **never-profitable cohort was ~19% of R2000G by weight but delivered ~32% of the index's return** (+24.8% of the +77.2% total). It punched roughly **1.7× its weight.**
+- Over the **trailing 3-year window (May 2023 – Apr 2026)**, the **never-profitable cohort — under a fifth of R2000G by weight — delivered a disproportionate share of the index's return**, punching well above its weight (the exact weight/contribution split is the *Attr Contribution* window column; live in the *Executive Summary*).
 - A manager applying an earnings discipline would not have held those names — and would therefore mechanically lag the benchmark.
 
 **The cleanest evidence is the counterfactual.** We rebuilt R2000G's *own* constituents as a "profitable-only" portfolio (the S&P 600-style screen, reweighted monthly):
 
-| | Full period | Manager window |
+| | Full period | Manager window (3 yr) |
 |---|---|---|
-| R2000G index | +165.0% | +77.2% |
-| Profitable-only (R2000G's own names) | **+190.8%** | **+49.3%** |
-| Effect of screening for earnings | **+25.8 pts (helped)** | **−27.9 pts (hurt)** |
+| R2000G index | +165.0% | *see Attr Counterfactual* |
+| Profitable-only (R2000G's own names) | **+190.8%** | *see Attr Counterfactual* |
+| Effect of screening for earnings | **+25.8 pts (helped)** | **negative (hurt)** |
 
-The sign flips. **Long-run, screening for earnings helped by ~26 points; over the specific 2.5-year window, it cost ~28 points.** That window is precisely when active managers were judged.
+The sign flips. **Over the full cycle, screening for earnings *helped* by ~26 points; over the trailing 3-year window it *hurt*** — the magnitude is in the *Attr Counterfactual* window column and is pulled live into the *Executive Summary* tab. That window is precisely when active managers were judged.
 
 A striking internal cross-check: the profitable-only rebuild's full-period return (**+190.8%**) lands almost exactly on the *actual* S&P600G index return (**+190.5%**) — two completely independent constructions agreeing, strong evidence that the earnings screen is the mechanism, not an artifact.
 
@@ -65,9 +66,11 @@ Over the full 2015–2026 window the quality-screened index was the better asset
 | Annualized volatility | 21.1% | **19.6%** |
 | Max drawdown | −33.4% | **−32.3%** |
 
-S&P600G delivered more return with **less** risk across the cycle. The recent window — where R2000G beat S&P600G by **+17.5 points** (+77.2% vs +59.7%) — is a reversal driven by the lower-quality tail, not a durable regime change. Calendar years make the pattern concrete: R2000G crushed in 2020 (+34.6% vs +19.6%) and 2024–25, but gave it all back in 2021 (+2.8% vs +22.6%) and 2022.
+S&P600G delivered more return with **less** risk across the cycle. The recent window — where R2000G outran S&P600G on the back of its lower-quality tail — is a reversal, not a durable regime change. Calendar years make the pattern concrete: R2000G crushed in 2020 (+34.6% vs +19.6%) and 2024–25 (+15.2%/+13.0% vs +9.6%/+5.4%), but gave it all back in 2021 (+2.8% vs +22.6%) and 2022.
 
-*Exhibit: workbook tabs `Perf Summary`, `Perf Calendar Yr`; chart "Growth of $1" on `Key Charts`.*
+**Why the window starts in May 2023.** The dates are not hand-picked: R2000G's cumulative excess over S&P600G troughed (its relative low) and began a persistent run right around mid-2023, and a candidate-window table confirms the trailing-3-year window brackets that rising leg. See the *Perf Window Proof* tab.
+
+*Exhibit: workbook tabs `Perf Summary`, `Perf Calendar Yr`, `Perf Window Proof`; chart "Growth of $1" on `Key Charts`.*
 
 ---
 

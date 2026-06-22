@@ -38,7 +38,7 @@ from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
-WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "30"))
+WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
 COHORTS = ["profitable", "fallen", "never_profitable", "unknown"]
 COH_LABEL = {"profitable": "Profitable", "fallen": "Fallen (was profitable)",
