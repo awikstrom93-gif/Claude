@@ -45,11 +45,18 @@ COH_LABEL = {"profitable": "Profitable", "fallen": "Fallen (was profitable)",
              "never_profitable": "Never profitable", "unknown": "Unknown (no NI)"}
 
 
-def fund_for(facts, cik):
-    if cik is None: return None
-    for form in (cik, str(cik).zfill(10), str(int(cik)) if str(cik).isdigit() else cik):
-        if form in facts: return facts[form]
-    return None
+def norm_facts(facts):
+    """Re-key fundamentals by canonical int-string CIK so any zero-padding matches."""
+    out = {}
+    for k, v in facts.items():
+        try: out[str(int(k))] = v
+        except (TypeError, ValueError): out[str(k)] = v
+    return out
+
+def fund_for(nf, cik):
+    if not cik: return None
+    try: return nf.get(str(int(cik)))
+    except (TypeError, ValueError): return nf.get(str(cik))
 
 
 def nearest_prior(sorted_dates, target):
@@ -83,7 +90,7 @@ def _p(v, nd=2): return round(100 * v, nd) if v is not None else None
 def build():
     series, idx, perf_dates = load_performance()
     holdings = load_monthly_holdings()
-    facts = load_fundamentals()
+    facts = norm_facts(load_fundamentals())
     if "R2KG" not in idx:
         raise SystemExit("!! R2000G index row not found in performance file")
     R = idx["R2KG"]

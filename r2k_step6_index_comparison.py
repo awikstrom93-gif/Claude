@@ -49,11 +49,18 @@ def find(pats):
     return None
 
 
-def fund_for(facts, cik):
+def norm_facts(facts):
+    """Re-key fundamentals by canonical int-string CIK so any zero-padding matches."""
+    out = {}
+    for k, v in facts.items():
+        try: out[str(int(k))] = v
+        except (TypeError, ValueError): out[str(k)] = v
+    return out
+
+def fund_for(nf, cik):
     if not cik: return None
-    for form in (cik, str(cik).zfill(10), str(int(cik)) if str(cik).isdigit() else cik):
-        if form in facts: return facts[form]
-    return None
+    try: return nf.get(str(int(cik)))
+    except (TypeError, ValueError): return nf.get(str(cik))
 
 
 def annual_spine(holdings):
@@ -143,7 +150,7 @@ def full_row(year, snap_dt, q):
 
 
 def build():
-    facts = load_fundamentals()
+    facts = norm_facts(load_fundamentals())
     hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
     hs = find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
     if not hr or not hs:

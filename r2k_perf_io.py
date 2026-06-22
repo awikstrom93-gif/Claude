@@ -29,13 +29,14 @@ from datetime import date, datetime
 import os, re
 import openpyxl
 
-RET_MODE = os.environ.get("RET_MODE", "cumpct").lower()
+RET_MODE = os.environ.get("RET_MODE", "auto").lower()
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 
 # index/benchmark row recognition (substring match on the Name column, case-insensitive)
 IDX_R2KG = ("russell 2000 growth",)
 IDX_SP6G = ("s&p smallcap 600 growth", "s&p smallcap 600 grth", "sp smallcap 600 growth")
-ID_COLS = ("cik", "ticker", "isin", "cusip", "name", "secid", "security", "symbol")
+ID_COLS = ("cik", "ticker", "isin", "cusip", "secid", "symbol")
+NAME_COLS = ("group/investment", "investment", "name", "security", "group")
 
 
 def to_f(x):
@@ -92,19 +93,18 @@ def find_performance_file():
     raise FileNotFoundError("monthly performance workbook not found in R2KG_BASE")
 
 
-def _cum_to_periodic(cum):
-    """cum: list of (date, raw_value) sorted ascending. Returns list of (date, periodic_ret)."""
+def _cum_to_periodic(cum, mode):
+    """cum: list of (date, raw_value) ascending. Returns [(date, periodic_ret)] per `mode`."""
     pts = [(d, v) for d, v in cum if v is not None]
     if not pts: return []
-    if RET_MODE == "periodic":
+    if mode == "periodic":
         return [(d, v / 100.0) for d, v in pts]
-    if RET_MODE == "cumlevel":
+    if mode == "cumlevel":
         base = pts[0][1]
         levels = [(d, (v / base) if base else None) for d, v in pts]
     else:  # cumpct
         levels = [(d, 1.0 + v / 100.0) for d, v in pts]
-    out = []
-    prev = None
+    out = []; prev = None
     for d, lv in levels:
         if lv is None or lv <= 0: prev = lv; continue
         out.append((d, (lv / prev - 1.0) if (prev and prev > 0) else (lv - 1.0)))
@@ -112,11 +112,28 @@ def _cum_to_periodic(cum):
     return out
 
 
+def _detect_mode(index_recs):
+    """Decide periodic vs cumpct from the index rows' raw values. A periodic monthly
+    series oscillates (frequent negatives); a cumulative-since-inception series trends
+    up and is rarely negative after the first year."""
+    if RET_MODE != "auto":
+        return RET_MODE
+    vals = [v for rec in index_recs for v in rec["raw"].values() if v is not None]
+    if len(vals) < 12:
+        return "cumpct"
+    neg_share = sum(1 for v in vals if v < 0) / len(vals)
+    return "periodic" if neg_share > 0.25 else "cumpct"
+
+
 def load_performance(path=None, verbose=True):
     """Returns (series, index_rows, dates):
-        series      list of {meta, ret:{date:periodic}, cum:{date:raw}}  (constituents)
+        series      list of {meta, ret:{date:periodic}, raw:{date:raw}}  (constituents)
         index_rows  {"R2KG": <series-dict>, "SP6G": <series-dict>}       (benchmarks)
         dates       sorted full list of month-end dates seen
+
+    Handles the Morningstar layout where metadata rows sit on top, the date headers
+    are in a SEPARATE row from the CIK/Ticker/... labels (the data columns are tagged
+    'Return (Cumulative)'), and group-header / benchmark-duplicate rows are interleaved.
     """
     path = Path(path) if path else find_performance_file()
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -124,21 +141,31 @@ def load_performance(path=None, verbose=True):
     rows = list(ws.iter_rows(values_only=True))
     wb.close()
 
-    # locate header row: the row with the most identifier-column hits AND >=12 date cols to its right
-    hdr_i = date_cols = id_idx = None
-    for i, r in enumerate(rows[:30]):
+    # 1. identifier-label row: the row with >=2 exact id-col label hits (CIK/Ticker/ISIN/CUSIP)
+    id_row_i = id_idx = name_col = None
+    for i, r in enumerate(rows[:40]):
         cells = [str(c).strip().lower() if c is not None else "" for c in r]
         idh = {nm: j for j, c in enumerate(cells) for nm in ID_COLS if c == nm}
-        if not idh: continue
-        dcols = [(j, parse_month(r[j])) for j in range(len(r)) if parse_month(r[j])]
-        if len(dcols) >= 12:
-            hdr_i, date_cols, id_idx = i, dcols, idh
+        if len([k for k in idh if k in ("cik", "ticker", "isin", "cusip")]) >= 2:
+            id_row_i, id_idx = i, idh
+            for j, c in enumerate(cells):
+                if c in NAME_COLS: name_col = j; break
+            if name_col is None: name_col = 0
             break
-    if hdr_i is None:
-        raise ValueError("could not locate header row with identifiers + >=12 date columns")
+    if id_row_i is None:
+        raise ValueError("could not locate the CIK/Ticker identifier row")
 
-    dates = [d for _, d in date_cols]
-    all_dates = sorted(set(dates))
+    # 2. date row: among rows at/above the id row, the one with the most parseable dates.
+    #    (start-of-month and end-of-month header rows map to the same month-end.)
+    best = (None, [])
+    for i in range(0, id_row_i + 1):
+        dcols = [(j, parse_month(rows[i][j])) for j in range(len(rows[i])) if parse_month(rows[i][j])]
+        if len(dcols) >= len(best[1]) and len(dcols) >= 12:
+            best = (i, dcols)
+    date_row_i, date_cols = best
+    if date_row_i is None:
+        raise ValueError("could not locate a row of >=12 date columns")
+    all_dates = sorted(d for _, d in date_cols)
 
     def meta_of(r):
         def g(nm):
@@ -146,30 +173,39 @@ def load_performance(path=None, verbose=True):
             return r[j] if (j is not None and j < len(r) and r[j] is not None) else None
         cik = g("cik")
         cik = str(int(to_f(cik))).zfill(10) if (cik is not None and to_f(cik) is not None) else None
+        nmv = r[name_col] if (name_col < len(r) and r[name_col] is not None) else None
         return {"cik": cik, "ticker": str(g("ticker") or "").strip(), "nt": ntk(g("ticker")),
                 "isin": str(g("isin") or "").strip().upper(), "cusip": str(g("cusip") or "").strip().upper(),
-                "name": str(g("name") or g("security") or "").strip()}
+                "name": str(nmv or "").strip()}
 
+    # 3. read raw series for every data row, classify
     series, index_rows = [], {}
-    for r in rows[hdr_i + 1:]:
+    for r in rows[id_row_i + 1:]:
         if r is None or all(c is None for c in r): continue
         meta = meta_of(r)
         nm = meta["name"].lower()
-        cum = [(d, to_f(r[j])) for j, d in date_cols if j < len(r)]
-        per = dict(_cum_to_periodic(cum))
-        rec = {"meta": meta, "ret": per, "cum": {d: to_f(r[j]) for j, d in date_cols if j < len(r)}}
-        if any(k in nm for k in IDX_R2KG):
-            index_rows["R2KG"] = rec
-        elif any(k in nm for k in IDX_SP6G):
-            index_rows["SP6G"] = rec
-        elif meta["cik"] or meta["nt"]:
+        raw = {d: to_f(r[j]) for j, d in date_cols if j < len(r)}
+        nnn = sum(1 for v in raw.values() if v is not None)
+        rec = {"meta": meta, "raw": raw}
+        is_r = any(k in nm for k in IDX_R2KG); is_s = any(k in nm for k in IDX_SP6G)
+        if is_r or is_s:
+            if nnn < 12: continue                      # group header (e.g. section title), no data
+            key = "R2KG" if is_r else "SP6G"
+            index_rows.setdefault(key, rec)            # first wins -> skip 'Benchmark 1:' duplicate
+        elif meta["cik"]:                              # real constituent (group/section rows have no CIK)
             series.append(rec)
+
+    # 4. choose conversion mode (auto from index rows) and compute periodic returns
+    mode = _detect_mode(list(index_rows.values()))
+    for rec in series + list(index_rows.values()):
+        rec["ret"] = dict(_cum_to_periodic(sorted(rec["raw"].items()), mode))
 
     if verbose:
         print(f"  performance file: {path.name}")
-        print(f"    header row {hdr_i+1}; {len(date_cols)} month columns "
-              f"({all_dates[0]:%Y-%m} .. {all_dates[-1]:%Y-%m}); RET_MODE={RET_MODE}")
-        print(f"    {len(series)} constituent rows; index rows found: {sorted(index_rows)}")
+        print(f"    id row {id_row_i+1}, date row {date_row_i+1}; {len(date_cols)} months "
+              f"({all_dates[0]:%Y-%m} .. {all_dates[-1]:%Y-%m})")
+        print(f"    RET_MODE={RET_MODE} -> using '{mode}'; {len(series)} constituents; "
+              f"index rows: {sorted(index_rows)}")
         for key, rec in index_rows.items():
             sample = [(d, rec["ret"].get(d)) for d in all_dates[:4]]
             txt = ", ".join(f"{d:%Y-%m} {100*v:+.2f}%" for d, v in sample if v is not None)
