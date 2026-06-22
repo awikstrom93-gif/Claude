@@ -35,7 +35,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
-from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics
+from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "30"))
@@ -43,6 +43,16 @@ WINDOW_START = os.environ.get("WINDOW_START")
 COHORTS = ["profitable", "fallen", "never_profitable", "unknown"]
 COH_LABEL = {"profitable": "Profitable", "fallen": "Fallen (was profitable)",
              "never_profitable": "Never profitable", "unknown": "Unknown (no NI)"}
+
+
+def ticker_cik_map(base, temporal):
+    """Flat ntk(ticker) -> CIK from the security map + every temporal snapshot, so holdings
+    rows WITHOUT a CIK column (the R2000G file) can still be resolved by ticker."""
+    tmap = dict(base)
+    for _, d in (temporal or {}).items():
+        for tk, c in d.items():
+            if c: tmap.setdefault(ntk(tk), str(c))
+    return tmap
 
 
 def norm_facts(facts):
@@ -91,6 +101,9 @@ def build():
     series, idx, perf_dates = load_performance()
     holdings = load_monthly_holdings()
     facts = norm_facts(load_fundamentals())
+    base, temporal = load_maps()
+    tmap = ticker_cik_map(base, temporal)
+    def hcik(h): return h["cik"] or tmap.get(h["nt"])   # R2000G holdings lack a CIK column
     if "R2KG" not in idx:
         raise SystemExit("!! R2000G index row not found in performance file")
     R = idx["R2KG"]
@@ -105,7 +118,7 @@ def build():
             if k: by_id.setdefault(k, rec)
 
     def ret_for(hrow, d):
-        rec = (by_cik.get(hrow["cik"]) or by_nt.get(hrow["nt"]))
+        rec = (by_cik.get(hcik(hrow)) or by_nt.get(hrow["nt"]))
         return rec["ret"].get(d) if rec else None
 
     hdates = sorted(holdings)
@@ -137,7 +150,7 @@ def build():
         coh_wt = {c: 0.0 for c in COHORTS}
         for h in snap:
             wf = h["weight"] / traw
-            coh = cohort_of(h["cik"], d)
+            coh = cohort_of(hcik(h), d)
             coh_wt[coh] += wf
             r = ret_for(h, d)
             if r is None: continue

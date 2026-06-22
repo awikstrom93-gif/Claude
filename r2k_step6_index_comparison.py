@@ -33,9 +33,9 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 
-from r2k_perf_io import load_monthly_holdings, BASE
+from r2k_perf_io import load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import (load_fundamentals, company_metrics, pick_fy0,
-                                 aggregate, dollar_agg)
+                                 aggregate, dollar_agg, load_maps)
 
 OUT = BASE / "R2000G_vs_SP600G_Quality.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))     # annual spine: snapshot nearest this month
@@ -63,6 +63,16 @@ def fund_for(nf, cik):
     except (TypeError, ValueError): return nf.get(str(cik))
 
 
+def ticker_cik_map(base, temporal):
+    """ntk(ticker) -> CIK from the security map + every temporal snapshot, so holdings rows
+    WITHOUT a CIK column (the R2000G file) can still be resolved by ticker."""
+    tmap = dict(base)
+    for _, d in (temporal or {}).items():
+        for tk, c in d.items():
+            if c: tmap.setdefault(ntk(tk), str(c))
+    return tmap
+
+
 def annual_spine(holdings):
     """{year: snapshot_date nearest TARGET_MONTH}."""
     out = {}
@@ -74,13 +84,13 @@ def annual_spine(holdings):
 
 
 # ---------- per-snapshot index quality ----------
-def snapshot_quality(rows, snap_dt, facts):
+def snapshot_quality(rows, snap_dt, facts, tmap):
     cov = []                              # (metrics, weight)
     sect = {}; wt_all = 0.0
     for h in rows:
         wt_all += h["weight"]
         sect[h["gics"] or "Unknown"] = sect.get(h["gics"] or "Unknown", 0.0) + h["weight"]
-        cf = fund_for(facts, h["cik"])
+        cf = fund_for(facts, h["cik"] or tmap.get(h["nt"]))
         if not cf: continue
         fy0 = pick_fy0(cf, snap_dt)
         if fy0 is None: continue
@@ -151,6 +161,8 @@ def full_row(year, snap_dt, q):
 
 def build():
     facts = norm_facts(load_fundamentals())
+    base, temporal = load_maps()
+    tmap = ticker_cik_map(base, temporal)
     hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
     hs = find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
     if not hr or not hs:
@@ -163,8 +175,8 @@ def build():
     years = sorted(set(spine_r) & set(spine_s))
     print(f"  common years: {years[0]}..{years[-1]} ({len(years)})")
 
-    qr = {y: snapshot_quality(hold_r[spine_r[y]], spine_r[y], facts) for y in years}
-    qs = {y: snapshot_quality(hold_s[spine_s[y]], spine_s[y], facts) for y in years}
+    qr = {y: snapshot_quality(hold_r[spine_r[y]], spine_r[y], facts, tmap) for y in years}
+    qs = {y: snapshot_quality(hold_s[spine_s[y]], spine_s[y], facts, tmap) for y in years}
 
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
