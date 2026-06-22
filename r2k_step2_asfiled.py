@@ -41,6 +41,7 @@ BASE_FOLDER = Path(os.environ.get("R2KG_BASE", "."))
 CF_CACHE, SUB_CACHE = BASE_FOLDER / "companyfacts_cache", BASE_FOLDER / "submissions_cache"
 CIK_MAP    = BASE_FOLDER / "security_cik_map.json"
 TEMPORAL   = BASE_FOLDER / "temporal_cik_map.json"
+EXTRA_MAPS = [BASE_FOLDER / "sp600g_cik_map.json"]   # additional universes (e.g. S&P 600 Growth)
 REG_SET    = BASE_FOLDER / os.environ.get("R2KG_CIKS", "regression_set.csv")
 LEGACY_CSV = BASE_FOLDER / "edgar_annual_fundamentals.csv"
 OVERRIDES  = BASE_FOLDER / "manual_value_overrides.csv"
@@ -531,6 +532,15 @@ def load_cik_list():
         for snap, d in json.load(open(TEMPORAL)).items():
             for tk, c in d.items():
                 if c: ciks.setdefault(str(c).zfill(10), (tk, ""))
+    # extra universes (additive; never overrides an R2000G entry) -- e.g. S&P 600 Growth names
+    for emap in EXTRA_MAPS:
+        if emap.exists():
+            for tk, m in json.load(open(emap)).items():
+                cik = (m.get("cik") if isinstance(m, dict) else m)
+                if cik:
+                    ciks.setdefault(str(cik).zfill(10),
+                                    (m.get("ticker", tk) if isinstance(m, dict) else tk,
+                                     m.get("name", "") if isinstance(m, dict) else ""))
     if not ciks and REG_SET.exists():
         for r in csv.DictReader(open(REG_SET, encoding="utf-8-sig")):
             ciks[str(r["cik"]).zfill(10)] = (r["ticker"], r.get("name",""))

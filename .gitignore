@@ -8,3 +8,12 @@ submissions_cache/
 edgar_annual_fundamentals_ASFILED.csv
 asfiled_provenance.csv
 asfiled_vs_legacy_diff.csv
+
+# Input/output data workbooks (live on the analyst machine, not source)
+*Holding*.xlsx
+*Holdings*.xlsx
+*Performance*.xlsx
+R2000G_vs_SP600G_*.xlsx
+R2000G_Cohort_Attribution.xlsx
+Russell2000Growth_Analytics.xlsx
+sp600g_cik_map.json
