@@ -80,6 +80,12 @@ def snapshot_quality(rows, snap_dt, facts):
         cov.append((company_metrics(cf, fy0), h["weight"]))
     out = {"n_members": len(rows), "n_cov": len(cov), "wt_all": wt_all,
            "wt_cov": sum(w for _, w in cov), "sectors": sect}
+    # concentration (membership-only -- always available, even with no fundamental coverage)
+    ws = sorted((h["weight"] for h in rows), reverse=True); tw = sum(ws) or 1e-9
+    shares = [w / tw for w in ws]
+    out["topn"] = {n: round(sum(ws[:n]) / tw * 100, 1) for n in TOP_NS}
+    out["hhi"] = round(sum((s * 100) ** 2 for s in shares), 1)
+    out["effn"] = round(1 / sum(s * s for s in shares), 1) if shares else None
     if not cov: return out
     def colk(k): return [(m[k], w) for m, w in cov]
     ag = lambda k: aggregate(colk(k), winsor=True)
@@ -103,12 +109,6 @@ def snapshot_quality(rows, snap_dt, facts):
         de_w=ag("d_to_equity")["wavg"], dcap_w=ag("d_to_capital")["wavg"],
         tot_rev=sum(m["revenue"] for m, _ in cov if m["revenue"]) / 1e9,
     )
-    # concentration (all members)
-    ws = sorted((h["weight"] for h in rows), reverse=True); tw = sum(ws) or 1e-9
-    shares = [w / tw for w in ws]
-    out["topn"] = {n: round(sum(ws[:n]) / tw * 100, 1) for n in TOP_NS}
-    out["hhi"] = round(sum((s * 100) ** 2 for s in shares), 1)
-    out["effn"] = round(1 / sum(s * s for s in shares), 1) if shares else None
     return out
 
 
@@ -268,6 +268,13 @@ def build():
 
     wb.save(OUT)
     print(f"\n  DONE -> {OUT.name}")
+    def covpct(q): return 100 * q["wt_cov"] / (q["wt_all"] or 1)
+    cr = sum(covpct(qr[y]) for y in years) / len(years)
+    cs_ = sum(covpct(qs[y]) for y in years) / len(years)
+    print(f"  avg fundamental coverage by weight:  R2000G {cr:.1f}%   S&P 600 Growth {cs_:.1f}%")
+    if cs_ < 80:
+        print("  !! S&P 600 Growth coverage is LOW -- run r2k_build_sp600g_universe.py then")
+        print("     r2k_step2_asfiled.py to extend the fundamentals CSV before trusting the quality columns.")
     for y in (years[0], years[-1]):
         print(f"  {y}: R2KG unprof-NI {_p(qr[y].get('unprof_ni'))}%  no-rev {_p(qr[y].get('no_rev'))}%  "
               f"|  600G unprof-NI {_p(qs[y].get('unprof_ni'))}%  no-rev {_p(qs[y].get('no_rev'))}%")
