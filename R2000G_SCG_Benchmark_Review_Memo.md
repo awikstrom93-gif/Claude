@@ -36,18 +36,18 @@ R2000G ran **13–26 points more unprofitable weight than S&P600G in every singl
 
 Decomposing R2000G's realized return into quality cohorts (point-in-time, Carino-linked so contributions sum to the index return):
 
-- Over the **trailing 3-year window (May 2023 – Apr 2026)**, the **never-profitable cohort — under a fifth of R2000G by weight — delivered a disproportionate share of the index's return**, punching well above its weight (the exact weight/contribution split is the *Attr Contribution* window column; live in the *Executive Summary*).
+- Over the **trailing 3-year window (May 2023 – Apr 2026)**, the **never-profitable cohort was ~18% of R2000G by weight but delivered ~31% of the index's return** (+19.8 pts of the +64.2% total) — roughly **1.7× its weight**. The full unprofitable tail (fallen + never-profitable) drove ~39% of the window's return from ~28% of weight.
 - A manager applying an earnings discipline would not have held those names — and would therefore mechanically lag the benchmark.
 
 **The cleanest evidence is the counterfactual.** We rebuilt R2000G's *own* constituents as a "profitable-only" portfolio (the S&P 600-style screen, reweighted monthly):
 
 | | Full period | Manager window (3 yr) |
 |---|---|---|
-| R2000G index | +165.0% | *see Attr Counterfactual* |
-| Profitable-only (R2000G's own names) | **+190.8%** | *see Attr Counterfactual* |
-| Effect of screening for earnings | **+25.8 pts (helped)** | **negative (hurt)** |
+| R2000G index | +165.0% | +64.2% |
+| Profitable-only (R2000G's own names) | **+190.8%** | **+45.8%** |
+| Effect of screening for earnings | **+25.8 pts (helped)** | **−18.4 pts (hurt)** |
 
-The sign flips. **Over the full cycle, screening for earnings *helped* by ~26 points; over the trailing 3-year window it *hurt*** — the magnitude is in the *Attr Counterfactual* window column and is pulled live into the *Executive Summary* tab. That window is precisely when active managers were judged.
+The sign flips. **Over the full cycle, screening for earnings *helped* by ~26 points; over the trailing 3-year window it *cost* ~18 points.** That window is precisely when active managers were judged.
 
 A striking internal cross-check: the profitable-only rebuild's full-period return (**+190.8%**) lands almost exactly on the *actual* S&P600G index return (**+190.5%**) — two completely independent constructions agreeing, strong evidence that the earnings screen is the mechanism, not an artifact.
 
@@ -66,9 +66,9 @@ Over the full 2015–2026 window the quality-screened index was the better asset
 | Annualized volatility | 21.1% | **19.6%** |
 | Max drawdown | −33.4% | **−32.3%** |
 
-S&P600G delivered more return with **less** risk across the cycle. The recent window — where R2000G outran S&P600G on the back of its lower-quality tail — is a reversal, not a durable regime change. Calendar years make the pattern concrete: R2000G crushed in 2020 (+34.6% vs +19.6%) and 2024–25 (+15.2%/+13.0% vs +9.6%/+5.4%), but gave it all back in 2021 (+2.8% vs +22.6%) and 2022.
+S&P600G delivered more return with **less** risk across the cycle. Over the trailing 3-year window R2000G outran S&P600G by **+7.3 points (+64.2% vs +56.8%)** on the back of its lower-quality tail — a reversal, not a durable regime change. Calendar years make the pattern concrete: R2000G crushed in 2020 (+34.6% vs +19.6%) and 2024–25 (+15.2%/+13.0% vs +9.6%/+5.4%), but gave it all back in 2021 (+2.8% vs +22.6%) and 2022.
 
-**Why the window starts in May 2023.** The dates are not hand-picked: R2000G's cumulative excess over S&P600G troughed (its relative low) and began a persistent run right around mid-2023, and a candidate-window table confirms the trailing-3-year window brackets that rising leg. See the *Perf Window Proof* tab.
+**Why the window starts in May 2023 — and a transparency note.** R2000G's cumulative excess over S&P600G bottomed in **May 2022** (its relative low); it has led the quality index over the period since, and the trailing-3-year window sits squarely within that recovery. The dates are not cherry-picked: the *Perf Window Proof* tab reports the gap across every candidate window, all ending 4/30/2026 — the benchmark's lead is positive in each (e.g. ~+7 pts at 3 years, wider at ~+13–18 pts over 2–2.5 years), so the conclusion does not depend on the exact start month.
 
 *Exhibit: workbook tabs `Perf Summary`, `Perf Calendar Yr`, `Perf Window Proof`; chart "Growth of $1" on `Key Charts`.*
 
