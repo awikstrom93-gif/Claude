@@ -36,9 +36,13 @@ OVERRIDES = BASE_FOLDER / "manual_value_overrides.csv"
 REPORT = BASE_FOLDER / "recovery_report.csv"
 DRY = "--dry-run" in sys.argv
 
-IDFIELDS = {"cik", "ticker", "name", "fiscal_year", "fye_date", "filed_date",
-            "reporting_basis", "currency", "sector"}
-NUM = [f for f in OUTPUT_FIELDS if f not in IDFIELDS]
+# Recover ONLY income-statement / cash-flow (duration) metrics -- that is where the period-end
+# drift bites. Balance-sheet (instant) items are left to the strict pass: they were already present
+# for the real suspects, and a relaxed instant match can grab a wrong as-of value (observed: a
+# bogus $203B total_assets / $91B total_debt that the strict match correctly rejected).
+RECOVER = [m for m in ["revenue", "net_income", "operating_income", "gross_profit",
+                       "pretax_income", "tax_expense", "operating_cash_flow", "capex", "free_cash_flow"]
+           if m in OUTPUT_FIELDS]
 CORE = ["revenue", "net_income", "operating_income"]
 
 
@@ -86,7 +90,7 @@ def main():
         for y, d in annual.items():
             row = idx.get((c, int(y)))
             if not row: continue
-            for m in NUM:
+            for m in RECOVER:
                 if blank(row.get(m)) and d.get(m) is not None:
                     filled.append([c, int(y), m, d[m]])
         if i % 50 == 0: print(f"    {i}/{len(suspects)}  (filled so far {len(filled)})")
@@ -117,7 +121,7 @@ def main():
         c = ci(r.get("cik"))
         try: y = int(float(r["fiscal_year"]))
         except (TypeError, ValueError): continue
-        for m in NUM:
+        for m in RECOVER:
             if (c, y, m) in fillmap and blank(r.get(m)):
                 r[m] = fillmap[(c, y, m)]; patched += 1
     with open(FUND, "w", newline="", encoding="utf-8") as f:
