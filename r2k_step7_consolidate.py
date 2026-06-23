@@ -35,6 +35,7 @@ QUAL = BASE / "R2000G_vs_SP600G_Quality.xlsx"
 ATTR = BASE / "R2000G_Cohort_Attribution.xlsx"
 ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"   # step 3 (optional)
 CONC = BASE / "R2000G_Concentration.xlsx"               # step 8 (optional)
+BIO = BASE / "R2000G_Biotech.xlsx"                       # step 9 (optional)
 OUT = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
 
 TITLE = Font(bold=True, size=14, color="1F4E5F")
@@ -57,6 +58,9 @@ SHEETS = [
     # ---- concentration deep-dive (step 8, optional) ----
     (CONC, "Weight Concentration", "Conc Weight"), (CONC, "Return Breadth", "Conc Breadth"),
     (CONC, "Return Concentration", "Conc Return"),
+    # ---- biotech deep-dive (step 9, optional) ----
+    (BIO, "Biotech Weight & Quality", "Bio Weight & Quality"), (BIO, "Biotech in the Tail", "Bio In Tail"),
+    (BIO, "Biotech Contribution", "Bio Contribution"), (BIO, "Biotech Counterfactual", "Bio Counterfactual"),
     # ---- R2000G internal quality trends (step 3, optional appendix) ----
     (ANALYTICS, "Index Quality Trends", "R2KG Quality Trends"),
     (ANALYTICS, "Profitability Cohorts", "R2KG Prof Cohorts"),
@@ -223,6 +227,15 @@ TAB_GUIDE = [
      "% of names positive, % that BEAT the index, cap-weighted-minus-median spread, and the top-10/25 share of the year's gains."),
     ("Conc Return", "Who actually drove R2000G over the manager window.",
      "Share of the index's return from the top 10/25/50 names, plus the leading contributors."),
+    ("Biotech deep-dive (step 9)", None, None),
+    ("Bio Weight & Quality", "Biotech weight in each index + its quality in R2000G.",
+     "Biotech weight R2000G vs 600G over time, and %unprofitable / %no-revenue within R2000G biotech."),
+    ("Bio In Tail", "How much of R2000G's low-quality tail is biotech.",
+     "Biotech's share of the unprofitable and never-profitable weight, by year."),
+    ("Bio Contribution", "Biotech vs non-biotech contribution to R2000G's return.",
+     "Carino-linked; compare biotech's contribution share to its weight share."),
+    ("Bio Counterfactual", "R2000G's own names with biotech removed vs the index.",
+     "Ex-biotech and biotech-only growth-of-$1; the gap is biotech's realized swing on the benchmark."),
     ("R2000G internal trends (step 3 appendix)", None, None),
     ("R2KG Quality Trends", "R2000G's own quality evolution 2015-2026 (three aggregation views).",
      "Weight-weighted, median, and dollar-aggregate views of margins, returns, growth, leverage."),
@@ -255,6 +268,8 @@ GLOSSARY = [
     ("GP/Assets", "Gross profit / average assets (Novy-Marx gross profitability).", "A robust quality signal."),
     ("Accruals", "(Net income - operating cash flow) / average assets (Sloan).", "High accruals = lower earnings quality."),
     ("Cash conversion", "Operating cash flow / net income.", "How much reported profit shows up as cash."),
+    ("Biotech", "Holdings whose Morningstar Industry contains 'biotech'.",
+     "Clinical-stage / pre-revenue names; overwhelmingly unprofitable, so largely excluded by the S&P 600 earnings screen."),
     ("HHI", "Herfindahl index = sum of squared percent weights.", "Higher = more concentrated."),
     ("Effective N", "1 / sum(weight share squared).", "The number of equal-weight names that would give the same concentration."),
     ("% Beat index", "Share of constituents whose calendar-year return exceeded the index return.",
@@ -314,7 +329,8 @@ def contents(wb, names):
     ws.cell(1, 1, "Contents").font = TITLE
     groups = [("Performance (R2000G vs S&P 600 Growth)", "Perf "),
               ("Quality & composition", "Qual "), ("Cohort attribution", "Attr "),
-              ("Concentration & breadth", "Conc "), ("R2000G internal trends (appendix)", "R2KG ")]
+              ("Concentration & breadth", "Conc "), ("Biotech deep-dive", "Bio "),
+              ("R2000G internal trends (appendix)", "R2KG ")]
     r = 3
     for title, pre in groups:
         ws.cell(r, 1, title).font = H; r += 1
@@ -341,16 +357,25 @@ def key_charts(wb):
     line("R2000G unprofitable-tail weight over time", "Attr Cohort Wt", (4, 4), 1, 131, "A35")
     # Attr Counterfactual: header row 3; index(2), profitable-only(3), ex-never(4)
     line("Earnings-screen counterfactual (growth of $1)", "Attr Counterfactual", (2, 4), 3, 131, "A52")
+    # Bio Weight & Quality: header row 3; R2KG biotech wt (col2) and 600G biotech wt (col6) -- non-contiguous
+    if "Bio Weight & Quality" in wb.sheetnames:
+        bs = wb["Bio Weight & Quality"]
+        last = max([r for r in range(4, bs.max_row + 1) if isinstance(bs.cell(r, 1).value, (int, float))], default=3)
+        ch = LineChart(); ch.title = "Biotech weight: R2000G vs S&P 600 Growth"; ch.height, ch.width = 8, 18
+        ch.add_data(Reference(bs, min_col=2, max_col=2, min_row=3, max_row=last), titles_from_data=True)
+        ch.add_data(Reference(bs, min_col=6, max_col=6, min_row=3, max_row=last), titles_from_data=True)
+        ch.set_categories(Reference(bs, min_col=1, min_row=4, max_row=last))
+        ws.add_chart(ch, "A69")
 
 
 def main():
     missing = [f.name for f in (PERF, QUAL, ATTR) if not f.exists()]
     if missing:
         raise SystemExit(f"!! missing input workbook(s): {missing}. Run steps 4-6 first.")
-    paths = {PERF: "perf", QUAL: "qual", ATTR: "attr", ANALYTICS: "analytics", CONC: "conc"}
+    paths = {PERF: "perf", QUAL: "qual", ATTR: "attr", ANALYTICS: "analytics", CONC: "conc", BIO: "bio"}
     srcwb = {tag: openpyxl.load_workbook(p, data_only=True) for p, tag in paths.items() if p.exists()}
     for p, tag in paths.items():
-        if not p.exists() and tag in ("analytics", "conc"):
+        if not p.exists() and tag in ("analytics", "conc", "bio"):
             print(f"  (optional source not found, skipping: {p.name})")
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 

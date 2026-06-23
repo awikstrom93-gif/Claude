@@ -28,6 +28,8 @@ The S&P SmallCap 600 requires **positive trailing GAAP earnings** to enter the i
 
 R2000G ran **13–26 points more unprofitable weight than S&P600G in every single year**. The sharpest cut is the *never-profitable* cohort (no profitable year on record): roughly a fifth of R2000G by weight, versus essentially zero in the earnings-screened S&P600G. R2000G's unprofitable weight peaked at **44.6% in 2021**, the height of the profitless-growth rally.
 
+**Biotech is the embodiment of the gap.** Clinical-stage / pre-revenue biotech is overwhelmingly unprofitable and pre-earnings, so it is largely *uninvestable* for the S&P 600. It is a large, persistent weight in R2000G and a small one in S&P600G, and it makes up a disproportionate share of R2000G's never-profitable tail — so it is both a structural composition difference and a volatile return driver. The dedicated *Bio* tabs quantify biotech's weight in each index, its (near-total) unprofitability, its share of R2000G's low-quality tail, and its contribution to the benchmark's return — including an ex-biotech rebuild of R2000G's own names.
+
 *Exhibit: workbook tab `Qual Comparison`; chart "% Unprofitable by weight" on `Key Charts`.*
 
 ---
