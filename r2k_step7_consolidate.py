@@ -155,6 +155,24 @@ def exec_summary(wb, srcs):
          f"(a {diff_latest}-point gap), and R2000G's unprofitable weight peaked near {peak_un}% in {peak_yr}. "
          f"Never-profitable names are ~{nev_r}% of R2000G by weight vs ~{nev_s}% of S&P600G -- the screen "
          f"all but eliminates that cohort.")
+    # biotech line (only if the step-9 source is present)
+    if "bio" in srcs:
+        bq = srcs["bio"]["Biotech Weight & Quality"]; bt = srcs["bio"]["Biotech in the Tail"]
+        bcf = srcs["bio"]["Biotech Counterfactual"]
+        def last_data_row(ws):
+            rs = [r for r in range(1, (ws.max_row or 1) + 1) if isinstance(ws.cell(r, 1).value, (int, float))]
+            return rs[-1] if rs else None
+        lb = last_data_row(bq); lt = last_data_row(bt)
+        bio_r = n(bq.cell(lb, 2).value) if lb else None      # R2KG biotech wt
+        bio_s = n(bq.cell(lb, 6).value) if lb else None      # 600G biotech wt
+        bio_unp = n(bq.cell(lb, 4).value) if lb else None    # %unprofitable within biotech
+        bio_nev = n(bt.cell(lt, 7).value) if lt else None    # biotech share of never-prof
+        cf_idx_w2 = n(val(bcf, "Manager window", 2)); cf_exb_w = n(val(bcf, "Manager window", 3))
+        bio_cost = n(cf_idx_w2 - cf_exb_w, 1) if (cf_idx_w2 is not None and cf_exb_w is not None) else None
+        line(f"Biotech makes this concrete: ~{bio_r}% of R2000G vs ~{bio_s}% of S&P600G, ~{bio_unp}% of it "
+             f"unprofitable, and ~{bio_nev}% of R2000G's never-profitable weight. Removing biotech from "
+             f"R2000G's own names lowers the window return from {cf_idx_w2}% to {cf_exb_w}% "
+             f"(~{bio_cost} pts a disciplined manager would have missed). See the 'Bio *' tabs.")
     line("")
     line("2. THE REALIZED COST  ->  tabs 'Attr Contribution', 'Attr Counterfactual'", H)
     line(f"Over the trailing manager window, the never-profitable cohort was ~{nev_winW}% of R2000G by weight "
