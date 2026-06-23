@@ -54,6 +54,8 @@ DIFF_CSV   = BASE_FOLDER / "asfiled_vs_legacy_diff.csv"
 MIN_YEAR, MAX_YEAR = 2010, 2026
 DUR_LO, DUR_HI = 340, 380
 FALLBACK_MAX_DAYS = 540
+END_TOL_DAYS = int(os.environ.get("R2KG_END_TOL", "0"))   # 0 = exact period-end match (default);
+                                                          # >0 absorbs 52/53-week FYE drift in recovery
 DURATION, INSTANT = "duration", "instant"
 
 # ---- tag dictionaries (priority order; ported from the validated pilot + legacy) ----
@@ -216,7 +218,13 @@ def original_filing_map(cik, forms=("10-K",)):
 def _records(node, kind, fye, currency="USD"):
     out = []
     for r in node.get("units", {}).get(currency, []):
-        if r.get("end") != fye: continue
+        end = r.get("end")
+        if not end: continue
+        if END_TOL_DAYS == 0:
+            if end != fye: continue                       # exact (default, validated behavior)
+        else:
+            de = _days(fye, end)                          # tolerant (recovery): within +/- END_TOL days
+            if de is None or abs(de) > END_TOL_DAYS: continue
         if kind == DURATION:
             d = _days(r.get("start",""), r.get("end",""))
             if d is None or not (DUR_LO <= d <= DUR_HI): continue
