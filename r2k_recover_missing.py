@@ -139,8 +139,8 @@ def main():
     added = 0
     for c, y, m, v in filled:
         if (c, str(y), m) in existing: continue
-        out_rows.append([int(c), y, m, v, f"as-filed 10-K (relaxed end match +/-{END_TOL_DAYS}d)",
-                         "recovered missed duration metric (52/53-week FYE drift)"])
+        out_rows.append([int(c), y, m, v, f"as-filed 10-K (relaxed end +/-{END_TOL_DAYS}d / alt NI tag)",
+                         "recovered missed income-statement metric (FYE drift or NetIncomeLoss tagged as AvailableToCommon)"])
         added += 1
     with open(OVERRIDES, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f); w.writerow(["cik","fiscal_year","metric","value","source","note"]); w.writerows(out_rows)

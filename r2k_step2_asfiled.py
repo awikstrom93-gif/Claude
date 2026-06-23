@@ -99,7 +99,9 @@ BANK_TII, BANK_TIE = ["InterestAndDividendIncomeOperating"], ["InterestExpenseOp
 
 TAGS = {
     "net_income": (DURATION, ["NetIncomeLoss", "ProfitLoss",
-        "IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest"]),
+        "IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest",
+        "NetIncomeLossAvailableToCommonStockholdersBasic",
+        "NetIncomeLossAvailableToCommonStockholdersDiluted"]),
     "operating_income": (DURATION, ["OperatingIncomeLoss"]),
     "gross_profit": (DURATION, ["GrossProfit"]),
     "pretax_income": (DURATION, [
