@@ -22,3 +22,5 @@ Russell2000Growth_Analytics.xlsx
 sp600g_cik_map.json
 
 unknown_cohort_diagnostic.csv
+ni_recovery_report.csv
+*.csv.bak
