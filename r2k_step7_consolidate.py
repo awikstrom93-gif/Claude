@@ -37,6 +37,7 @@ ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"   # step 3 (optional)
 CONC = BASE / "R2000G_Concentration.xlsx"               # step 8 (optional)
 BIO = BASE / "R2000G_Biotech.xlsx"                       # step 9 (optional)
 OUT = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
+CHART_BACKUP = BASE / os.environ.get("R2KG_CHART_BACKUP", "R2000G_charts_backup.xlsx")
 
 TITLE = Font(bold=True, size=14, color="1F4E5F")
 H = Font(bold=True, size=11, color="1F4E5F")
@@ -358,8 +359,29 @@ def contents(wb, names):
         r += 1
 
 
+def preserve_charts(wb):
+    """Lift hand-made charts (e.g. Claude Excel plugin work) from the existing output --
+    or a backup snapshot -- onto the rebuilt tabs, so re-running never destroys them.
+    Charts reference sheets by name + cell range, which stay valid because every tab is
+    rebuilt with the SAME layout. Returns (n_moved, source_name)."""
+    src = OUT if OUT.exists() else (CHART_BACKUP if CHART_BACKUP.exists() else None)
+    if src is None:
+        return 0, None
+    try:
+        old = openpyxl.load_workbook(src)
+    except Exception as e:
+        print(f"  (could not read existing charts from {src.name}: {e})")
+        return 0, None
+    moved = 0
+    for s in wb.sheetnames:
+        if s in old.sheetnames:
+            for ch in list(getattr(old[s], "_charts", [])):
+                wb[s].add_chart(ch); moved += 1
+    return moved, src.name
+
+
 def key_charts(wb):
-    ws = wb.create_sheet("Key Charts")
+    ws = wb["Key Charts"] if "Key Charts" in wb.sheetnames else wb.create_sheet("Key Charts")
     def line(title, sheet, cols, hdr_row, n_rows, anchor):
         if sheet not in wb.sheetnames: return
         ch = LineChart(); ch.title = title; ch.height, ch.width = 8, 18
@@ -407,8 +429,14 @@ def main():
         if orig not in sw.sheetnames:
             print(f"  (skip: '{orig}' not in {src.name})"); continue
         copy_sheet(sw[orig], wb.create_sheet(new[:31])); copied.append(new[:31])
+    wb.create_sheet("Key Charts")          # home for charts (always present)
     contents(wb, copied)
-    key_charts(wb)
+    # preserve hand-made charts from the existing file; only auto-generate on a true first run
+    moved, csrc = preserve_charts(wb)
+    if moved:
+        print(f"  preserved {moved} existing charts from {csrc} (skipped auto Key Charts)")
+    else:
+        key_charts(wb)
     # explicit tab order: Exec Summary, Reading Guide, Glossary, Contents, Key Charts, then data tabs
     front = ["Executive Summary", "Reading Guide", "Glossary", "Contents", "Key Charts"]
     order = [s for s in front if s in wb.sheetnames] + [nm for nm in copied if nm not in front]
