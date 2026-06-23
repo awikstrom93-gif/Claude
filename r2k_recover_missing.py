@@ -76,6 +76,15 @@ def main():
             if any(blank(r.get(m)) for m in CORE):
                 c = ci(r.get("cik"));
                 if c: suspects.add(c)
+    # ALSO pull ni_blank suspects from the Unknown diagnostic -- some end-drift names (CIEN, PTM,
+    # CMPR ...) have NI present elsewhere but slip the completeness filter (their incomplete row's
+    # balance sheet was also dropped), so they'd otherwise never be re-extracted.
+    UNK = BASE_FOLDER / "unknown_cohort_diagnostic.csv"
+    if UNK.exists():
+        for r in csv.DictReader(open(UNK, encoding="utf-8-sig")):
+            if r.get("reason") == "ni_blank" and (r.get("years_with_NI") or "").strip():
+                c = ci(r.get("cik"));
+                if c: suspects.add(c)
     print(f"  {len(suspects)} suspect companies to re-extract (relaxed end match)...")
 
     filled = []          # (cik, year, metric, value)
