@@ -191,7 +191,12 @@ def load_performance(path=None, verbose=True):
         if is_r or is_s:
             if nnn < 12: continue                      # group header (e.g. section title), no data
             key = "R2KG" if is_r else "SP6G"
-            index_rows.setdefault(key, rec)            # first wins -> skip 'Benchmark 1:' duplicate
+            is_bench = nm.startswith("benchmark")
+            meta["name"] = re.sub(r"^[Bb]enchmark\s*\d*:\s*", "", meta["name"]).strip()  # clean label
+            rec["_bench"] = is_bench
+            cur = index_rows.get(key)
+            if cur is None or (cur.get("_bench") and not is_bench):
+                index_rows[key] = rec                  # prefer the non-'Benchmark N:' duplicate
         elif meta["cik"]:                              # real constituent (group/section rows have no CIK)
             series.append(rec)
 
