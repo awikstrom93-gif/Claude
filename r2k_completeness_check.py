@@ -43,46 +43,68 @@ def main():
     n = len(rows)
     print(f"  {n} company-year rows\n")
 
-    # per-metric blank rate (overall) -- only counts rows that have a balance sheet, so genuinely
-    # empty shell years don't dominate
-    bs_rows = [r for r in rows if not blank(r.get("total_assets"))]
-    print(f"  blank rate among the {len(bs_rows)} rows WITH a balance sheet:")
-    for m in DURATION_METRICS + BALANCE_METRICS:
-        nb = sum(1 for r in bs_rows if blank(r.get(m)))
-        bar = "#" * int(40 * nb / max(len(bs_rows), 1))
-        print(f"    {m:<22}{100*nb/max(len(bs_rows),1):>6.1f}%  {bar}")
+    # which (company, metric) pairs are reported in SOME year -> a blank elsewhere is a likely
+    # extraction miss (recoverable); a metric a company NEVER reports is structural (e.g. banks
+    # have no gross profit), not a bug.
+    reports = defaultdict(set)
+    for r in rows:
+        c = r.get("cik", "")
+        for m in DURATION_METRICS:
+            if not blank(r.get(m)):
+                try: reports[(c, m)].add(int(float(r["fiscal_year"])))
+                except (TypeError, ValueError): pass
+    def is_recoverable(cik, m):           # company reports this metric in at least one year
+        return bool(reports.get((cik, m)))
 
-    # income-statement-incomplete rows + by year
+    # per-metric blank rate, split structural vs recoverable
+    bs_rows = [r for r in rows if not blank(r.get("total_assets"))]
+    print(f"  blanks among the {len(bs_rows)} rows WITH a balance sheet  (recoverable = company reports it"
+          f" in another year; structural = it never does):")
+    print(f"    {'metric':<22}{'blank%':>8}{'recoverable':>13}{'structural':>12}")
+    for m in DURATION_METRICS + BALANCE_METRICS:
+        nb = [r for r in bs_rows if blank(r.get(m))]
+        rec = sum(1 for r in nb if m in DURATION_METRICS and is_recoverable(r.get("cik",""), m))
+        struct = len(nb) - rec
+        print(f"    {m:<22}{100*len(nb)/max(len(bs_rows),1):>7.1f}%{rec:>13}{struct:>12}")
+
+    # income-statement-incomplete rows + by year, split by whether ANY missing metric is recoverable
     suspects = []
     by_year = defaultdict(int)
+    n_rec_rows = 0
     for r in bs_rows:
         if any(blank(r.get(m)) for m in CORE):
             miss = [m for m in DURATION_METRICS if blank(r.get(m))]
-            suspects.append((r.get("cik",""), r.get("ticker",""), r.get("fiscal_year",""), miss))
+            rec_miss = [m for m in miss if is_recoverable(r.get("cik",""), m)]
+            suspects.append((r.get("cik",""), r.get("ticker",""), r.get("fiscal_year",""), miss, rec_miss))
+            if rec_miss: n_rec_rows += 1
             try: by_year[int(float(r["fiscal_year"]))] += 1
             except (TypeError, ValueError): pass
 
     print(f"\n  income-statement-incomplete rows (balance sheet present, a core metric blank): {len(suspects)}")
+    print(f"    of which {n_rec_rows} have a RECOVERABLE missing metric (the rest are structural "
+          f"non-reporting, not a bug)")
     print(f"    by fiscal year:")
     for y in sorted(by_year):
         print(f"      {y}: {by_year[y]}")
 
-    # worst companies
+    # worst companies that have RECOVERABLE misses (the ones worth fixing)
     perco = defaultdict(int)
-    for cik, tk, fy, miss in suspects: perco[(cik, tk)] += 1
+    for cik, tk, fy, miss, rec_miss in suspects:
+        if rec_miss: perco[(cik, tk)] += 1
     worst = sorted(perco.items(), key=lambda x: -x[1])[:20]
-    print(f"\n  companies with the most incomplete years (top 20):")
+    print(f"\n  companies with the most RECOVERABLE-incomplete years (top 20):")
     for (cik, tk), c in worst:
         print(f"    {tk:<8}{c} years")
 
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["cik", "ticker", "fiscal_year", "missing_duration_metrics"])
-        for cik, tk, fy, miss in suspects:
-            w.writerow([cik, tk, fy, ";".join(miss)])
+        w.writerow(["cik", "ticker", "fiscal_year", "missing_duration_metrics", "recoverable_missing"])
+        for cik, tk, fy, miss, rec_miss in suspects:
+            w.writerow([cik, tk, fy, ";".join(miss), ";".join(rec_miss)])
     print(f"\n  -> {OUT.name}  (feeds r2k_recover_missing.py)")
-    print("  These are recoverable from cached SEC data with a relaxed period-end match; run")
-    print("  r2k_recover_missing.py --dry-run to see how many of ALL these metrics come back.")
+    print("  Structural blanks (a metric a company never reports, e.g. banks have no gross profit)")
+    print("  are left alone by the recovery -- it only fills values that actually exist in the filing.")
+    print("  Run r2k_recover_missing.py --dry-run to see the real per-metric recovery counts.")
 
 
 if __name__ == "__main__":
