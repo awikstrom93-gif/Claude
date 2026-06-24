@@ -118,6 +118,11 @@ def snapshot_quality(rows, snap_dt, facts, tmap):
         w_fallen=100 * sum(w for m, w in cov if m["cohort"] == "fallen") / wtot,
         w_never=100 * sum(w for m, w in cov if m["cohort"] == "never_profitable") / wtot,
         gross_m=ag("gross_margin")["wavg"], op_m=ag("op_margin")["wavg"], net_m=ag("net_margin")["wavg"],
+        # dollar-aggregate margins (sum income / sum revenue) -- the index-level convention; matches
+        # FactSet/published index fundamentals. wavg-of-ratios is distorted by tiny-revenue/huge-loss names.
+        op_da=dollar_agg([(m["operating_income"], m["revenue"]) for m, _ in cov]),
+        net_da=dollar_agg([(m["net_income"], m["revenue"]) for m, _ in cov]),
+        gross_da=dollar_agg([(m["gross_profit"], m["revenue"]) for m, _ in cov]),
         roe_w=ag("roe")["wavg"], roe_da=dollar_agg([(m["net_income"], m["equity"]) for m, _ in cov]),
         roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(m["_nopat"], m["_ic"]) for m, _ in cov]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
@@ -143,8 +148,9 @@ def _x(v, nd=2): return round(v, nd) if v is not None else None
 
 
 FULL_COLS = ["Year", "Snapshot", "Members", "Covered", "%Wt cov", "%Unprof NI wt", "%Unprof OI wt",
-             "%No-Rev wt", "Prof wt", "Fallen wt", "Never wt", "Tot Rev $B", "GrossMgn", "OpMgn",
-             "NetMgn", "ROE wavg", "ROE $agg", "ROIC wavg", "ROIC $agg", "GP/Assets med", "Accruals med",
+             "%No-Rev wt", "Prof wt", "Fallen wt", "Never wt", "Tot Rev $B",
+             "OpMgn $agg", "NetMgn $agg", "GrossMgn $agg", "OpMgn wavg", "GrossMgn wavg",
+             "ROE wavg", "ROE $agg", "ROIC wavg", "ROIC $agg", "GP/Assets med", "Accruals med",
              "CashConv med", "RevYoY wavg", "Rev3yCAGR med", "RuleOf40 med", "D/E wavg", "D/Cap wavg"]
 
 
@@ -152,7 +158,8 @@ def full_row(year, snap_dt, q):
     return [year, f"{snap_dt:%Y-%m-%d}", q["n_members"], q["n_cov"],
             _p(100 * q["wt_cov"] / (q["wt_all"] or 1)), _p(q.get("unprof_ni")), _p(q.get("unprof_oi")),
             _p(q.get("no_rev")), _p(q.get("w_prof")), _p(q.get("w_fallen")), _p(q.get("w_never")),
-            _x(q.get("tot_rev"), 1), _pp(q.get("gross_m")), _pp(q.get("op_m")), _pp(q.get("net_m")),
+            _x(q.get("tot_rev"), 1),
+            _pp(q.get("op_da")), _pp(q.get("net_da")), _pp(q.get("gross_da")), _pp(q.get("op_m")), _pp(q.get("gross_m")),
             _pp(q.get("roe_w")), _pp(q.get("roe_da")), _pp(q.get("roic_w")), _pp(q.get("roic_da")),
             _pp(q.get("gp_assets")), _pp(q.get("accruals")), _x(q.get("cashconv")),
             _pp(q.get("rev_yoy")), _pp(q.get("rev_cagr3")), _pp(q.get("rule40")),
@@ -185,7 +192,7 @@ def build():
     wc.cell(row=1, column=1, value="R2000G vs S&P 600 Growth -- the earnings-screen gap (by index weight)").font = TITLE
     METR = [("%Unprofitable (NI) wt", "unprof_ni", "p"), ("%Unprofitable (OI) wt", "unprof_oi", "p"),
             ("%No-revenue wt", "no_rev", "p"), ("Never-profitable wt", "w_never", "p"),
-            ("Op margin (wavg)", "op_m", "pp"), ("Net margin (wavg)", "net_m", "pp"),
+            ("Op margin ($agg)", "op_da", "pp"), ("Net margin ($agg)", "net_da", "pp"),
             ("ROIC ($agg)", "roic_da", "pp"), ("ROE ($agg)", "roe_da", "pp"),
             ("Rev YoY (wavg)", "rev_yoy", "pp"), ("Rev 3y CAGR (med)", "rev_cagr3", "pp"),
             ("D/Capital (wavg)", "dcap_w", "pp")]
@@ -203,6 +210,12 @@ def build():
         r += 1
     wc.cell(row=r + 1, column=1, value="Diff = R2000G - S&P 600 Growth. Positive '%unprofitable' / '%no-revenue' "
             "diffs quantify R2000G's larger low-quality tail (the structural reason 600-like managers lagged).")
+    wc.cell(row=r + 2, column=1, value="Margins are DOLLAR-AGGREGATE (sum income / sum revenue) -- the index "
+            "convention; validated against FactSet's R2000G EBIT margin. (Weight-weighted-average margins, shown on "
+            "the per-index tabs, are distorted by tiny-revenue loss-makers and are not index-representative.)")
+    wc.cell(row=r + 3, column=1, value="Gross margin is computed only where GrossProfit is reported (many "
+            "banks/retailers/industrials don't tag it), so it runs higher than a full-COGS index figure -- use as a "
+            "relative R2KG-vs-600G signal, not an absolute level.")
     wc.freeze_panes = "B4"
 
     # ---- per-index full quality tabs ----
