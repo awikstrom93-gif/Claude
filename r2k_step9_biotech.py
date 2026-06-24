@@ -37,6 +37,10 @@ OUT = BASE / "R2000G_Biotech.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
+# Biotech definition (Morningstar Industry keywords). Default = narrow 'Biotechnology' only.
+# Broaden to the clinical life-sciences tail with e.g.
+#   set BIOTECH_KEYWORDS=biotech,drug manufactur,diagnostics
+BIO_KEYWORDS = [k.strip().lower() for k in os.environ.get("BIOTECH_KEYWORDS", "biotech").split(",") if k.strip()]
 
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
 TITLE = Font(bold=True, size=12)
@@ -55,7 +59,9 @@ def _hdr(ws, row, hs):
         x.alignment = Alignment(horizontal="center", wrap_text=True)
 
 
-def is_bio(h): return "biotech" in (h.get("ms_industry") or "").lower()
+def is_bio(h):
+    il = (h.get("ms_industry") or "").lower()
+    return any(k in il for k in BIO_KEYWORDS)
 
 
 def norm_facts(facts):
@@ -300,7 +306,7 @@ def build():
     nd = wb.create_sheet("Notes")
     for i, ln in enumerate([
         "R2000G biotech deep-dive.",
-        "Biotech = holdings Morningstar Industry containing 'biotech' (clinical/pre-revenue names).",
+        f"Biotech = Morningstar Industry containing any of {BIO_KEYWORDS} (set BIOTECH_KEYWORDS to broaden).",
         "Weight & Quality: biotech weight in each index + %unprofitable / %no-revenue within R2000G biotech.",
         "In the Tail: biotech's share of R2000G's unprofitable and never-profitable weight.",
         "Contribution: biotech vs non-biotech contribution to R2000G's return (Carino-linked to the index).",
