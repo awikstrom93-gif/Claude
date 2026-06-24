@@ -60,18 +60,23 @@ STYLE_RE = re.compile(r'\bs="(\d+)"')
 
 
 def update_worksheet_xml(xml_text, fresh):
-    """fresh: {A1ref: value}. Replace matching cells in place; report which refs were not found."""
-    seen = set()
+    """fresh: {A1ref: value}. Update matching VALUE cells in place; leave FORMULA cells alone
+    (they recompute from the refreshed inputs -- and overwriting them orphans calcChain.xml,
+    which corrupts the file). Returns (new_text, n_updated, n_skipped_formula, missing_refs)."""
+    seen = set(); skipped_formula = [0]
     def repl(m):
         ref = m.group(1)
         if ref not in fresh:
             return m.group(0)
+        body = m.group(3)
+        if "<f>" in body or "<f " in body or "<f/>" in body:   # formula cell -- never touch
+            skipped_formula[0] += 1; seen.add(ref); return m.group(0)
+        sm = STYLE_RE.search(m.group(2))                       # preserve the cell's style
         seen.add(ref)
-        sm = STYLE_RE.search(m.group(2))            # preserve the cell's style (number format etc.)
         return build_cell(ref, sm.group(1) if sm else None, fresh[ref])
     new_text = CELL_RE.sub(repl, xml_text)
     missing = [r for r in fresh if r not in seen]
-    return new_text, len(seen), missing
+    return new_text, len(seen) - skipped_formula[0], skipped_formula[0], missing
 
 
 def main():
@@ -113,9 +118,23 @@ def main():
         if sn not in fresh: continue
         with zipfile.ZipFile(CHARTS_FILE) as z:
             xml = z.read(path).decode("utf-8")
-        new_xml, n_set, missing = update_worksheet_xml(xml, fresh[sn])
+        new_xml, n_set, n_formula, missing = update_worksheet_xml(xml, fresh[sn])
         updated_parts[path] = new_xml.encode("utf-8")
-        report.append((sn, n_set, len(missing)))
+        report.append((sn, n_set, n_formula, len(missing)))
+
+    # strip the (optional) shared-string count attributes -- after converting some shared-string
+    # cells to inline strings the totals no longer match, which Excel flags. Removing them is valid
+    # OOXML and Excel recomputes on open.
+    with zipfile.ZipFile(CHARTS_FILE) as z:
+        if "xl/sharedStrings.xml" in z.namelist():
+            ss = z.read("xl/sharedStrings.xml").decode("utf-8")
+            ss = re.sub(r'\s+count="\d+"', "", ss, count=1)
+            ss = re.sub(r'\s+uniqueCount="\d+"', "", ss, count=1)
+            updated_parts["xl/sharedStrings.xml"] = ss.encode("utf-8")
+    # force a full recalc on open so the chart-driving helper formulas pick up the refreshed data
+    if "<calcPr" in wbxml and "fullCalcOnLoad" not in wbxml:
+        updated_parts["xl/workbook.xml"] = re.sub(
+            r"<calcPr\b", '<calcPr fullCalcOnLoad="1"', wbxml, count=1).encode("utf-8")
 
     in_charts = set(name_to_path); in_data = set(fresh)
     only_data = sorted(in_data - in_charts)
@@ -130,11 +149,11 @@ def main():
 
     print(f"  data source : {DATA_FILE.name}")
     print(f"  charts file : {CHARTS_FILE.name}")
-    print(f"  -> {OUT.name}  (charts copied verbatim; only cell values refreshed)\n")
-    print(f"  {'tab':<26}{'cells updated':>14}{'not-found':>11}")
-    for sn, n, miss in report:
-        flag = "  <- has extra fresh rows" if miss else ""
-        print(f"  {sn[:26]:<26}{n:>14}{miss:>11}{flag}")
+    print(f"  -> {OUT.name}  (charts copied verbatim; formulas left to recompute)\n")
+    print(f"  {'tab':<26}{'values updated':>15}{'formulas kept':>15}{'not-found':>11}")
+    for sn, n, nf, miss in report:
+        flag = "  <- extra fresh rows" if miss else ""
+        print(f"  {sn[:26]:<26}{n:>15}{nf:>15}{miss:>11}{flag}")
     if only_data:
         print(f"\n  tabs in the fresh data but NOT in your charts file (won't be added): {only_data}")
     if only_charts:
