@@ -61,6 +61,7 @@ SHEETS = [
     (CONC, "Return Concentration", "Conc Return"),
     # ---- biotech deep-dive (step 9, optional) ----
     (BIO, "Biotech Weight & Quality", "Bio Weight & Quality"), (BIO, "Biotech in the Tail", "Bio In Tail"),
+    (BIO, "Unprofitable by Theme", "Bio Unprof by Theme"), (BIO, "Unprofitable by Industry", "Bio Unprof by Industry"),
     (BIO, "Biotech Contribution", "Bio Contribution"), (BIO, "Biotech Counterfactual", "Bio Counterfactual"),
     # ---- R2000G internal quality trends (step 3, optional appendix) ----
     (ANALYTICS, "Index Quality Trends", "R2KG Quality Trends"),
@@ -249,8 +250,12 @@ TAB_GUIDE = [
     ("Biotech deep-dive (step 9)", None, None),
     ("Bio Weight & Quality", "Biotech weight in each index + its quality in R2000G.",
      "Biotech weight R2000G vs 600G over time, and %unprofitable / %no-revenue within R2000G biotech."),
-    ("Bio In Tail", "How much of R2000G's low-quality tail is biotech.",
-     "Biotech's share of the unprofitable and never-profitable weight, by year."),
+    ("Bio In Tail", "How much of R2000G's low-quality tail is biotech / life sciences.",
+     "Strict biotech AND broad life-sciences share of the unprofitable and never-profitable weight, by year."),
+    ("Bio Unprof by Theme", "What makes up the unprofitable tail, by theme, over time.",
+     "Shows the tail rotating (biotech + software in 2021 -> biotech + hardware/electrical/semis in 2026)."),
+    ("Bio Unprof by Industry", "The unprofitable tail by Morningstar Industry (top 14 + other).",
+     "The detailed breakdown behind the themes; % of each year's unprofitable weight."),
     ("Bio Contribution", "Biotech vs non-biotech contribution to R2000G's return.",
      "Carino-linked; compare biotech's contribution share to its weight share."),
     ("Bio Counterfactual", "R2000G's own names with biotech removed vs the index.",

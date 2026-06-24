@@ -41,6 +41,24 @@ WINDOW_START = os.environ.get("WINDOW_START")
 # Broaden to the clinical life-sciences tail with e.g.
 #   set BIOTECH_KEYWORDS=biotech,drug manufactur,diagnostics
 BIO_KEYWORDS = [k.strip().lower() for k in os.environ.get("BIOTECH_KEYWORDS", "biotech").split(",") if k.strip()]
+# broad life-sciences cut (companion to strict biotech) + theme map for the tail-composition exhibit
+LIFESCI_KEYWORDS = ["biotech", "drug manufactur", "pharmaceutical", "diagnostics", "medical device",
+                    "medical instrument", "medical care", "health information", "life science"]
+THEMES = [  # (label, [industry keywords]); first match wins, order matters
+    ("Biotech", ["biotech"]),
+    ("Other healthcare/life-sci", ["drug manufactur", "pharmaceutical", "diagnostics", "medical",
+                                   "health", "life science"]),
+    ("Software & internet", ["software", "internet", "information technology services"]),
+    ("Hardware, semis & electrical", ["semiconductor", "computer hardware", "electronic",
+                                      "communication equipment", "electrical", "scientific & technical", "solar"]),
+    ("Energy & materials", ["oil", "gas", "coal", "uranium", "mining", "metal", "chemical", "materials"]),
+    ("Industrials", ["aerospace", "defense", "machinery", "industrial", "engineering", "construction",
+                     "transportation", "trucking", "railroad", "airline", "building products"]),
+    ("Consumer", ["restaurant", "retail", "apparel", "leisure", "resort", "casino", "gambling", "travel",
+                  "lodging", "auto", "furnishing", "packaging", "beverage", "food", "consumer", "education"]),
+    ("Financials & real estate", ["bank", "capital markets", "insurance", "asset management", "credit",
+                                  "financial", "mortgage", "reit", "real estate"]),
+]
 
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
 TITLE = Font(bold=True, size=12)
@@ -62,6 +80,16 @@ def _hdr(ws, row, hs):
 def is_bio(h):
     il = (h.get("ms_industry") or "").lower()
     return any(k in il for k in BIO_KEYWORDS)
+
+def is_lifesci(h):
+    il = (h.get("ms_industry") or "").lower()
+    return any(k in il for k in LIFESCI_KEYWORDS)
+
+def theme_of(ind):
+    il = (ind or "").lower()
+    for label, keys in THEMES:
+        if any(k in il for k in keys): return label
+    return "Other"
 
 
 def norm_facts(facts):
@@ -192,33 +220,89 @@ def build():
             "covered biotech names, by weight -- biotech is overwhelmingly pre-earnings, which is why the S&P 600 "
             "earnings screen excludes most of it.")
 
-    # ---- Biotech in the Tail ----
+    # ---- Biotech in the Tail (strict biotech + broad life-sciences companion) ----
     wt = wb.create_sheet("Biotech in the Tail")
-    wt.cell(1, 1, "How much of R2000G's low-quality tail is biotech").font = TITLE
-    _hdr(wt, 3, ["Year", "R2KG unprofitable wt%", "  of which biotech (pts)", "Biotech share of unprofitable %",
-                 "R2KG never-prof wt%", "  of which biotech (pts)", "Biotech share of never-prof %"])
+    wt.cell(1, 1, "How much of R2000G's low-quality tail is biotech / life sciences").font = TITLE
+    _hdr(wt, 3, ["Year", "R2KG unprofitable wt%", "Biotech (pts)", "Biotech share of unprofitable %",
+                 "Life-sci (pts)", "Life-sci share of unprofitable %",
+                 "Never-prof wt%", "Biotech share of never-prof %", "Life-sci share of never-prof %"])
     r = 4
     for y in years:
         snap = hold_r[spine_r[y]]; tw = sum(h["weight"] for h in snap) or 1e-9; snap_dt = spine_r[y]
-        un_w = un_bio = nev_w = nev_bio = cov_w = 0.0
+        un_w = un_bio = un_ls = nev_w = nev_bio = nev_ls = 0.0
         for h in snap:
             cf = fund_for(facts, hcik(h))
             if not cf: continue
             fy0 = pick_fy0(cf, snap_dt)
             if fy0 is None: continue
-            cm = company_metrics(cf, fy0); cov_w += h["weight"]
+            cm = company_metrics(cf, fy0)
             if cm["prof_ni"] is False:
-                un_w += h["weight"];  un_bio += h["weight"] if is_bio(h) else 0
+                un_w += h["weight"]
+                if is_bio(h): un_bio += h["weight"]
+                if is_lifesci(h): un_ls += h["weight"]
             if cm["cohort"] == "never_profitable":
-                nev_w += h["weight"]; nev_bio += h["weight"] if is_bio(h) else 0
+                nev_w += h["weight"]
+                if is_bio(h): nev_bio += h["weight"]
+                if is_lifesci(h): nev_ls += h["weight"]
         row = [y, round(100*un_w/tw, 1), round(100*un_bio/tw, 1),
                round(100*un_bio/un_w, 1) if un_w else None,
-               round(100*nev_w/tw, 1), round(100*nev_bio/tw, 1),
-               round(100*nev_bio/nev_w, 1) if nev_w else None]
+               round(100*un_ls/tw, 1), round(100*un_ls/un_w, 1) if un_w else None,
+               round(100*nev_w/tw, 1), round(100*nev_bio/nev_w, 1) if nev_w else None,
+               round(100*nev_ls/nev_w, 1) if nev_w else None]
         for c, v in enumerate(row, 1): wt.cell(r, c, v)
         r += 1
-    wt.cell(r + 1, 1, "'Biotech share of unprofitable' = biotech unprofitable weight / all unprofitable weight. "
-            "Shows how concentrated R2000G's earnings-screen disadvantage is in biotech specifically.")
+    wt.cell(r + 1, 1, "Biotech = strict Morningstar 'Biotechnology'. Life-sci = biotech + pharma + diagnostics + "
+            "medical devices/instruments (the broader unprofitable healthcare cut). Shares = of all unprofitable weight.")
+
+    # ---- Unprofitable Tail Composition (by theme + by industry) ----
+    comp_ind, comp_thm = {}, {}
+    for y in years:
+        snap = hold_r[spine_r[y]]; snap_dt = spine_r[y]; ind_w = {}; thm_w = {}
+        for h in snap:
+            cf = fund_for(facts, hcik(h))
+            if not cf: continue
+            fy0 = pick_fy0(cf, snap_dt)
+            if fy0 is None: continue
+            if company_metrics(cf, fy0)["prof_ni"] is not False: continue   # unprofitable only
+            ind = (h.get("ms_industry") or "Unknown").strip() or "Unknown"
+            ind_w[ind] = ind_w.get(ind, 0.0) + h["weight"]
+            t = theme_of(ind); thm_w[t] = thm_w.get(t, 0.0) + h["weight"]
+        comp_ind[y], comp_thm[y] = ind_w, thm_w
+
+    theme_order = [lab for lab, _ in THEMES] + ["Other"]
+    wct = wb.create_sheet("Unprofitable by Theme")
+    wct.cell(1, 1, "What makes up R2000G's unprofitable weight -- by theme (% of unprofitable, by year)").font = TITLE
+    _hdr(wct, 3, ["Year"] + theme_order)
+    rr = 4
+    for y in years:
+        tot = sum(comp_thm[y].values()) or 1e-9
+        row = [y] + [round(100 * comp_thm[y].get(t, 0) / tot, 1) for t in theme_order]
+        for c, v in enumerate(row, 1): wct.cell(rr, c, v)
+        rr += 1
+    wct.cell(rr + 1, 1, "Themes mapped from Morningstar Industry. Shows the unprofitable tail rotating over time "
+             "(e.g. biotech + software in 2021 -> biotech + hardware/electrical/semis in 2026).")
+    ny = len(years)
+    ch = LineChart(); ch.title = "Unprofitable tail composition by theme"; ch.height, ch.width = 9, 20
+    ch.add_data(Reference(wct, min_col=2, max_col=6, min_row=3, max_row=3 + ny), titles_from_data=True)
+    ch.set_categories(Reference(wct, min_col=1, min_row=4, max_row=3 + ny)); wct.add_chart(ch, "A" + str(rr + 4))
+
+    tot_by_ind = {}
+    for y in years:
+        for ind, w in comp_ind[y].items(): tot_by_ind[ind] = tot_by_ind.get(ind, 0) + w
+    topinds = [i for i, _ in sorted(tot_by_ind.items(), key=lambda x: -x[1])[:14]]
+    wci = wb.create_sheet("Unprofitable by Industry")
+    wci.cell(1, 1, "Unprofitable weight by Morningstar Industry (% of that year's unprofitable weight)").font = TITLE
+    _hdr(wci, 3, ["Year"] + topinds + ["All other"])
+    rr = 4
+    for y in years:
+        tot = sum(comp_ind[y].values()) or 1e-9
+        shown = [comp_ind[y].get(i, 0) for i in topinds]
+        row = [y] + [round(100 * w / tot, 1) for w in shown] + [round(100 * (tot - sum(shown)) / tot, 1)]
+        for c, v in enumerate(row, 1): wci.cell(rr, c, v)
+        rr += 1
+    wci.cell(rr + 1, 1, "Columns = the 14 industries with the most unprofitable weight across all years; "
+             "the rest rolled into 'All other'. Values are % of each year's total unprofitable weight.")
+    wci.freeze_panes = "B4"
 
     # ---- monthly biotech attribution ----
     hdates = sorted(hold_r)
@@ -308,7 +392,10 @@ def build():
         "R2000G biotech deep-dive.",
         f"Biotech = Morningstar Industry containing any of {BIO_KEYWORDS} (set BIOTECH_KEYWORDS to broaden).",
         "Weight & Quality: biotech weight in each index + %unprofitable / %no-revenue within R2000G biotech.",
-        "In the Tail: biotech's share of R2000G's unprofitable and never-profitable weight.",
+        "In the Tail: strict biotech AND broad life-sciences (biotech+pharma+diagnostics+devices) share of the",
+        "   unprofitable / never-profitable weight -- strict biotech understates the full unprofitable healthcare cut.",
+        "Unprofitable by Theme / by Industry: what makes up the unprofitable tail over time -- it rotates",
+        "   (biotech + software in 2021 -> biotech + hardware/electrical/semis in 2026).",
         "Contribution: biotech vs non-biotech contribution to R2000G's return (Carino-linked to the index).",
         "Counterfactual: R2000G's own names with biotech removed (reweighted) vs the index, and biotech-only.",
         "Weight/return tabs need no fundamentals; quality/tail tabs join fundamentals by CIK then ticker.",
