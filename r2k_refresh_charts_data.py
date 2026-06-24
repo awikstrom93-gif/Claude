@@ -9,40 +9,55 @@ zip, rewrites only the cell VALUES inside each worksheet's XML to match the fres
 output, and copies every other part (charts, drawings, styles, themes) verbatim. The
 charts never pass through a chart library, so they are preserved exactly.
 
+HEADER-AWARE MATCHING (why this exists)
+    The charts in your backup reference cells by POSITION -- e.g. 'Qual R2000G'!$M$4:$M$15.
+    If an analytics step reorders or inserts columns (e.g. step 6 inserting the
+    dollar-aggregate margin columns), a naive position-for-position copy would write the
+    NEW column's data into the OLD column's cells, so every chart would silently plot the
+    wrong metric under the right legend.
+
+    Instead, for every data table this tool matches columns by their HEADER LABEL and rows
+    by position (rows are stable across runs -- same years / constituents). For each column
+    in your charts file it finds the column in the fresh data with the same header and pulls
+    THAT column's header + values into the charts-file position. So the metric a chart
+    expects always lands where the chart looks, no matter how the fresh output reordered its
+    columns. Tables that didn't move are unaffected (label match is identity). Cells outside
+    any detected table (titles, prose, notes) fall back to same-position matching.
+
+    A few columns were RENAMED between layouts (the margin columns moved from a weight-
+    weighted-average basis to the validated dollar-aggregate basis). ALIASES below map the
+    old chart header to the fresh column that replaces it, so existing margin charts keep
+    working and now show the corrected basis. Set MARGIN_BASIS=wavg to prefer the
+    weight-weighted columns instead (only where the fresh output still carries them).
+    Anything that still can't be matched is REPORTED, never silently mis-filled.
+
 INPUTS  (R2KG_BASE)
     R2000G_SmallCapGrowth_Benchmark_Review.xlsx   the fresh step-7 output (DATA source)
+                                                   override with R2KG_DATA_FILE
     R2000G_charts_backup.xlsx                      your charted workbook (CHARTS to keep)
                                                    override with R2KG_CHARTS_FILE
 OUTPUT
     R2000G_Benchmark_Review_charted.xlsx           fresh data + your exact charts
                                                    override with R2KG_CHARTS_OUT
 
-Only cells that exist in BOTH files (same tab, same A1 ref) are updated -- so the charted
-file's layout must match the step-7 layout (it will, since it started as a step-7 output).
-Any extra rows in the fresh data (e.g. new constituents) beyond the charted file's range
-are reported, not inserted. Cells you turned into formulas are left alone only if they
-aren't data cells in the step-7 output.
-
 RUN: python r2k_refresh_charts_data.py
 ============================================================
 """
 from pathlib import Path
 from xml.sax.saxutils import escape, unescape
-import os, re, zipfile, shutil
+import os, re, zipfile
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
-DATA_FILE = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
+DATA_FILE = BASE / os.environ.get("R2KG_DATA_FILE", "R2000G_SmallCapGrowth_Benchmark_Review.xlsx")
 CHARTS_FILE = BASE / os.environ.get("R2KG_CHARTS_FILE", "R2000G_charts_backup.xlsx")
 OUT = BASE / os.environ.get("R2KG_CHARTS_OUT", "R2000G_Benchmark_Review_charted.xlsx")
-
-
-def col_letter(c):
-    s = ""
-    while c > 0:
-        c, rem = divmod(c - 1, 26); s = chr(65 + rem) + s
-    return s
+# which margin basis the renamed margin charts should follow: "agg" (validated, default) or "wavg"
+MARGIN_BASIS = os.environ.get("MARGIN_BASIS", "agg").strip().lower()
+# "header" (default, robust to column reordering) or "position" (legacy same-cell copy)
+REFRESH_MODE = os.environ.get("R2KG_REFRESH_MODE", "header").strip().lower()
 
 
 def build_cell(ref, style, val):
@@ -79,22 +94,148 @@ def update_worksheet_xml(xml_text, fresh):
     return new_text, len(seen) - skipped_formula[0], skipped_formula[0], missing
 
 
-def main():
-    if not DATA_FILE.exists(): raise SystemExit(f"!! {DATA_FILE.name} not found (run step 7 first).")
-    if not CHARTS_FILE.exists(): raise SystemExit(f"!! {CHARTS_FILE.name} not found "
-                                                  f"(run r2k_snapshot_charts.py, or set R2KG_CHARTS_FILE).")
+# ---------------------------------------------------------------------------
+# header-aware column matching
+# ---------------------------------------------------------------------------
+def norm(s):
+    return re.sub(r"\s+", " ", str(s)).strip()
 
-    # 1. fresh values from the step-7 output, keyed by sheet -> {A1ref: value}
+
+def alias_candidates(label):
+    """Ordered fresh-header candidates for an old charts-file header that was renamed.
+    The margin columns moved from weight-weighted average to dollar-aggregate; older
+    layouts also used a bare 'OpMgn'/'GrossMgn'/'NetMgn' (which was the wavg figure)."""
+    lbl = norm(label)
+    cands = [lbl]
+    prefer = ["$agg", "wavg"] if MARGIN_BASIS != "wavg" else ["wavg", "$agg"]
+
+    # bare margin name (old single column) -> qualified variants
+    m = re.fullmatch(r"(Gross|Op|Net)Mgn", lbl)
+    if m:
+        for q in prefer:
+            cands.append(f"{m.group(0)} {q}")
+
+    # "<metric> (wavg) <suffix>" <-> "<metric> ($agg) <suffix>"  (Comparison tab style)
+    if "(wavg)" in lbl or "($agg)" in lbl:
+        for q in prefer:
+            cands.append(lbl.replace("(wavg)", f"({q})").replace("($agg)", f"({q})"))
+
+    # "<metric> wavg"/"<metric> $agg" trailing-qualifier style
+    m2 = re.fullmatch(r"(.*?)\s+(wavg|\$agg)", lbl)
+    if m2:
+        for q in prefer:
+            cands.append(f"{m2.group(1)} {q}")
+
+    out = []
+    for c in cands:
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def is_header_row(grid, r, maxc):
+    """Heuristic: a header row has several short string labels and is followed by a row of
+    mostly numbers. Distinguishes table headers from titles, prose and footnotes."""
+    row = grid.get(r, {})
+    strs = [v for v in row.values() if isinstance(v, str) and v.strip()]
+    short = [v for v in strs if len(v) <= 60]
+    if len(short) < 2:
+        return False
+    nxt = grid.get(r + 1, {})
+    nums = [v for v in nxt.values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return len(nums) >= 2
+
+
+def grid_of(ws):
+    g = {}
+    for row in ws.iter_rows():
+        for c in row:
+            if c.value is not None:
+                g.setdefault(c.row, {})[c.column] = c.value
+    return g
+
+
+def remap_sheet(bak_grid, fresh_grid, report_unmatched, report_alias, sheet):
+    """Return {A1ref: value} to write into the charts(bak) worksheet, with each table's
+    columns matched fresh<-bak by header label. Rows are matched by position. Cells outside
+    a detected table fall back to same-position fresh values."""
+    maxr = max([*bak_grid, *fresh_grid, 1])
+    maxc = max([max(r) for r in [*bak_grid.values(), *fresh_grid.values()] if r] + [1])
+
+    # locate header rows (shared row indices -- layout is row-stable across runs)
+    header_rows = [r for r in range(1, maxr + 1) if is_header_row(bak_grid, r, maxc)]
+    # the table a header governs runs until the next header row (or end)
+    regions = []
+    for i, hr in enumerate(header_rows):
+        end = header_rows[i + 1] - 1 if i + 1 < len(header_rows) else maxr
+        regions.append((hr, end))
+
+    covered = set()                       # (row) indices governed by some table region
+    out = {}
+    for hr, end in regions:
+        bak_hdr = {c: norm(v) for c, v in bak_grid.get(hr, {}).items() if isinstance(v, str) and v.strip()}
+        fresh_hdr_by_label = {}
+        for c, v in fresh_grid.get(hr, {}).items():
+            if isinstance(v, str) and v.strip():
+                fresh_hdr_by_label.setdefault(norm(v), c)
+        if not bak_hdr or not fresh_hdr_by_label:
+            continue
+        # column map: bak col -> fresh col, by header label (with aliases)
+        col_map = {}
+        for bc, lbl in bak_hdr.items():
+            target = None
+            for cand in alias_candidates(lbl):
+                if cand in fresh_hdr_by_label:
+                    target = fresh_hdr_by_label[cand]
+                    if cand != lbl:
+                        report_alias.append((sheet, lbl, cand))
+                    break
+            if target is None:
+                report_unmatched.append((sheet, hr, lbl))
+            else:
+                col_map[bc] = target
+        # write header label + every data row for each matched column
+        for r in range(hr, end + 1):
+            covered.add(r)
+            for bc, fc in col_map.items():
+                val = fresh_grid.get(r, {}).get(fc)
+                if val is not None:
+                    out[f"{get_column_letter(bc)}{r}"] = val
+
+    # cells outside any table region -> same-position fresh value (titles, notes, single cells)
+    for r, cols in fresh_grid.items():
+        if r in covered:
+            continue
+        for c, v in cols.items():
+            out[f"{get_column_letter(c)}{r}"] = v
+    return out
+
+
+def main():
+    if not DATA_FILE.exists():
+        raise SystemExit(f"!! {DATA_FILE.name} not found (run step 7 first).")
+    if not CHARTS_FILE.exists():
+        raise SystemExit(f"!! {CHARTS_FILE.name} not found "
+                         f"(run r2k_snapshot_charts.py, or set R2KG_CHARTS_FILE).")
+
+    # 1. fresh values from the step-7 output, plus the charts file's own grids (for headers)
     src = openpyxl.load_workbook(DATA_FILE, data_only=True)
-    fresh = {}
-    for sn in src.sheetnames:
-        ws = src[sn]; cells = {}
-        for row in ws.iter_rows():
-            for c in row:
-                if c.value is not None:
-                    cells[f"{col_letter(c.column)}{c.row}"] = c.value
-        fresh[sn] = cells
+    fresh_grids = {sn: grid_of(src[sn]) for sn in src.sheetnames}
     src.close()
+    bak = openpyxl.load_workbook(CHARTS_FILE, data_only=True)
+    bak_grids = {sn: grid_of(bak[sn]) for sn in bak.sheetnames}
+    bak.close()
+
+    report_unmatched, report_alias = [], []
+    remapped = {}
+    for sn, fg in fresh_grids.items():
+        if sn not in bak_grids:
+            continue
+        if REFRESH_MODE == "position":
+            remapped[sn] = {f"{get_column_letter(c)}{r}": v
+                            for r, cols in fg.items() for c, v in cols.items()}
+        else:
+            remapped[sn] = remap_sheet(bak_grids[sn], fg, report_unmatched, report_alias, sn)
 
     # 2. map sheet name -> worksheet xml path in the charts file
     with zipfile.ZipFile(CHARTS_FILE) as z:
@@ -115,10 +256,10 @@ def main():
     # 3. update each matching worksheet's XML in place
     updated_parts = {}; report = []
     for sn, path in name_to_path.items():
-        if sn not in fresh: continue
+        if sn not in remapped: continue
         with zipfile.ZipFile(CHARTS_FILE) as z:
             xml = z.read(path).decode("utf-8")
-        new_xml, n_set, n_formula, missing = update_worksheet_xml(xml, fresh[sn])
+        new_xml, n_set, n_formula, missing = update_worksheet_xml(xml, remapped[sn])
         updated_parts[path] = new_xml.encode("utf-8")
         report.append((sn, n_set, n_formula, len(missing)))
 
@@ -136,7 +277,7 @@ def main():
         updated_parts["xl/workbook.xml"] = re.sub(
             r"<calcPr\b", '<calcPr fullCalcOnLoad="1"', wbxml, count=1).encode("utf-8")
 
-    in_charts = set(name_to_path); in_data = set(fresh)
+    in_charts = set(name_to_path); in_data = set(fresh_grids)
     only_data = sorted(in_data - in_charts)
     only_charts = sorted(in_charts - in_data)
 
@@ -149,17 +290,35 @@ def main():
 
     print(f"  data source : {DATA_FILE.name}")
     print(f"  charts file : {CHARTS_FILE.name}")
-    print(f"  -> {OUT.name}  (charts copied verbatim; formulas left to recompute)\n")
+    print(f"  match mode  : {REFRESH_MODE} (margins: {MARGIN_BASIS})")
+    print(f"  -> {OUT.name}  (charts copied verbatim; columns matched by header)\n")
     print(f"  {'tab':<26}{'values updated':>15}{'formulas kept':>15}{'not-found':>11}")
     for sn, n, nf, miss in report:
         flag = "  <- extra fresh rows" if miss else ""
         print(f"  {sn[:26]:<26}{n:>15}{nf:>15}{miss:>11}{flag}")
+    if report_alias:
+        print("\n  renamed columns matched via alias (old chart header <- fresh column):")
+        seen_al = set()
+        for sn, old, new in report_alias:
+            k = (sn, old, new)
+            if k in seen_al: continue
+            seen_al.add(k)
+            print(f"    {sn[:22]:<22}  {old!r:<26} <- {new!r}")
+    if report_unmatched:
+        print("\n  *** UNMATCHED chart columns (no fresh column with this header -- left as-is,")
+        print("      so any chart series on these still shows the PRIOR run's values):")
+        seen_un = set()
+        for sn, hr, lbl in report_unmatched:
+            k = (sn, lbl)
+            if k in seen_un: continue
+            seen_un.add(k)
+            print(f"    {sn[:22]:<22}  row {hr:<3}  {lbl!r}")
+        print("      -> the fresh output renamed/removed this metric; re-point or rebuild that")
+        print("         chart's series, or set MARGIN_BASIS to the basis your output still carries.")
     if only_data:
         print(f"\n  tabs in the fresh data but NOT in your charts file (won't be added): {only_data}")
     if only_charts:
         print(f"  tabs in your charts file but not in the fresh data (left as-is): {only_charts}")
-    print("\n  'not-found' = fresh cells with no matching cell in the charts file (extra rows). If a charted")
-    print("  tab shows many, its layout drifted from step 7 -- re-snapshot that tab's charts from a current run.")
 
 
 if __name__ == "__main__":
