@@ -77,12 +77,18 @@ def _sum(*vals):
 # candidates: tried in order; first non-null is the Morningstar "primary" for the pair.
 # components: list of (label, fn(metrics)->value) alternative derivations from Morningstar tags.
 # ----------------------------------------------------------------------------
-def C(*names):  # first-non-null candidate helper builder
-    def fn(m):
+def C(*names):  # first non-null AND non-zero candidate (a present-but-0 line e.g.
+    def fn(m):  # "Capital Expenditure Reported"=0 must not shadow the real PP&E purchase)
+        fallback = None
         for n in names:
-            if g(m, n) is not None:
-                return g(m, n)
-        return None
+            v = g(m, n)
+            if v is None:
+                continue
+            if abs(v) > 1e-9:
+                return v
+            if fallback is None:
+                fallback = v          # remember a real 0 in case every candidate is 0/absent
+        return fallback
     return fn
 
 FIELD_MAP = {
@@ -185,17 +191,33 @@ def normval(v, norm):
     return abs(v) if norm == "abs" else v
 
 
+NEAR = float(os.environ.get("RECON_NEAR", "0.05"))     # within 5% counts as a (soft) match
+NEGL = float(os.environ.get("RECON_NEGL", "0.02"))     # side is "negligible" if <2% of the other
+# magnitude gap below this is treated as MODERATE (likely a standardization/definition difference,
+# not an error) and kept out of the priority conflicts file. Tune with RECON_MAG_PRIORITY.
+MAG_PRIORITY = float(os.environ.get("RECON_MAG_PRIORITY", "0.35"))
+
+
 def classify(sec, ms):
+    """sec/ms are already sign-NORMALIZED per field (abs where norm='abs'). Buckets, in order:
+       match | near | zero_vs_value | sign_diff | scale_1000x | magnitude | blank_* | both_blank."""
     if sec is None and ms is None: return "both_blank"
     if sec is None: return "blank_sec"
     if ms is None: return "blank_mstar"
     a, b = sec, ms
+    amax, amin = max(abs(a), abs(b)), min(abs(a), abs(b))
     if abs(a - b) <= ABS_OK: return "match"
-    denom = max(abs(a), abs(b), 1.0)
-    if abs(a - b) / denom <= REL_OK: return "match"
-    if abs(a + b) / denom <= 0.02: return "sign_flip"
-    if b not in (0,) and 990 <= abs(a / b) <= 1010: return "scale_1000x"
-    if a not in (0,) and 990 <= abs(b / a) <= 1010: return "scale_1000x"
+    denom = max(amax, 1.0)
+    rel = abs(a - b) / denom
+    if rel <= REL_OK: return "match"
+    if rel <= NEAR: return "near"
+    # scale/unit error (~1000x) BEFORE the negligible check (at 1000x the small side is <2% too)
+    if b != 0 and 990 <= abs(a / b) <= 1010: return "scale_1000x"
+    if a != 0 and 990 <= abs(b / a) <= 1010: return "scale_1000x"
+    # one side negligible vs the other (blank-coded-as-0, or a wrong tiny tag) -- flag distinctly
+    if amax > 0 and amin / amax <= NEGL: return "zero_vs_value"
+    # genuine sign disagreement (only possible on as_is fields; both materially non-zero)
+    if (a > 0) != (b > 0): return "sign_diff"
     return "magnitude"
 
 
@@ -291,36 +313,75 @@ def run(sec_rows, mstar, prov):
             sec_n, ms_n = normval(sec_raw, spec["norm"]), normval(ms_raw, spec["norm"])
             cls = classify(sec_n, ms_n)
             blbl, bval, brd = best_reconciler(sec_raw, spec["norm"], prim_fn, spec["components"], metrics)
+            # if our value matches a DIFFERENT Morningstar line/sum (not the standard one), that's the
+            # most actionable verdict -- our number is explainable, it just maps to another tag.
+            if cls in ("sign_diff", "magnitude", "zero_vs_value") and brd is not None \
+                    and brd <= REL_OK and blbl and blbl != "Morningstar primary":
+                cls = "resolved_other_tag"
+            direction = ""
+            if sec_n is not None and ms_n is not None:
+                direction = "sec>mstar" if abs(sec_n) > abs(ms_n) else "mstar>sec"
             # diagnosis
-            if cls in ("match", "both_blank"):
+            if cls in ("match", "near", "both_blank"):
                 diag = ""
             elif cls == "blank_sec":
                 diag = f"SEC blank; Morningstar has {ms_metric or '(component)'}={ms_raw}"
             elif cls == "blank_mstar":
                 diag = "Morningstar has no value for this field/period"
-            else:
+            elif cls == "zero_vs_value":
+                if direction == "mstar>sec":
+                    diag = (f"SEC value is negligible vs Morningstar {ms_metric}={ms_raw} "
+                            f"(best reconciler '{blbl}'={bval}) -> our tag likely missed the real value")
+                else:
+                    diag = "Morningstar value is negligible vs SEC -> Morningstar gap, our value likely fine"
+            elif cls == "resolved_other_tag":
+                diag = (f"OUR value matches Morningstar '{blbl}'={bval} (diff {brd*100:.2f}%), NOT its "
+                        f"standard '{ms_metric or 'primary'}'={ms_raw} -> tag-mapping difference, value explainable")
+            elif cls == "sign_diff":
+                diag = (f"SIGN disagreement (SEC {('+' if (sec_raw or 0)>0 else '-')} vs Morningstar "
+                        f"{('+' if (ms_raw or 0)>0 else '-')}); often as-filed GAAP incl. one-time items "
+                        f"vs Morningstar standardized -- adjudicate per field")
+            else:  # scale_1000x / magnitude
                 if brd is not None and brd <= REL_OK:
-                    diag = f"RESOLVED: SEC matches Morningstar '{blbl}' (diff {brd*100:.2f}%)"
+                    diag = f"RESOLVED: SEC matches Morningstar '{blbl}' (diff {brd*100:.2f}%) -> our tag choice"
                 else:
                     diag = (f"UNRECONCILED: closest Morningstar source '{blbl}' still differs "
-                            f"{('%.1f%%'%(brd*100)) if brd is not None else 'n/a'} -> check our tag")
+                            f"{('%.1f%%'%(brd*100)) if brd is not None else 'n/a'} -> manual look / restatement")
             tag, basis, accn = prov.get((cik, fy, field), ("", "", ""))
+            sector = r.get("sector", "")
             detail.append(dict(cik=cik, ticker=tk, name=nm, fiscal_year=fy, sec_fye=r.get("fye_date", ""),
-                               mstar_period=ms_period, field=field, sec_value=sec_raw, sec_tag=tag,
-                               sec_accession=accn, mstar_value=ms_raw, mstar_metric=ms_metric,
-                               norm=spec["norm"], rel_diff=reldiff(sec_n, ms_n), classification=cls,
+                               mstar_period=ms_period, field=field, sector=sector,
+                               is_financial=("Y" if sector in ("bank", "insurance", "financial") else ""),
+                               sec_value=sec_raw, sec_norm=sec_n, sec_tag=tag, sec_accession=accn,
+                               mstar_value=ms_raw, mstar_norm=ms_n, mstar_metric=ms_metric, norm=spec["norm"],
+                               direction=direction, rel_diff=reldiff(sec_n, ms_n), classification=cls,
                                best_source=blbl, best_value=bval, best_reldiff=brd, diagnosis=diag))
     return detail
 
 
+CONFLICT_CLASSES = ("zero_vs_value", "sign_diff", "scale_1000x", "magnitude")
+# rank so the highest-confidence, most-fixable issues float to the top
+RANK = {"zero_vs_value": 0, "scale_1000x": 1, "sign_diff": 2, "magnitude": 3}
+
+
 def write_outputs(detail):
-    cols = ["cik", "ticker", "name", "fiscal_year", "sec_fye", "mstar_period", "field",
-            "sec_value", "sec_tag", "sec_accession", "mstar_value", "mstar_metric", "norm",
-            "rel_diff", "classification", "best_source", "best_value", "best_reldiff", "diagnosis"]
+    cols = ["cik", "ticker", "name", "fiscal_year", "sec_fye", "mstar_period", "field", "sector",
+            "is_financial", "sec_value", "sec_norm", "sec_tag", "sec_accession", "mstar_value",
+            "mstar_norm", "mstar_metric", "norm", "direction", "rel_diff", "classification",
+            "best_source", "best_value", "best_reldiff", "diagnosis"]
     with open(DETAIL, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols); w.writeheader(); w.writerows(detail)
-    conflicts = [d for d in detail if d["classification"] in ("sign_flip", "scale_1000x", "magnitude")]
-    conflicts.sort(key=lambda d: (d["best_reldiff"] is not None, d["best_reldiff"] or 0), reverse=True)
+    # PRIORITY conflicts = missed values / sign / scale / LARGE magnitude. Moderate same-sign
+    # magnitude gaps (< MAG_PRIORITY) are very likely standardization differences, not errors --
+    # they stay in the detail file but are kept out of the priority list so it stays actionable.
+    def is_priority(d):
+        c = d["classification"]
+        if c not in CONFLICT_CLASSES: return False
+        if c == "magnitude": return (d["rel_diff"] or 0) >= MAG_PRIORITY
+        return True
+    conflicts = [d for d in detail if is_priority(d)]
+    conflicts.sort(key=lambda d: (d["is_financial"] == "Y", RANK.get(d["classification"], 9),
+                                   -(d["rel_diff"] or 0)))
     with open(CONFLICTS, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols); w.writeheader(); w.writerows(conflicts)
     fills = [d for d in detail if d["classification"] == "blank_sec" and d["mstar_value"] is not None]
@@ -335,16 +396,23 @@ def scorecard(detail):
     by_field = defaultdict(lambda: defaultdict(int))
     for d in detail:
         by_field[d["field"]][d["classification"]] += 1
-    order = ["match", "blank_sec", "blank_mstar", "sign_flip", "scale_1000x", "magnitude", "both_blank"]
-    print(f"\n  {'field':<22}" + "".join(f"{k[:9]:>11}" for k in order))
+    order = ["match", "near", "resolved_other_tag", "blank_sec", "blank_mstar", "zero_vs_value",
+             "sign_diff", "scale_1000x", "magnitude", "both_blank"]
+    print(f"\n  {'field':<22}" + "".join(f"{k[:9]:>10}" for k in order))
     for field in FIELD_MAP:
         c = by_field[field]
-        print(f"  {field:<22}" + "".join(f"{c.get(k,0):>11}" for k in order))
-    nconf = sum(by_field[f].get(k, 0) for f in FIELD_MAP for k in ("sign_flip", "scale_1000x", "magnitude"))
-    resolved = sum(1 for d in detail if d["classification"] in ("sign_flip", "scale_1000x", "magnitude")
-                   and d["best_reldiff"] is not None and d["best_reldiff"] <= REL_OK)
-    print(f"\n  conflicts: {nconf}  (of which {resolved} reconcile to a Morningstar tag/sum -> likely OUR tag choice;")
-    print(f"            {nconf-resolved} reconcile to nothing -> needs manual look or is a genuine as-filed/restated gap)")
+        print(f"  {field:<22}" + "".join(f"{c.get(k,0):>10}" for k in order))
+    prio = sum(1 for d in detail if d["classification"] in ("zero_vs_value", "sign_diff", "scale_1000x")
+               or (d["classification"] == "magnitude" and (d["rel_diff"] or 0) >= MAG_PRIORITY))
+    moderate = sum(1 for d in detail if d["classification"] == "magnitude" and (d["rel_diff"] or 0) < MAG_PRIORITY)
+    zerov = sum(by_field[f].get("zero_vs_value", 0) for f in FIELD_MAP)
+    signd = sum(by_field[f].get("sign_diff", 0) for f in FIELD_MAP)
+    resv = sum(by_field[f].get("resolved_other_tag", 0) for f in FIELD_MAP)
+    print(f"\n  PRIORITY conflicts -> {CONFLICTS.name}: {prio}")
+    print(f"     zero_vs_value {zerov} (a tag missed the real value) | sign_diff {signd} (definitional)"
+          f" | + large magnitude (>= {int(MAG_PRIORITY*100)}%)")
+    print(f"  resolved_other_tag: {resv} (our value maps to a different Morningstar line -- explainable)")
+    print(f"  moderate magnitude (< {int(MAG_PRIORITY*100)}%): {moderate} (likely standardization diffs; in detail only)")
 
 
 def selftest():
@@ -356,35 +424,34 @@ def selftest():
     pe = slot["period_end"].isoformat()
     rev = m["Total Revenue"]; gp = m["Gross Profit"]; oi = m["Total Operating Profit Loss"]
     ni = m["Net Income After Non Controlling Minority Interests"]
-    rows = [
-        # correct, should be 'match'
-        dict(cik=cik, ticker="FN", name="Fabrinet", fiscal_year=2011, fye_date=pe,
-             revenue=rev, net_income=ni, operating_income=oi, gross_profit=gp),
-        # injected: operating_income taken from the WRONG line (Operating Income Expenses)
-        dict(cik=cik, ticker="FN", name="Fabrinet-bad-oi", fiscal_year=2011, fye_date=pe,
-             operating_income=m["Operating Income Expenses"]),
-        # injected: revenue 1000x scale error
-        dict(cik=cik, ticker="FN", name="Fabrinet-scale", fiscal_year=2011, fye_date=pe,
-             revenue=rev * 1000),
-        # injected: net_income sign flip
-        dict(cik=cik, ticker="FN", name="Fabrinet-sign", fiscal_year=2011, fye_date=pe,
-             net_income=-ni),
-        # injected: revenue blank -> fill candidate
-        dict(cik=cik, ticker="FN", name="Fabrinet-blank", fiscal_year=2011, fye_date=pe, revenue=""),
+    capex_real = abs(m["Purchase Of Property Plant And Equipment"])   # Cap Ex Reported is absent here
+    cases = [
+        # name, row, (field -> expected class)
+        ("clean", dict(revenue=rev, net_income=ni, operating_income=oi, gross_profit=gp,
+                       capex=capex_real),
+         {"revenue": "match", "net_income": "match", "operating_income": "match",
+          "gross_profit": "match", "capex": "match"}),       # capex must match via PP&E fallback (Cap Ex Reported=absent/0)
+        ("bad-oi", dict(operating_income=m["Operating Income Expenses"]),
+         {"operating_income": "resolved_other_tag"}),         # our value maps to a different MS line
+        ("scale", dict(revenue=rev * 1000), {"revenue": "scale_1000x"}),
+        ("sign", dict(net_income=-ni), {"net_income": "sign_diff"}),
+        ("tiny-debt", dict(total_debt=6000), {"total_debt": "zero_vs_value"}),
+        ("blank-rev", dict(revenue=""), {"revenue": "blank_sec"}),
     ]
+    rows = [dict(cik=cik, ticker="FN", name="FN-" + nm, fiscal_year=2011, fye_date=pe, **row)
+            for nm, row, _ in cases]
     detail = run(rows, mstar, {})
+    by = {(d["name"], d["field"]): d for d in detail}
     print("SELFTEST (Fabrinet FY2011 with injected errors):")
-    for d in detail:
-        if d["sec_value"] is None and d["classification"] == "blank_mstar":  # skip noise
-            continue
-        if d["field"] in ("revenue", "operating_income", "net_income") and d["name"] != "Fabrinet":
-            print(f"  {d['name']:<18} {d['field']:<18} sec={d['sec_value']!s:<16} "
-                  f"class={d['classification']:<12} {d['diagnosis']}")
-    # the clean row should be all-match for the 4 provided
-    clean = [d for d in detail if d["name"] == "Fabrinet" and d["field"] in
-             ("revenue", "operating_income", "net_income", "gross_profit")]
-    ok = all(d["classification"] == "match" for d in clean)
-    print(f"  clean row all-match: {ok}")
+    allok = True
+    for nm, row, expect in cases:
+        for field, exp in expect.items():
+            d = by[("FN-" + nm, field)]
+            ok = d["classification"] == exp
+            allok &= ok
+            print(f"  {'OK ' if ok else 'XX '}{nm:<10} {field:<18} got={d['classification']:<14} "
+                  f"want={exp:<14} {d['diagnosis'][:60]}")
+    print(f"\n  ALL PASS: {allok}")
 
 
 def main():
