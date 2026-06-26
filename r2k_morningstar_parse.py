@@ -35,7 +35,7 @@ RUN: python r2k_morningstar_parse.py  [file1.xlsx file2.xlsx ...]
 """
 from pathlib import Path
 from datetime import datetime
-import os, re, csv, sys, json
+import os, re, csv, sys, json, glob
 
 import openpyxl
 
@@ -58,11 +58,25 @@ NA = {"", "#n/a", "n/a", "na", "nm", "nmf", "none", "-", "--"}
 
 
 def classify(path):
+    """Return IS/BS/CF from the filename, or None if it can't be told confidently (so we don't
+    mis-parse e.g. a Morningstar *returns* file as an income statement)."""
     n = path.name.lower()
     if any(k in n for k in ("income", "inc stmt", "_is_", " is ", "incomestatement")): return "IS"
-    if "balance" in n or " bs " in n or "_bs_" in n: return "BS"
-    if "cash" in n or " cf " in n or "_cf_" in n or "cashflow" in n: return "CF"
-    return "IS"
+    if "balance" in n or " bs " in n or "_bs_" in n or "balancesheet" in n: return "BS"
+    if any(k in n for k in ("cash flow", "cash_flow", "cashflow", " cf ", "_cf_")): return "CF"
+    return None
+
+
+# filename keywords that mark a file as a statement download (vs returns/holdings/etc.)
+STMT_GLOB_HINT = ("income", "balance", "cash")
+
+
+def statement_files(folder):
+    out = []
+    for p in folder.glob("*Morningstar*.xlsx"):
+        if classify(p) is not None:
+            out.append(p)
+    return sorted(out)
 
 
 def parse_header(h):
@@ -164,18 +178,51 @@ def parse_workbook(path, statement, long_rows, ident):
     wb.close()
 
 
+def resolve_inputs(argv):
+    """Expand argv into existing files, tolerant of shells (e.g. PowerShell) that don't expand
+    globs themselves. Each arg may be a file, a glob, or a directory. Falls back to auto-globbing
+    *Morningstar*.xlsx in R2KG_BASE when nothing is passed."""
+    out = []
+    for a in argv:
+        p = Path(a)
+        if p.is_dir():
+            out += statement_files(p)
+        elif any(ch in a for ch in "*?[") or not p.exists():
+            hits = [Path(h) for h in glob.glob(a)]                      # as given (may be relative)
+            if not hits:
+                hits = [Path(h) for h in glob.glob(str(BASE / a))]      # relative to R2KG_BASE
+            out += sorted(hits)
+        else:
+            out.append(p)
+    if not out:
+        out = statement_files(BASE)
+    # dedupe, keep only existing files
+    seen, res = set(), []
+    for p in out:
+        rp = p.resolve()
+        if rp not in seen and p.exists():
+            seen.add(rp); res.append(p)
+    return res
+
+
 def main():
-    paths = [Path(p) for p in sys.argv[1:]] or sorted(BASE.glob("*Morningstar*.xlsx"))
-    paths = [p for p in paths if p.exists()]
+    paths = resolve_inputs(sys.argv[1:])
     if not paths:
-        raise SystemExit("!! no Morningstar workbooks found (pass paths, or put *Morningstar*.xlsx in R2KG_BASE)")
+        raise SystemExit("!! no Morningstar workbooks found. Run with no args to auto-find "
+                         "*Morningstar*.xlsx in this folder, or pass explicit file paths.")
 
     long_rows = []; ident = {}
     for p in paths:
         st = classify(p)
+        if st is None:
+            print(f"  SKIP   {p.name}  (can't tell if Income/Balance/Cash from the name -- "
+                  f"rename it to include 'Income', 'Balance' or 'Cash' to include it)")
+            continue
         n0 = len(long_rows)
         parse_workbook(p, st, long_rows, ident)
         print(f"  parsed {p.name}  [{st}]  -> {len(long_rows)-n0:,} values")
+    if not long_rows:
+        raise SystemExit("!! none of the inputs parsed -- check they are Morningstar statement downloads.")
 
     # dedupe long rows (last wins) on (cik,statement,year,metric)
     seen = {}
