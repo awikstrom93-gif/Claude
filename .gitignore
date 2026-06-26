@@ -33,6 +33,10 @@ ticker2cik.json
 reconciliation_detail.csv
 reconciliation_conflicts.csv
 reconciliation_fills.csv
+tag_calibration_report.txt
+tag_rule_proposals.csv
+tag_review_queue.csv
+tag_calibration_detail.csv
 
 unknown_cohort_diagnostic.csv
 ni_recovery_report.csv
