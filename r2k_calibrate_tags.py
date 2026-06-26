@@ -72,13 +72,20 @@ MSTAR_FIELD = {
     "total_assets": ("as_is", ["Total Assets"]),
     "stockholders_equity": ("as_is", ["Equity Attributable To Parent Stockholders", "Total Equity"]),
     "cash": ("as_is", ["Cash And Cash Equivalents"]),
-    "total_debt": ("abs", ["Long Term Debt And Capital Lease Obligation"]),
+    # total_debt is a SUM, not a single line -- compare our total to Morningstar's
+    # (current + long-term, lease-inclusive). Components listed so load_mstar keeps them.
+    "total_debt": ("abs", ["Current Debt And Capital Lease Obligation",
+                           "Long Term Debt And Capital Lease Obligation"]),
     "operating_cash_flow": ("as_is", ["Cash Flow From Operating Activities Indirect",
                                       "Net Cash Flow From Continuing Operating Activities Indirect"]),
     "capex": ("abs", ["Purchase Of Property Plant And Equipment", "Capital Expenditure Reported"]),
 }
 DURATION_FIELDS = {"revenue", "gross_profit", "operating_income", "pretax_income", "tax_expense",
                    "net_income", "operating_cash_flow", "capex"}   # else INSTANT (balance sheet)
+# the engine intentionally nulls these for financial-sector names (no meaningful gross profit /
+# operating income for banks/insurers/REITs), so a Morningstar value there is NOT a pipeline bug.
+SECTOR_NULLED = {"gross_profit": {"bank", "insurance", "broker_dealer", "reit", "financial"},
+                 "operating_income": {"bank", "insurance"}}
 
 # recognized, statement-level us-gaap concepts per field -> an obvious-better-tag is one of these
 RECOGNIZED = {
@@ -201,6 +208,12 @@ def load_mstar():
 
 def mstar_value(mrec, field):
     norm, names = MSTAR_FIELD[field]
+    if field == "total_debt":   # total = current + long-term (both lease-inclusive)
+        cur = mrec["metrics"].get("Current Debt And Capital Lease Obligation")
+        lt = mrec["metrics"].get("Long Term Debt And Capital Lease Obligation")
+        if cur is None and lt is None:
+            return None, norm, ""
+        return (cur or 0) + (lt or 0), norm, "CurDebt&Lease + LTDebt&Lease (sum)"
     for n in names:
         v = mrec["metrics"].get(n)
         if v is not None:
@@ -286,6 +299,7 @@ def calibrate(sec_rows, prov, mstar, get_facts):
                 if sec_val is not None and abs(sn - mn) / max(abs(mn), 1.0) <= CONFLICT_TOL:
                     continue   # already agree -> nothing to calibrate
                 checked += 1
+                sector = r.get("sector", "")
                 our_tag, our_accn, our_provval = prov.get((cik, fy, field), ("", "", None))
                 dur = field in DURATION_FIELDS
                 if dur not in scan:
@@ -293,8 +307,11 @@ def calibrate(sec_rows, prov, mstar, get_facts):
                 cvals = scan[dur]
                 hits = find_matching_tags(cvals, mval, norm)
                 recognized_hits = [h for h in hits if h[0] in RECOGNIZED.get(field, set())]
+                blank = sec_val is None
                 # verdict
-                if not hits:
+                if sector in SECTOR_NULLED.get(field, set()) and blank:
+                    verdict = "intentional_null"    # engine deliberately nulls this field for financials
+                elif not hits:
                     verdict = "no_tag_matches"      # Morningstar's number isn't any single filed tag -> definitional/derived
                 elif our_tag and any(h[0] == our_tag for h in hits):
                     verdict = "ours_already_matches" # tag fine; value/period nuance
@@ -304,36 +321,42 @@ def calibrate(sec_rows, prov, mstar, get_facts):
                     verdict = "review_multi"        # several plausible tags match -> needs judgement
                 else:
                     verdict = "review_unrecognized"  # only odd/extension tags match -> needs judgement
+                # fix_type distinguishes a true MISS (we extracted nothing) from a TAG SWAP (we had a
+                # value but a different tag matches Morningstar -> usually definitional, handle with care)
+                fix_type = ("fill_missing" if blank else "tag_swap") if verdict == "auto_fix" else ""
                 best = recognized_hits[0] if recognized_hits else (hits[0] if hits else (None, None, None))
                 detail.append(dict(
                     cik=cik, ticker=r.get("ticker", ""), name=r.get("name", ""), fiscal_year=fy,
-                    field=field, our_tag=our_tag, our_value=sec_val, mstar_value=mval, mstar_line=mname,
-                    better_tag=best[0] or "", better_value=best[1], match_reldiff=best[2],
-                    n_recognized_matches=len(recognized_hits), n_total_matches=len(hits),
+                    field=field, sector=sector, our_tag=our_tag, our_value=sec_val, mstar_value=mval,
+                    mstar_line=mname, better_tag=best[0] or "", better_value=best[1],
+                    match_reldiff=best[2], fix_type=fix_type, n_recognized_matches=len(recognized_hits),
+                    n_total_matches=len(hits),
                     all_matches="; ".join(f"{c}={v:.0f}" for c, v, _ in hits[:6]), verdict=verdict))
     return detail
 
 
 # ---------------------------------------------------------------------------
 def write_outputs(detail):
-    cols = ["cik", "ticker", "name", "fiscal_year", "field", "our_tag", "our_value", "mstar_value",
-            "mstar_line", "better_tag", "better_value", "match_reldiff", "n_recognized_matches",
-            "n_total_matches", "all_matches", "verdict"]
+    cols = ["cik", "ticker", "name", "fiscal_year", "field", "sector", "our_tag", "our_value",
+            "mstar_value", "mstar_line", "better_tag", "better_value", "match_reldiff", "fix_type",
+            "n_recognized_matches", "n_total_matches", "all_matches", "verdict"]
     with open(DETAIL, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols); w.writeheader(); w.writerows(detail)
 
     autos = [d for d in detail if d["verdict"] == "auto_fix"]
-    # aggregate into RULES: (field, our_tag -> better_tag) with support counts
+    # aggregate into RULES: (field, fix_type, our_tag -> better_tag) with support counts. fill_missing
+    # (we extracted nothing) is a higher-confidence engine win than tag_swap (often definitional).
     rule = Counter()
     for d in autos:
-        rule[(d["field"], d["our_tag"], d["better_tag"])] += 1
+        rule[(d["field"], d["fix_type"], d["our_tag"], d["better_tag"])] += 1
     with open(PROPOSALS, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["field", "our_tag", "better_tag", "n_companies_supporting", "example_tickers"])
-        for (field, ot, bt), n in sorted(rule.items(), key=lambda x: -x[1]):
-            ex = ", ".join(sorted({d["ticker"] for d in autos if d["field"] == field
+        w.writerow(["field", "fix_type", "our_tag", "better_tag", "n_companies_supporting", "example_tickers"])
+        # fill_missing first, then by support
+        for (field, ft, ot, bt), n in sorted(rule.items(), key=lambda x: (x[0][1] != "fill_missing", -x[1])):
+            ex = ", ".join(sorted({d["ticker"] for d in autos if d["field"] == field and d["fix_type"] == ft
                                    and d["our_tag"] == ot and d["better_tag"] == bt})[:6])
-            w.writerow([field, ot or "(none/derived)", bt, n, ex])
+            w.writerow([field, ft, ot or "(none/derived)", bt, n, ex])
 
     queue = [d for d in detail if d["verdict"] in ("review_multi", "review_unrecognized", "no_tag_matches")]
     with open(QUEUE, "w", newline="", encoding="utf-8") as fh:
@@ -350,23 +373,35 @@ def write_report(detail, autos, rule, queue):
                  f"(pipeline vs Morningstar > {int(CONFLICT_TOL*100)}%).\n")
     vc = Counter(d["verdict"] for d in detail)
     lines.append("Verdicts:")
-    for k in ("auto_fix", "review_multi", "review_unrecognized", "no_tag_matches", "ours_already_matches"):
+    for k in ("auto_fix", "review_multi", "review_unrecognized", "no_tag_matches",
+              "intentional_null", "ours_already_matches"):
         lines.append(f"   {k:<22} {vc.get(k,0)}")
+    fills = [d for d in autos if d["fix_type"] == "fill_missing"]
+    swaps = [d for d in autos if d["fix_type"] == "tag_swap"]
+    lines.append(f"\n   of auto_fix: {len(fills)} FILL-MISSING (we extracted nothing -> high-confidence) "
+                 f"| {len(swaps)} TAG-SWAP (we had a value; another tag matches -> often definitional)")
     lines.append("")
-    lines.append("PROPOSED TAG RULES (one recognized tag reproduces Morningstar's number across N names):")
+    lines.append("PROPOSED TAG RULES  [fix_type] use 'better_tag' instead of 'our_tag' -- N companies")
+    lines.append("(FILL-MISSING listed first; these are the safe engine wins)")
     if not rule:
         lines.append("   (none -- run on real data; selftest shows the mechanism)")
-    for (field, ot, bt), n in sorted(rule.items(), key=lambda x: -x[1]):
-        lines.append(f"   [{field}]  use '{bt}'  instead of '{ot or '(none)'}'   -- supported by {n} companies")
+    for (field, ft, ot, bt), n in sorted(rule.items(), key=lambda x: (x[0][1] != "fill_missing", -x[1])):
+        if n < 5:   # keep the report readable; full list in tag_rule_proposals.csv
+            continue
+        lines.append(f"   [{field}/{ft}]  use '{bt}'  instead of '{ot or '(none)'}'   -- {n} companies")
     lines.append("")
     lines.append(f"REVIEW QUEUE: {len(queue)} company-years need your judgement "
                  f"(multiple tags match, only odd tags match, or Morningstar's figure is derived "
                  f"from no single tag -> see {QUEUE.name}).")
     lines.append("")
-    lines.append("Per-field investigated / auto-fixable:")
+    lines.append("Per-field: checked / fill-missing / tag-swap / intentional-null:")
+    by_fill = Counter(d["field"] for d in fills)
+    by_swap = Counter(d["field"] for d in swaps)
+    by_null = Counter(d["field"] for d in detail if d["verdict"] == "intentional_null")
     for field in CORE_FIELDS:
         lines.append(f"   {field:<22} checked {by_field_checked.get(field,0):>5}   "
-                     f"auto-fix {by_field_auto.get(field,0):>5}")
+                     f"fill {by_fill.get(field,0):>4}   swap {by_swap.get(field,0):>4}   "
+                     f"null {by_null.get(field,0):>4}")
     REPORT.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
     print(f"\n  -> {REPORT.name} / {PROPOSALS.name} / {QUEUE.name} / {DETAIL.name}")
@@ -392,7 +427,7 @@ def selftest():
         "ConvertibleDebtNoncurrent": {"units": {"USD": [{"end": "2020-12-31", "val": 300000000, "accn": accn}]}},
     }}}
     sec_rows = [dict(cik="9999", ticker="TST", name="TestCo", fiscal_year=2020, fye_date=fye,
-                     revenue=200000000, operating_income=5000000, total_debt=50000)]
+                     sector="general", revenue=200000000, operating_income=5000000, total_debt=50000)]
     prov = {("9999", 2020, "operating_income"): ("OperatingIncomeLossBeforeStuff", accn, 5000000),
             ("9999", 2020, "total_debt"): ("DebtCurrent", accn, 50000),
             ("9999", 2020, "revenue"): ("Revenues", accn, 200000000)}
