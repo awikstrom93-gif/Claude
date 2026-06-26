@@ -46,3 +46,8 @@ fundamentals_completeness.csv
 recovery_report.csv
 R2000G_charts_backup.xlsx
 R2000G_Benchmark_Review_charted.xlsx
+
+# DERA inspection outputs
+dera_inspect_*.txt
+dera_inspect_*.csv
+financial_statement_data_sets/
