@@ -234,59 +234,83 @@ def load_companyfacts(cik):
 
 # ---------------------------------------------------------------------------
 def calibrate(sec_rows, prov, mstar, get_facts):
-    """get_facts(cik)->companyfacts dict (injectable for selftest). Returns detail list."""
+    """get_facts(cik)->companyfacts dict (injectable for selftest). Returns detail list.
+
+    Processes company-by-company (bounds memory, prints progress) and scans each company-year's
+    XBRL concepts ONCE per basis (duration vs instant), reusing that scan across all 12 fields --
+    instead of re-scanning ~1000 concepts per field."""
     detail = []
-    facts_cache = {}
+    # group SEC rows by CIK so each companyfacts file is loaded (and freed) exactly once
+    by_cik = defaultdict(list)
     for r in sec_rows:
         cik = str(int(r["cik"])) if str(r["cik"]).isdigit() else str(r["cik"])
-        fy = int(r["fiscal_year"])
-        fye = None
-        if r.get("fye_date"):
-            try: fye = date.fromisoformat(r["fye_date"][:10])
-            except ValueError: pass
-        mrec = match_period(mstar.get(cik, {}), fye)
-        if not mrec:
+        by_cik[cik].append(r)
+    # one representative accession per (cik, fy) from provenance (same 10-K across fields)
+    accn_of = {}
+    for (cik, fy, _field), (_t, accn, _v) in prov.items():
+        if accn:
+            accn_of.setdefault((cik, fy), accn)
+
+    total = len(by_cik); done = 0; checked = 0
+    progress_every = max(1, total // 50)
+    for cik, rows in by_cik.items():
+        done += 1
+        if done % progress_every == 0 or done == total:
+            print(f"  ...calibrating  {done}/{total} companies  ({checked} disagreements checked)",
+                  flush=True)
+        if cik not in mstar:
             continue
-        if cik not in facts_cache:
-            facts_cache[cik] = get_facts(cik)
-        facts = facts_cache[cik]
+        facts = get_facts(cik)              # load once
         if not facts:
             continue
-        for field in CORE_FIELDS:
-            sec_val = fnum(r.get(field))
-            mval, norm, mname = mstar_value(mrec, field)
-            if mval is None:
+        for r in rows:
+            fy = int(r["fiscal_year"])
+            fye = None
+            if r.get("fye_date"):
+                try: fye = date.fromisoformat(r["fye_date"][:10])
+                except ValueError: pass
+            mrec = match_period(mstar.get(cik, {}), fye)
+            if not mrec:
                 continue
-            # only investigate where pipeline and Morningstar materially disagree
-            sn = abs(sec_val) if (norm == "abs" and sec_val is not None) else sec_val
-            mn = abs(mval) if norm == "abs" else mval
-            if sec_val is not None:
-                if abs(sn - mn) / max(abs(mn), 1.0) <= CONFLICT_TOL:
+            accn = accn_of.get((cik, fy), "")
+            fye_iso = fye.isoformat() if fye else ""
+            scan = {}   # basis -> {concept: value}, computed at most twice per company-year
+            for field in CORE_FIELDS:
+                sec_val = fnum(r.get(field))
+                mval, norm, mname = mstar_value(mrec, field)
+                if mval is None:
+                    continue
+                # only investigate where pipeline and Morningstar materially disagree
+                sn = abs(sec_val) if (norm == "abs" and sec_val is not None) else sec_val
+                mn = abs(mval) if norm == "abs" else mval
+                if sec_val is not None and abs(sn - mn) / max(abs(mn), 1.0) <= CONFLICT_TOL:
                     continue   # already agree -> nothing to calibrate
-            our_tag, our_accn, our_provval = prov.get((cik, fy, field), ("", "", None))
-            accn = our_accn or (fye and "")
-            cvals = concept_values(facts, fye.isoformat() if fye else "", our_accn,
-                                   field in DURATION_FIELDS)
-            hits = find_matching_tags(cvals, mval, norm)
-            recognized_hits = [h for h in hits if h[0] in RECOGNIZED.get(field, set())]
-            # verdict
-            if not hits:
-                verdict = "no_tag_matches"      # Morningstar's number isn't any single filed tag -> definitional/derived
-            elif our_tag and any(h[0] == our_tag for h in hits):
-                verdict = "ours_already_matches" # (rare here, since they disagree) tag fine; value/period nuance
-            elif len(recognized_hits) == 1:
-                verdict = "auto_fix"            # exactly one recognized statement tag reproduces Morningstar
-            elif len(recognized_hits) > 1:
-                verdict = "review_multi"        # several plausible tags match -> needs judgement
-            else:
-                verdict = "review_unrecognized"  # only odd/extension tags match -> needs judgement
-            best = recognized_hits[0] if recognized_hits else (hits[0] if hits else (None, None, None))
-            detail.append(dict(
-                cik=cik, ticker=r.get("ticker", ""), name=r.get("name", ""), fiscal_year=fy,
-                field=field, our_tag=our_tag, our_value=sec_val, mstar_value=mval, mstar_line=mname,
-                better_tag=best[0] or "", better_value=best[1], match_reldiff=best[2],
-                n_recognized_matches=len(recognized_hits), n_total_matches=len(hits),
-                all_matches="; ".join(f"{c}={v:.0f}" for c, v, _ in hits[:6]), verdict=verdict))
+                checked += 1
+                our_tag, our_accn, our_provval = prov.get((cik, fy, field), ("", "", None))
+                dur = field in DURATION_FIELDS
+                if dur not in scan:
+                    scan[dur] = concept_values(facts, fye_iso, accn, dur)
+                cvals = scan[dur]
+                hits = find_matching_tags(cvals, mval, norm)
+                recognized_hits = [h for h in hits if h[0] in RECOGNIZED.get(field, set())]
+                # verdict
+                if not hits:
+                    verdict = "no_tag_matches"      # Morningstar's number isn't any single filed tag -> definitional/derived
+                elif our_tag and any(h[0] == our_tag for h in hits):
+                    verdict = "ours_already_matches" # tag fine; value/period nuance
+                elif len(recognized_hits) == 1:
+                    verdict = "auto_fix"            # exactly one recognized statement tag reproduces Morningstar
+                elif len(recognized_hits) > 1:
+                    verdict = "review_multi"        # several plausible tags match -> needs judgement
+                else:
+                    verdict = "review_unrecognized"  # only odd/extension tags match -> needs judgement
+                best = recognized_hits[0] if recognized_hits else (hits[0] if hits else (None, None, None))
+                detail.append(dict(
+                    cik=cik, ticker=r.get("ticker", ""), name=r.get("name", ""), fiscal_year=fy,
+                    field=field, our_tag=our_tag, our_value=sec_val, mstar_value=mval, mstar_line=mname,
+                    better_tag=best[0] or "", better_value=best[1], match_reldiff=best[2],
+                    n_recognized_matches=len(recognized_hits), n_total_matches=len(hits),
+                    all_matches="; ".join(f"{c}={v:.0f}" for c, v, _ in hits[:6]), verdict=verdict))
     return detail
 
 
@@ -400,8 +424,11 @@ def main():
     if not CF_CACHE.exists():
         raise SystemExit(f"!! {CF_CACHE.name}/ not found -- run the SEC engine first so the XBRL "
                          f"facts are cached locally.")
+    print("  loading SEC rows, provenance, and Morningstar...", flush=True)
     sec_rows = list(csv.DictReader(open(SEC_CSV, encoding="utf-8-sig")))
     prov = load_provenance(); mstar = load_mstar()
+    print(f"  {len(sec_rows):,} SEC company-years | {len(mstar):,} Morningstar companies | "
+          f"scanning XBRL for disagreements (>{int(CONFLICT_TOL*100)}%)...", flush=True)
     if not prov:
         print("  (warning: asfiled_provenance.csv missing -> 'our_tag' will be blank; "
               "matches still found, but we can't show what we used.)")
