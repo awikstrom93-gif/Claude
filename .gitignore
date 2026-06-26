@@ -21,6 +21,19 @@ R2000G_SmallCapGrowth_Benchmark_Review.xlsx
 Russell2000Growth_Analytics.xlsx
 sp600g_cik_map.json
 
+# Morningstar / FactSet enrichment inputs + generated reconciliation artifacts
+*Morningstar*.xlsx
+*Factset*.xlsx
+*FactSet*.xlsx
+morningstar_long.csv
+morningstar_recon.csv
+securities_crosswalk.csv
+cusip2cik.json
+ticker2cik.json
+reconciliation_detail.csv
+reconciliation_conflicts.csv
+reconciliation_fills.csv
+
 unknown_cohort_diagnostic.csv
 ni_recovery_report.csv
 *.csv.bak
