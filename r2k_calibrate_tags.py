@@ -114,6 +114,56 @@ RECOGNIZED = {
 
 CORE_FIELDS = list(MSTAR_FIELD)
 
+# ---- DERIVATION formulas: how Morningstar standardizes gross profit / operating income when the
+# direct tag is absent (GP = Revenue - CostOfRevenue; OI = GrossProfit - OperatingExpenses, or
+# Revenue - CostsAndExpenses). We TEST these against Morningstar's number so the engine can compute
+# reliable GP/OI for financials/international names instead of leaving them blank. XBRL cost/expense
+# tags are POSITIVE (unlike Morningstar's signed lines), so these subtract. ----
+REV_TAGS = ["RevenueFromContractsWithCustomersExcludingAssessedTax", "Revenues", "SalesRevenueNet",
+            "RevenueFromContractsWithCustomersIncludingAssessedTax", "SalesRevenueGoodsNet",
+            "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense"]
+COGS_TAGS = ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold", "CostOfServices"]
+
+
+def _first(c, tags):
+    for t in tags:
+        if c.get(t) is not None:
+            return c[t], t
+    return None, None
+
+
+def gp_formulas(c):
+    """derived gross-profit candidates (label, value) -- excludes the direct GrossProfit tag,
+    which is handled as a recognized single tag."""
+    out = []
+    rev, rt = _first(c, REV_TAGS)
+    if rev is not None:
+        for cogs in COGS_TAGS:
+            if c.get(cogs) is not None:
+                out.append((f"{rt} - {cogs}", rev - c[cogs]))
+    return out
+
+
+def oi_formulas(c):
+    """derived operating-income candidates (label, value) -- excludes the direct OperatingIncomeLoss."""
+    out = []
+    rev, rt = _first(c, REV_TAGS)
+    gp = c.get("GrossProfit")
+    if gp is None and rev is not None:
+        for cogs in COGS_TAGS:
+            if c.get(cogs) is not None:
+                gp = rev - c[cogs]; break
+    if rev is not None and c.get("CostsAndExpenses") is not None:
+        out.append((f"{rt} - CostsAndExpenses", rev - c["CostsAndExpenses"]))
+    if gp is not None:
+        for opex in ("OperatingExpenses", "OperatingCostsAndExpenses"):
+            if c.get(opex) is not None:
+                out.append((f"GrossProfit - {opex}", gp - c[opex]))
+    return out
+
+
+FORMULAS = {"gross_profit": gp_formulas, "operating_income": oi_formulas}
+
 
 def fnum(x):
     try: return float(x)
@@ -307,24 +357,45 @@ def calibrate(sec_rows, prov, mstar, get_facts):
                 cvals = scan[dur]
                 hits = find_matching_tags(cvals, mval, norm)
                 recognized_hits = [h for h in hits if h[0] in RECOGNIZED.get(field, set())]
+                # DERIVED formulas (GP/OI) -- how Morningstar gets the figure when no single tag does
+                fhits = []
+                if field in FORMULAS:
+                    t = abs(mval) if norm == "abs" else mval
+                    for lbl, val in FORMULAS[field](cvals):
+                        nv = abs(val) if norm == "abs" else val
+                        rd = abs(nv - t) / max(abs(t), 1.0)
+                        if rd <= MATCH_TOL:
+                            fhits.append((lbl, val, rd))
+                    fhits.sort(key=lambda h: h[2])
                 blank = sec_val is None
-                # verdict
-                if sector in SECTOR_NULLED.get(field, set()) and blank:
-                    verdict = "intentional_null"    # engine deliberately nulls this field for financials
+                # verdict -- recognized single tag wins; else a derivation formula; else buckets
+                if recognized_hits and (not fhits or recognized_hits[0][2] <= fhits[0][2]):
+                    verdict = "auto_fix"            # one recognized statement tag reproduces Morningstar
+                elif fhits:
+                    verdict = "derive_formula"      # a component formula reproduces it (fill GP/OI for financials/intl)
+                elif sector in SECTOR_NULLED.get(field, set()) and blank:
+                    verdict = "financial_no_formula" # nulled today AND no component formula -> legitimately hard
                 elif not hits:
-                    verdict = "no_tag_matches"      # Morningstar's number isn't any single filed tag -> definitional/derived
+                    verdict = "no_tag_matches"      # Morningstar's number isn't any single filed tag -> definitional
                 elif our_tag and any(h[0] == our_tag for h in hits):
-                    verdict = "ours_already_matches" # tag fine; value/period nuance
-                elif len(recognized_hits) == 1:
-                    verdict = "auto_fix"            # exactly one recognized statement tag reproduces Morningstar
+                    verdict = "ours_already_matches"
                 elif len(recognized_hits) > 1:
-                    verdict = "review_multi"        # several plausible tags match -> needs judgement
+                    verdict = "review_multi"
                 else:
-                    verdict = "review_unrecognized"  # only odd/extension tags match -> needs judgement
-                # fix_type distinguishes a true MISS (we extracted nothing) from a TAG SWAP (we had a
-                # value but a different tag matches Morningstar -> usually definitional, handle with care)
-                fix_type = ("fill_missing" if blank else "tag_swap") if verdict == "auto_fix" else ""
-                best = recognized_hits[0] if recognized_hits else (hits[0] if hits else (None, None, None))
+                    verdict = "review_unrecognized"
+                # fix_type distinguishes a true MISS from a TAG SWAP; formula derivations tagged 'derive'
+                if verdict == "auto_fix":
+                    fix_type = "fill_missing" if blank else "tag_swap"
+                elif verdict == "derive_formula":
+                    fix_type = "derive"
+                else:
+                    fix_type = ""
+                if verdict == "derive_formula":
+                    best = fhits[0]
+                elif recognized_hits:
+                    best = recognized_hits[0]
+                else:
+                    best = hits[0] if hits else (None, None, None)
                 detail.append(dict(
                     cik=cik, ticker=r.get("ticker", ""), name=r.get("name", ""), fiscal_year=fy,
                     field=field, sector=sector, our_tag=our_tag, our_value=sec_val, mstar_value=mval,
@@ -358,13 +429,26 @@ def write_outputs(detail):
                                    and d["our_tag"] == ot and d["better_tag"] == bt})[:6])
             w.writerow([field, ft, ot or "(none/derived)", bt, n, ex])
 
+    # DERIVATION proposals: which formula reproduces Morningstar's GP/OI, and for how many names
+    derivs = [d for d in detail if d["verdict"] == "derive_formula"]
+    frule = Counter((d["field"], d["better_tag"]) for d in derivs)   # better_tag holds the formula label
+    with open(BASE / "tag_derivation_proposals.csv", "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["field", "formula", "n_companies", "n_financial", "example_tickers"])
+        for (field, formula), n in sorted(frule.items(), key=lambda x: -x[1]):
+            sub = [d for d in derivs if d["field"] == field and d["better_tag"] == formula]
+            nfin = sum(1 for d in sub if d["sector"] in
+                       ("bank", "insurance", "broker_dealer", "reit", "financial"))
+            ex = ", ".join(sorted({d["ticker"] for d in sub})[:6])
+            w.writerow([field, formula, n, nfin, ex])
+
     queue = [d for d in detail if d["verdict"] in ("review_multi", "review_unrecognized", "no_tag_matches")]
     with open(QUEUE, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols); w.writeheader(); w.writerows(queue)
-    return autos, rule, queue
+    return autos, rule, queue, frule
 
 
-def write_report(detail, autos, rule, queue):
+def write_report(detail, autos, rule, queue, frule):
     by_field_checked = Counter(d["field"] for d in detail)
     by_field_auto = Counter(d["field"] for d in autos)
     lines = []
@@ -373,9 +457,22 @@ def write_report(detail, autos, rule, queue):
                  f"(pipeline vs Morningstar > {int(CONFLICT_TOL*100)}%).\n")
     vc = Counter(d["verdict"] for d in detail)
     lines.append("Verdicts:")
-    for k in ("auto_fix", "review_multi", "review_unrecognized", "no_tag_matches",
-              "intentional_null", "ours_already_matches"):
+    for k in ("auto_fix", "derive_formula", "review_multi", "review_unrecognized", "no_tag_matches",
+              "financial_no_formula", "ours_already_matches"):
         lines.append(f"   {k:<22} {vc.get(k,0)}")
+    derivs = [d for d in detail if d["verdict"] == "derive_formula"]
+    lines.append("")
+    lines.append("DERIVATION FORMULAS (how Morningstar gets GP/OI when no single tag does -- "
+                 "lets us FILL financials/international instead of leaving blank):")
+    if not frule:
+        lines.append("   (none matched -- run on real data; selftest shows the mechanism)")
+    for (field, formula), n in sorted(frule.items(), key=lambda x: -x[1]):
+        if n < 3:
+            continue
+        nfin = sum(1 for d in derivs if d["field"] == field and d["better_tag"] == formula
+                   and d["sector"] in ("bank", "insurance", "broker_dealer", "reit", "financial"))
+        lines.append(f"   [{field}]  {formula}   -- reproduces Morningstar for {n} names ({nfin} financial)")
+    lines.append("")
     fills = [d for d in autos if d["fix_type"] == "fill_missing"]
     swaps = [d for d in autos if d["fix_type"] == "tag_swap"]
     lines.append(f"\n   of auto_fix: {len(fills)} FILL-MISSING (we extracted nothing -> high-confidence) "
@@ -394,17 +491,18 @@ def write_report(detail, autos, rule, queue):
                  f"(multiple tags match, only odd tags match, or Morningstar's figure is derived "
                  f"from no single tag -> see {QUEUE.name}).")
     lines.append("")
-    lines.append("Per-field: checked / fill-missing / tag-swap / intentional-null:")
+    lines.append("Per-field: checked / fill-missing / tag-swap / derive-formula:")
     by_fill = Counter(d["field"] for d in fills)
     by_swap = Counter(d["field"] for d in swaps)
-    by_null = Counter(d["field"] for d in detail if d["verdict"] == "intentional_null")
+    by_deriv = Counter(d["field"] for d in derivs)
     for field in CORE_FIELDS:
         lines.append(f"   {field:<22} checked {by_field_checked.get(field,0):>5}   "
                      f"fill {by_fill.get(field,0):>4}   swap {by_swap.get(field,0):>4}   "
-                     f"null {by_null.get(field,0):>4}")
+                     f"derive {by_deriv.get(field,0):>4}")
     REPORT.write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
-    print(f"\n  -> {REPORT.name} / {PROPOSALS.name} / {QUEUE.name} / {DETAIL.name}")
+    print(f"\n  -> {REPORT.name} / {PROPOSALS.name} / tag_derivation_proposals.csv / "
+          f"{QUEUE.name} / {DETAIL.name}")
 
 
 # ---------------------------------------------------------------------------
@@ -426,26 +524,40 @@ def selftest():
         "DebtCurrent": {"units": {"USD": [{"end": "2020-12-31", "val": 50000, "accn": accn}]}},
         "ConvertibleDebtNoncurrent": {"units": {"USD": [{"end": "2020-12-31", "val": 300000000, "accn": accn}]}},
     }}}
+    # a 'financial' the engine nulls: no GrossProfit / OperatingIncomeLoss tag, but the components
+    # exist, so Morningstar's GP (Rev-COGS=400M) and OI (GP-OpEx=100M) are DERIVABLE.
+    fin = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [{"start": "2020-01-01", "end": "2020-12-31", "val": 1000000000, "accn": accn}]}},
+        "CostOfRevenue": {"units": {"USD": [{"start": "2020-01-01", "end": "2020-12-31", "val": 600000000, "accn": accn}]}},
+        "OperatingExpenses": {"units": {"USD": [{"start": "2020-01-01", "end": "2020-12-31", "val": 300000000, "accn": accn}]}},
+    }}}
+    facts_by = {"9999": facts, "8888": fin}
     sec_rows = [dict(cik="9999", ticker="TST", name="TestCo", fiscal_year=2020, fye_date=fye,
-                     sector="general", revenue=200000000, operating_income=5000000, total_debt=50000)]
+                     sector="general", revenue=200000000, operating_income=5000000, total_debt=50000),
+                dict(cik="8888", ticker="FIN", name="FinCo", fiscal_year=2020, fye_date=fye,
+                     sector="bank", revenue=1000000000, gross_profit="", operating_income="")]
     prov = {("9999", 2020, "operating_income"): ("OperatingIncomeLossBeforeStuff", accn, 5000000),
             ("9999", 2020, "total_debt"): ("DebtCurrent", accn, 50000),
             ("9999", 2020, "revenue"): ("Revenues", accn, 200000000)}
     mstar = {"9999": {2020: {"period_end": date(2020, 12, 31), "metrics": {
-        "Total Revenue": 200000000, "Total Operating Profit Loss": -10000000,
-        "Long Term Debt And Capital Lease Obligation": 300000000}}}}
-    detail = calibrate(sec_rows, prov, mstar, lambda c: facts)
+                "Total Revenue": 200000000, "Total Operating Profit Loss": -10000000,
+                "Long Term Debt And Capital Lease Obligation": 300000000}}},
+             "8888": {2020: {"period_end": date(2020, 12, 31), "metrics": {
+                "Total Revenue": 1000000000, "Gross Profit": 400000000,
+                "Total Operating Profit Loss": 100000000}}}}
+    detail = calibrate(sec_rows, prov, mstar, lambda c: facts_by.get(c))
     print("SELFTEST:")
-    ok = True
     for d in detail:
-        print(f"  {d['field']:<18} our={d['our_tag']}({d['our_value']})  mstar={d['mstar_value']}  "
-              f"-> better={d['better_tag']}  verdict={d['verdict']}")
+        print(f"  {d['ticker']:<4} {d['field']:<18} our={d['our_tag']}({d['our_value']})  "
+              f"mstar={d['mstar_value']}  -> {d['better_tag']}  verdict={d['verdict']}")
     want = {("operating_income", "auto_fix", "OperatingIncomeLoss"),
-            ("total_debt", "auto_fix", "ConvertibleDebtNoncurrent")}
+            ("total_debt", "auto_fix", "ConvertibleDebtNoncurrent"),
+            ("gross_profit", "derive_formula", "Revenues - CostOfRevenue"),
+            ("operating_income", "derive_formula", "GrossProfit - OperatingExpenses")}
     got = {(d["field"], d["verdict"], d["better_tag"]) for d in detail}
     revenue_skipped = not any(d["field"] == "revenue" for d in detail)
     ok = want <= got and revenue_skipped
-    print(f"\n  operating_income & total_debt auto-fixed to right tag: {want <= got}")
+    print(f"\n  tag auto-fix + financial GP/OI derivation all detected: {want <= got}")
     print(f"  revenue (agreed) correctly NOT investigated: {revenue_skipped}")
     print(f"  ALL PASS: {ok}")
 
@@ -468,8 +580,8 @@ def main():
         print("  (warning: asfiled_provenance.csv missing -> 'our_tag' will be blank; "
               "matches still found, but we can't show what we used.)")
     detail = calibrate(sec_rows, prov, mstar, load_companyfacts)
-    autos, rule, queue = write_outputs(detail)
-    write_report(detail, autos, rule, queue)
+    autos, rule, queue, frule = write_outputs(detail)
+    write_report(detail, autos, rule, queue, frule)
 
 
 if __name__ == "__main__":

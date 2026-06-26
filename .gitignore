@@ -35,6 +35,7 @@ reconciliation_conflicts.csv
 reconciliation_fills.csv
 tag_calibration_report.txt
 tag_rule_proposals.csv
+tag_derivation_proposals.csv
 tag_review_queue.csv
 tag_calibration_detail.csv
 
