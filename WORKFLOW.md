@@ -13,10 +13,10 @@ Run everything from the project folder (`...\Benchmark Analysis`).
 - Holdings workbooks: R2000G (`*Russell*Growth*Holding*.xlsx`) and S&P 600 Growth (`*600*Growth*Holding*.xlsx`).
 - Performance workbook(s) (`*Performance*.xlsx`).
 - FactSet underlying-data workbook (for validation only).
-- **Maps:** `security_cik_map.json`, `temporal_cik_map.json` (holdings ticker→CIK).
-  These are produced by `r2k_step2_asfiled.py` / `r2k_build_sp600g_universe.py`. Build once
-  (you already have them); rebuild only when holdings change. *(They do NOT depend on the
-  fundamental values, so the DERA rebuild does not affect them.)*
+
+> **Deprecated / do NOT run:** `r2k_step2_asfiled.py` (old companyfacts tag-priority engine),
+> `r2k_build_sp600g_universe.py`. Everything they did is now covered by `r2k_build_maps.py` +
+> the DERA pipeline below. They remain in the repo only for reference.
 
 ---
 
@@ -25,17 +25,18 @@ Run everything from the project folder (`...\Benchmark Analysis`).
 | # | Command | Output | When |
 |---|---------|--------|------|
 | A1 | `python r2k_morningstar_parse.py` | `morningstar_long.csv`, `securities_crosswalk.csv`, `cusip2cik.json`, `ticker2cik.json` | once / when Morningstar refreshed |
-| A2 | `python r2k_dera_index.py` | `dera_filing_index.csv` | once / when DERA quarters added |
-| A3 | `python r2k_dera_extract.py` | `dera_facts.csv` | once / when DERA quarters added (LONG — streams every quarter) |
-| A4 | `python r2k_dera_classify.py` | `fundamentals_dera.csv`, `tieout_report.csv` | each refresh (fast — reads cached facts) |
-| A5 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** | each refresh (back up the old one first) |
+| A2 | `python r2k_build_maps.py` | `security_cik_map.json`, `temporal_cik_map.json`, **`universe_ciks.csv`** | once / when holdings change |
+| A3 | `python r2k_dera_index.py` | `dera_filing_index.csv` | once / when DERA quarters added |
+| A4 | `python r2k_dera_extract.py` | `dera_facts.csv` | once / when DERA quarters added (LONG — streams every quarter) |
+| A5 | `python r2k_dera_classify.py` | `fundamentals_dera.csv`, `tieout_report.csv` | each refresh (fast — reads cached facts) |
+| A6 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** | each refresh (back up the old one first) |
 
-A1–A3 are the one-time heavy lift. After that, a data refresh is just **A4 → A5**.
+A1–A4 are the one-time setup. After that, a data refresh is just **A5 → A6**.
 
-**Universe coverage (important for step 6):** A2's default target is the Morningstar crosswalk
-(R2000-derived). To guarantee the S&P 600 Growth names are present for the step-6 comparison,
-either point A2 at a combined CIK list (`R2KG_CIK_FILE=<both universes>`) or index everything
-(`R2KG_INDEX_ALL=1`). Verify after A5 that 600G constituents appear in the fundamentals.
+`r2k_build_maps.py` (A2) reads **both** the R2000G and S&P 600 Growth holdings, so it builds the
+ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv` (both indices' CIKs). `r2k_dera_index.py`
+(A3) **auto-detects `universe_ciks.csv`**, so the DERA dataset covers both indices and step 6's
+comparison works with no extra configuration.
 
 ---
 
@@ -44,14 +45,16 @@ Run steps 3, 4, 5, 6, 8, 9 in any order, then 7 (which consolidates them).
 
 | # | Command | Output |
 |---|---------|--------|
-| B1 | `python r2k_build_sp600g_universe.py` | S&P 600 Growth universe / CIK map (if not already built) |
-| B2 | `python r2k_step3_analytics.py` | `Russell2000Growth_Analytics.xlsx` |
-| B3 | `python r2k_step4_performance.py` | `R2000G_vs_SP600G_Performance.xlsx` |
-| B4 | `python r2k_step5_cohort_attribution.py` | `R2000G_Cohort_Attribution.xlsx` |
-| B5 | `python r2k_step6_index_comparison.py` | `R2000G_vs_SP600G_Quality.xlsx` |
-| B6 | `python r2k_step8_concentration.py` | `R2000G_Concentration.xlsx` |
-| B7 | `python r2k_step9_biotech.py` | `R2000G_Biotech.xlsx` |
-| B8 | `python r2k_step7_consolidate.py` | **`R2000G_SmallCapGrowth_Benchmark_Review.xlsx`** (the IC workbook) |
+| B1 | `python r2k_step3_analytics.py` | `Russell2000Growth_Analytics.xlsx` |
+| B2 | `python r2k_step4_performance.py` | `R2000G_vs_SP600G_Performance.xlsx` |
+| B3 | `python r2k_step5_cohort_attribution.py` | `R2000G_Cohort_Attribution.xlsx` |
+| B4 | `python r2k_step6_index_comparison.py` | `R2000G_vs_SP600G_Quality.xlsx` |
+| B5 | `python r2k_step8_concentration.py` | `R2000G_Concentration.xlsx` |
+| B6 | `python r2k_step9_biotech.py` | `R2000G_Biotech.xlsx` |
+| B7 | `python r2k_step7_consolidate.py` | **`R2000G_SmallCapGrowth_Benchmark_Review.xlsx`** (the IC workbook) |
+
+(The old `r2k_build_sp600g_universe.py` is no longer needed — `r2k_build_maps.py` already covers
+the S&P 600 Growth names.)
 
 Knobs that affect the analysis: `WINDOW_MONTHS`/`WINDOW_START` (manager window, default trailing 36m
 to 4/30/2026), `SNAP_MONTH=4`, `BIOTECH_KEYWORDS`, `RET_MODE=auto`.
@@ -77,7 +80,7 @@ Outputs `R2000G_Benchmark_Review_charted.xlsx`. (Uses `R2000G_charts_backup.xlsx
 
 ---
 
-## Quick reference — a normal data refresh (after the one-time A1–A3)
+## Quick reference — a normal data refresh (after the one-time A1–A4)
 ```
 python r2k_dera_classify.py
 python r2k_dera_to_fundamentals.py        # back up edgar_annual_fundamentals_ASFILED.csv first

@@ -286,9 +286,10 @@ def build():
     rd = wb.create_sheet("README")
     for i, ln in enumerate([
         "Russell 2000 Growth vs S&P SmallCap 600 Growth -- fundamental quality & composition.",
-        "Same as-filed engine + methodology as r2k_step3_analytics (point-in-time FY0, average-denominator ratios).",
-        "REQUIRES the fundamentals CSV to cover BOTH universes: run r2k_build_sp600g_universe.py, then re-run",
-        "   r2k_step2_asfiled.py (it auto-picks up sp600g_cik_map.json), before this script.",
+        "Same point-in-time methodology as r2k_step3_analytics (FY0, average-denominator ratios).",
+        "REQUIRES the fundamentals CSV to cover BOTH universes. Build it with the DERA pipeline:",
+        "   r2k_build_maps.py (builds universe_ciks.csv incl. 600G) -> r2k_dera_index/extract/classify",
+        "   -> r2k_dera_to_fundamentals.py. See WORKFLOW.md.",
         "Annual spine: per index, the snapshot nearest month %d (SNAP_MONTH); common years only." % TARGET_MONTH,
         "THE THESIS: S&P 600 requires positive trailing GAAP earnings to enter; R2000G does not. The Comparison tab's",
         "   %Unprofitable / %No-revenue / Never-profitable-weight diffs quantify R2000G's larger low-quality tail --",
@@ -305,8 +306,8 @@ def build():
     cs_ = sum(covpct(qs[y]) for y in years) / len(years)
     print(f"  avg fundamental coverage by weight:  R2000G {cr:.1f}%   S&P 600 Growth {cs_:.1f}%")
     if cs_ < 80:
-        print("  !! S&P 600 Growth coverage is LOW -- run r2k_build_sp600g_universe.py then")
-        print("     r2k_step2_asfiled.py to extend the fundamentals CSV before trusting the quality columns.")
+        print("  !! S&P 600 Growth coverage is LOW -- ensure r2k_build_maps.py ran (universe_ciks.csv")
+        print("     covers 600G) and the DERA pipeline + r2k_dera_to_fundamentals.py were rebuilt. See WORKFLOW.md.")
     for y in (years[0], years[-1]):
         print(f"  {y}: R2KG unprof-NI {_p(qr[y].get('unprof_ni'))}%  no-rev {_p(qr[y].get('no_rev'))}%  "
               f"|  600G unprof-NI {_p(qs[y].get('unprof_ni'))}%  no-rev {_p(qs[y].get('no_rev'))}%")

@@ -44,14 +44,22 @@ def load_targets():
     if INDEX_ALL:
         return None
     cs = set()
-    if CIK_FILE and Path(CIK_FILE).exists():
-        for line in open(CIK_FILE, encoding="utf-8-sig"):
+    # priority: explicit R2KG_CIK_FILE -> universe_ciks.csv (R2000G+600G, from r2k_build_maps.py)
+    # -> the Morningstar crosswalk. The universe file makes step 6's 600G comparison work.
+    src = CIK_FILE if (CIK_FILE and Path(CIK_FILE).exists()) else None
+    if src is None and (BASE / "universe_ciks.csv").exists():
+        src = str(BASE / "universe_ciks.csv")
+    if src:
+        print(f"  target universe from: {Path(src).name}")
+        for line in open(src, encoding="utf-8-sig"):
             t = line.strip().split(",")[0].strip().strip('"')
             if t.lower() == "cik":
                 continue
             if t.isdigit():
                 cs.add(str(int(t)))
     elif XWALK.exists():
+        print(f"  target universe from: {XWALK.name} (crosswalk) -- run r2k_build_maps.py to "
+              f"include S&P 600 Growth names for step 6")
         for r in csv.DictReader(open(XWALK, encoding="utf-8")):
             c = (r.get("cik") or "").strip()
             if c.isdigit():
