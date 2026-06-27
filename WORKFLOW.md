@@ -22,6 +22,11 @@ Run everything from the project folder (`...\Benchmark Analysis`).
 `r2k_perf_io.py`
 
 **RUN only when you need it — utilities / optional QA**
+- `r2k_dual_reconstruct_pilot.py` — **dual reconstruction**: rebuild a hard set of filings from BOTH
+  DERA (as-filed) and Morningstar (standardized), run the same identity battery on each, and emit a
+  per-line 2×2 verdict (LOCKED / DEFINITIONAL_FORK / TRUST_DERA / TRUST_MS / SINGLE_SOURCE). Diagnostic
+  only — writes `dual_pilot_report.txt` + `dual_pilot_lines.csv`, touches no production data.
+  Run `python r2k_dual_reconstruct_pilot.py` (auto-picks a diverse hard set) or pass `--targets cik:fy,...`.
 - `r2k_snapshot_charts.py` — after you add/edit charts, save them to `R2000G_charts_backup.xlsx`
 - `r2k_dera_inspect.py` — peek at the DERA schema / reconstruct a few filings
 - `r2k_reconcile_sources.py`, `r2k_calibrate_tags.py`, `r2k_identity_backstop.py` — optional QA vs Morningstar
