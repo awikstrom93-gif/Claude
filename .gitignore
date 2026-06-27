@@ -59,3 +59,4 @@ security_cik_map.json
 temporal_cik_map.json
 universe_ciks.csv
 inventory_report.txt
+_archive_*/
