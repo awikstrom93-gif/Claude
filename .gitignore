@@ -52,3 +52,4 @@ dera_inspect_*.txt
 dera_inspect_*.csv
 financial_statement_data_sets/
 dera_filing_index.csv
+dera_facts.csv
