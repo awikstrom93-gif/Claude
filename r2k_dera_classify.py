@@ -63,6 +63,9 @@ TAX = ["IncomeTaxExpenseBenefit", "IncomeTaxExpenseBenefitContinuingOperations",
 NI_PARENT = ["NetIncomeLoss", "ProfitLossAttributableToOwnersOfParent"]
 NI_CONSOL = ["ProfitLoss", "NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest"]
 NI_COMMON = ["NetIncomeLossAvailableToCommonStockholdersBasic"]
+DISC_OPS = ["IncomeLossFromDiscontinuedOperationsNetOfTax",
+            "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity",
+            "DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax"]
 NCI_IS = ["NetIncomeLossAttributableToNoncontrollingInterest",
           "ProfitLossAttributableToNoncontrollingInterests"]
 PREF_DIV = ["PreferredStockDividendsIncomeStatementImpact", "PreferredStockDividendsAndOtherAdjustments"]
@@ -78,8 +81,9 @@ ASSETS = ["Assets"]
 ASSETS_CUR = ["AssetsCurrent"]
 LIAB = ["Liabilities"]
 LIAB_CUR = ["LiabilitiesCurrent"]
-EQ_PARENT = ["StockholdersEquity"]
-EQ_INCL = ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+EQ_PARENT = ["StockholdersEquity", "PartnersCapital", "MembersEquity", "CommonStockholdersEquity"]
+EQ_INCL = ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+           "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest"]
 NCI_BS = ["MinorityInterest"]
 REDEEM_NCI = ["RedeemableNoncontrollingInterestEquityCarryingAmount",
               "RedeemableNoncontrollingInterestEquityOtherCarryingAmount",
@@ -184,8 +188,9 @@ def classify_filing(d, sector):
 
     # net income: consolidated (incl NCI) and parent
     consol, tcon = first(d, *NI_CONSOL)
+    disc, _ = first(d, *DISC_OPS)
     if consol is None and pretax is not None and tax is not None:
-        consol, tcon = pretax - tax, "Pretax-Tax(derived)"
+        consol, tcon = pretax - tax + (disc or 0), "Pretax-Tax+Disc(derived)"
     parent, tpar = first(d, *NI_PARENT)
     nci_is, tnci = first(d, *NCI_IS)
     if parent is None and consol is not None and nci_is is not None:
@@ -201,6 +206,7 @@ def classify_filing(d, sector):
         nicom, tnicom = parent - pref, "Parent-Preferred(derived)"
     put("net_income_to_common", nicom, tnicom)
 
+    put("discontinued_operations", disc, "IncomeLossFromDiscontinuedOperationsNetOfTax" if disc is not None else None)
     da, tda = first(d, *DA); put("depreciation_amortization", da, tda)
     ebitda = (oi + da) if (oi is not None and da is not None) else None
     put("ebitda", ebitda, "OperatingIncome+D&A(derived)" if ebitda is not None else None)
@@ -270,8 +276,8 @@ def classify_filing(d, sector):
         tie("IS_GP(Rev-COGS)", r.get("gross_profit"),
             (None if r.get("revenue") is None or r.get("cost_of_revenue") is None
              else r["revenue"] - r["cost_of_revenue"]))
-    tie("IS_NI(Pretax-Tax=Consol)", r.get("net_income_consolidated"),
-        (None if pretax is None or tax is None else pretax - tax))
+    tie("IS_NI(Pretax-Tax+Disc=Consol)", r.get("net_income_consolidated"),
+        (None if pretax is None or tax is None else pretax - tax + (disc or 0)))
     tie("IS_NCI(Consol-Parent=NCI)",
         (None if consol is None or parent is None else consol - parent), nci_is)
     return r, prov, ident
@@ -316,7 +322,7 @@ def main():
               "confidence", "breaks", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
-              "net_income", "net_income_to_common", "cash", "short_term_investments",
+              "discontinued_operations", "net_income", "net_income_to_common", "cash", "short_term_investments",
               "total_current_assets", "total_assets", "total_current_liabilities",
               "total_liabilities", "total_debt", "parent_equity", "minority_interest_bs",
               "total_equity", "redeemable_nci", "cfo", "cfi", "cff", "capex", "free_cash_flow"]
