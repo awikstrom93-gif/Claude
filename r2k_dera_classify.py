@@ -182,8 +182,12 @@ def classify_filing(d, sector):
     if oi is None and r.get("gross_profit") is not None:
         opex, _ = first(d, *OPEX)
         if opex is not None:
-            # only valid if GP - OpEx lands near operating income, not pretax (position check downstream)
-            oi, toi = r["gross_profit"] - opex, "GP-OpEx(derived)"
+            cand = r["gross_profit"] - opex
+            # accept the derivation ONLY if it doesn't just reproduce pretax -- a GP-OpEx that lands
+            # on pretax means the "OperatingExpenses" tag was the grand total (incl. interest/non-op),
+            # so it's NOT operating income. Don't fabricate: leave OI blank in that case.
+            if pretax is None or abs(cand - pretax) > max(TOL_ABS, TOL_REL * max(abs(cand), abs(pretax))):
+                oi, toi = cand, "GP-OpEx(derived)"
     put("operating_income", oi, toi)
 
     # net income: consolidated (incl NCI) and parent
