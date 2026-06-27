@@ -7,6 +7,32 @@ Run everything from the project folder (`...\Benchmark Analysis`).
 
 ---
 
+## Scripts at a glance — what you run vs. what you don't
+
+**RUN — setup (once; re-run only when inputs/holdings change)**
+`r2k_morningstar_parse.py` → `r2k_build_maps.py` → `r2k_dera_index.py` → `r2k_dera_extract.py`
+
+**RUN — every data refresh (the recurring run)**
+`r2k_dera_classify.py` → `r2k_dera_to_fundamentals.py` → `r2k_step3_analytics.py` →
+`r2k_step4_performance.py` → `r2k_step5_cohort_attribution.py` → `r2k_step6_index_comparison.py` →
+`r2k_step8_concentration.py` → `r2k_step9_biotech.py` → `r2k_step7_consolidate.py` →
+`r2k_refresh_charts_data.py`
+
+**NEVER run directly — shared library** (imported by the steps)
+`r2k_perf_io.py`
+
+**RUN only when you need it — utilities / optional QA**
+- `r2k_snapshot_charts.py` — after you add/edit charts, save them to `R2000G_charts_backup.xlsx`
+- `r2k_dera_inspect.py` — peek at the DERA schema / reconstruct a few filings
+- `r2k_reconcile_sources.py`, `r2k_calibrate_tags.py`, `r2k_identity_backstop.py` — optional QA vs Morningstar
+- `r2k_inventory.py`, `r2k_cleanup.py` — housekeeping (list/classify files; archive old ones)
+
+> **Deprecated — do NOT run:** `r2k_step2_asfiled.py`, `r2k_build_sp600g_universe.py`, and the old
+> `r2k_step1*/step2_pull*/step4_validate/step5_tag_audit/step6_verify*/step10/step11`, `build_*`,
+> `audit_*` scripts from the earlier project phase. The DERA pipeline above replaces all of them.
+
+---
+
 ## 0. Inputs that must be present
 - `financial_statement_data_sets/zips/` — DERA quarterly sets (2009q1 … current), each a folder/zip with sub/num/pre/tag.
 - Morningstar Income / Balance / Cash workbooks (`*Morningstar*.xlsx`).
