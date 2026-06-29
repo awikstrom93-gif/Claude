@@ -95,6 +95,16 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "Revenue"]
 COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices",
         "CostOfSales"]
+# curated operating-revenue lines (a GROSS top line, positive). Used only to recover a real revenue
+# when the selected tag is net-NEGATIVE (an insurer/holdco "Revenues" swamped by investment losses).
+# Deliberately NOT a broad pattern -- must exclude gains (GainLossOnSalesOf...) that aren't top line.
+REV_OPERATING = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
+                 "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
+                 "SalesRevenueGoodsNet", "SalesRevenueServicesNet", "PremiumsEarnedNet",
+                 "OperatingLeasesIncomeStatementLeaseRevenue",
+                 "OperatingAndCapitalLeasesIncomeStatementLeaseRevenue", "RealEstateRevenueNet",
+                 "RoyaltyRevenue", "RegulatedAndUnregulatedOperatingRevenue",
+                 "InterestAndDividendIncomeOperating"]
 # COGS is frequently SPLIT across lines: a base cost line + separately-struck services cost,
 # depreciation/amortization inside COGS, or restructuring/impairment charged to COGS. Summed onto the
 # base only when it reconciles revenue - GP (and the base alone does not), so a base line that already
@@ -499,6 +509,8 @@ def classify_filing(d, sector):
         put("gross_profit", None, "n/a(financial)")
     else:
         cogs, tc = first(d, *COGS)
+        if cogs is not None and cogs < 0:    # cost of revenue is non-negative; a negative tag is a sign artifact
+            cogs, tc = abs(cogs), (tc or "COGS") + "[sign-normalized]"
         gp0, _ = first(d, "GrossProfit")
         # aggregate split COGS components: when revenue and GP are reported, true COGS = rev - GP.
         # Adopt base + the separately-struck component lines only when that sum reconciles and the
@@ -533,6 +545,16 @@ def classify_filing(d, sector):
         if gp is None and rev is not None and cogs is not None:
             gp, tg = rev - cogs, "Revenue-COGS(derived)"
         put("gross_profit", gp, tg)
+
+    # revenue is a GROSS top line and should not be negative. When the selected tag is net-negative
+    # (an insurer/holdco "Revenues" swamped by investment losses, or a contra-heavy year), recover the
+    # largest positive operating-revenue line actually reported. Genuine all-negative filers keep theirs.
+    if (r.get("revenue") or 0) < 0:
+        alt = max(((d[t], t) for t in REV_OPERATING if d.get(t) is not None and d[t] > 0), default=None)
+        if alt is not None:
+            put("revenue", alt[0], alt[1] + "[neg-revenue->positive operating]")
+            if prov.get("gross_profit") == "Revenue-COGS(derived)" and r.get("cost_of_revenue") is not None:
+                put("gross_profit", alt[0] - r["cost_of_revenue"], "Revenue-COGS(derived)")
 
     pretax, tp = first(d, *PRETAX); put("pretax_income", pretax, tp)
     tax, tt = first(d, *TAX)
@@ -1122,10 +1144,21 @@ def selftest():
         "NonRecourseDebt": 1200, "NonRecourseSecuredNotesPayable": 1545,
         "LineOfCredit": 70, "ConvertibleNotesPayable": 148,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # revenue<0: "Revenues" is net-negative (-1000); recover the positive operating revenue (royalty 300).
+    revneg = {k: v * _m for k, v in {
+        "Revenues": -1000, "RoyaltyRevenue": 300,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # COGS<0: CostOfRevenue tagged negative (-500) -> sign-normalize to 500, gross profit = 2000-500.
+    cogsneg = {k: v * _m for k, v in {
+        "Revenues": 2000, "CostOfRevenue": -500,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
-                   ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2)):
+                   ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
+                   ("12", revneg), ("13", cogsneg)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1160,6 +1193,10 @@ def selftest():
     ok_dov = (dov["total_debt"] == 500 * _m)
     dov2 = next(r for r in out if r["cik"] == "11")
     ok_dov2 = (dov2["total_debt"] == 1545 * _m)
+    rvn = next(r for r in out if r["cik"] == "12")
+    ok_rvn = (rvn["revenue"] == 300 * _m)
+    cgn = next(r for r in out if r["cik"] == "13")
+    ok_cgn = (cgn["cost_of_revenue"] == 500 * _m and cgn["gross_profit"] == 1500 * _m)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1179,6 +1216,10 @@ def selftest():
           f"expect 500M): {'PASS' if ok_dov else 'FAIL'}")
     print(f"  SELFTEST debt hard-bound fallback (total_debt={dov2['total_debt']}, "
           f"expect 1545M): {'PASS' if ok_dov2 else 'FAIL'}")
+    print(f"  SELFTEST revenue<0 recovery (revenue={rvn['revenue']}, expect 300M): "
+          f"{'PASS' if ok_rvn else 'FAIL'}")
+    print(f"  SELFTEST COGS<0 sign-normalize (cost={cgn['cost_of_revenue']}, gp={cgn['gross_profit']}): "
+          f"{'PASS' if ok_cgn else 'FAIL'}")
 
 
 if __name__ == "__main__":
