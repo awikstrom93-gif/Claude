@@ -59,6 +59,35 @@ def first(d, *tags):
     return None, None
 
 
+def _close(a, b, rel=TOL_REL, ab=TOL_ABS):
+    return a is not None and b is not None and abs(a - b) <= max(ab, rel * max(abs(a), abs(b)))
+
+
+def cands(d, *tag_lists):
+    """all present as-filed candidate values for a role, in tag-PRIOR order (canonical first).
+    Each is (value, tag) -- the tag carries the meaning; the identity will pick among them the value
+    that articulates, and this priority order breaks ties the accounting can't."""
+    out, seen = [], set()
+    for tags in tag_lists:
+        for t in tags:
+            if t in d and d[t] is not None and t not in seen:
+                out.append((d[t], t)); seen.add(t)
+    return out
+
+
+def select_articulating(role, current_val, current_tag, candidates, foots):
+    """TAG-INFORMED, IDENTITY-DRIVEN selection. `candidates` (value,tag) are the as-filed values the
+    tag says are eligible for this role; `foots(v)` returns True if choosing v makes the identity
+    articulate. Keep the current pick if it already foots; else choose the first candidate (highest
+    tag prior) that does. Returns (value, tag, source) -- source records what selected it."""
+    if current_val is not None and foots(current_val):
+        return current_val, current_tag, "tag+identity"        # tag pick already articulates
+    for v, t in candidates:
+        if foots(v):
+            return v, t, "identity-selected"                   # the value that makes it foot
+    return current_val, current_tag, "tag-only(unresolved)"     # nothing articulates -> flag
+
+
 # ---- candidate tags per standardized role (us-gaap; IFRS variants appended) ----
 REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
@@ -118,6 +147,12 @@ REDEEM_NCI = ["RedeemableNoncontrollingInterestEquityCarryingAmount",
               "RedeemableNoncontrollingInterestEquityFairValue"]
 TEMP_EQUITY_TOTAL = ["TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"]
 TEMP_EQUITY_PARENT = ["TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmount"]
+# components that legitimately sit between liabilities and equity, or are NCI/preferred not yet in
+# total equity. When A != L + E, the identity gives the GAP size; these tags name which line it is.
+BS_GAP_EQUITY = ["MinorityInterest", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+BS_GAP_MEZZ = (TEMP_EQUITY_TOTAL + TEMP_EQUITY_PARENT + REDEEM_NCI +
+               ["TemporaryEquityValueExcludingAdditionalPaidInCapital", "PreferredStockRedemptionAmount",
+                "RedeemablePreferredStockCarryingAmount"])
 DEBT_LTNC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
              "ConvertibleDebtNoncurrent", "ConvertibleNotesPayableNoncurrent", "SeniorNotesNoncurrent",
              "UnsecuredLongTermDebt", "NotesPayableNoncurrent"]
@@ -506,6 +541,36 @@ def classify_filing(d, sector):
     r["_div"] = div_t
     r["_ppe"] = ppe                                   # for the cross-year PP&E roll-forward in run()
 
+    # ============================================================================================
+    # IDENTITY-DRIVEN VALUE SELECTION (tag-informed): where the tag-prior rebuild does NOT articulate,
+    # let the ACCOUNTING choose the value. The identity gives the gap; the tag (semantic eligibility)
+    # names which as-filed component fills it. We never plug -- we adopt an as-filed value the tag
+    # says is eligible and the identity says completes the statement. Provenance records both.
+    # ============================================================================================
+    # --- BS_FOOTS: A = L + E + mezz. If it doesn't foot, the gap is a real as-filed component
+    #     (NCI not yet in equity, redeemable/temporary equity, redeemable preferred) -> locate it. ---
+    A, L, E = r.get("total_assets"), r.get("total_liabilities"), r.get("total_equity")
+    mzv = r.get("redeemable_nci") or 0
+    used = prov.get("redeemable_nci") or ""
+    if (not liab_derived) and A is not None and L is not None and E is not None and not _close(A, L + E + mzv):
+        gap = A - (L + E + mzv)
+        # equity-class gap (NCI / equity-incl-NCI) -> raise total equity; mezzanine-class -> raise mezz
+        hit = next(((v, t, "equity") for v, t in cands(d, BS_GAP_EQUITY) if t not in used and _close(v, gap)),
+                   next(((v, t, "mezz") for v, t in cands(d, BS_GAP_MEZZ) if t not in used and _close(v, gap)), None))
+        if hit:
+            v, t, slot = hit
+            if slot == "equity":
+                r["total_equity"] = E + v
+                if t == "MinorityInterest":
+                    r["minority_interest_bs"] = v
+                prov["total_equity"] = f"{prov.get('total_equity','')}+{t}[BS_FOOTS gap]"
+            else:
+                r["redeemable_nci"] = mzv + v
+                prov["redeemable_nci"] = f"{used}+{t}[BS_FOOTS gap]"
+
+    # (the income-cascade selection — equity-method placement — is handled in the IS_NI identity
+    #  check below, which already tries the as-filed candidates that make the cascade reconcile.)
+
     # ---------- identity tie-outs ----------
     ident = []
     def tie(name, lhs, rhs, rel=TOL_REL, ab=TOL_ABS):
@@ -541,16 +606,16 @@ def classify_filing(d, sector):
     # filer struck them above or below the tax line, or via the reported continuing-ops subtotal.
     # The cascade ties if the reported consol matches ANY valid construction (pick the closest).
     consol_rep = r.get("net_income_consolidated")
-    cands = []
+    ni_cands = []
     if pretax is not None and tax is not None:
         base = pretax - tax + (disc or 0)
-        cands.append(base)
+        ni_cands.append(base)
         if em is not None:
-            cands.append(base + em)            # equity method struck below the tax line
+            ni_cands.append(base + em)         # equity method struck below the tax line
     if cont_at is not None:
-        cands.append(cont_at + (disc or 0))    # reported after-tax continuing subtotal + disc
-    ni_rhs = (min(cands, key=lambda c: abs(c - consol_rep)) if (cands and consol_rep is not None)
-              else (cands[0] if cands else None))
+        ni_cands.append(cont_at + (disc or 0))  # reported after-tax continuing subtotal + disc
+    ni_rhs = (min(ni_cands, key=lambda c: abs(c - consol_rep)) if (ni_cands and consol_rep is not None)
+              else (ni_cands[0] if ni_cands else None))
     tie("IS_NI(Pretax-Tax+Disc=Consol)", consol_rep, ni_rhs)
     tie("IS_NCI(Consol-Parent=NCI)",
         (None if consol is None or parent is None else consol - parent), nci_is)
