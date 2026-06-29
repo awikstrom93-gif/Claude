@@ -854,7 +854,7 @@ def run(facts_rows, sic_of=None):
         sbc_is = next((isf[key][t] for t in SBC_TAGS if isf[key].get(t) is not None), None)
         rec["share_based_comp"] = sbc_cf if sbc_cf is not None else sbc_is
         ident.append(("SBC_CONSISTENCY(IS=CF)", *cons(sbc_is, sbc_cf)))
-        stage[key] = dict(rec=rec, ident=ident, sector=sector)
+        stage[key] = dict(rec=rec, ident=ident, sector=sector, prov=prov)
 
     # ---- pass 2: cross-year cash roll-forward (cash[t] = cash[t-1] + dCash[t]) ----
     # ties the cash flow statement's net change to the balance-sheet cash year over year -- the
@@ -913,10 +913,16 @@ def run(facts_rows, sic_of=None):
         napp = sum(1 for n, s, _ in ident if s != "n/a" and n not in NON_GATING)
         conf = ntie / napp if napp else None
         broke = [n for n, s, _ in ident if s == "BREAK" and n not in NON_GATING]
+        # provenance: surface only the NON-OBVIOUS derivations -- values we aggregated, derived, or
+        # identity-selected (markers below), not the plain single-tag picks -- so an auditor sees
+        # exactly which numbers were engineered and how (split COGS, disposal gain, temp-equity=A-L-E).
+        MARK = ("+", "[", "=", "derived", "summed", "split", "Disc")
+        prov_summary = "; ".join(f"{k}={v}" for k, v in st["prov"].items()
+                                 if v and any(m in str(v) for m in MARK))
         rec_full = dict(cik=cik, fiscal_year=fy, sector=st["sector"], taxonomy=meta[key][0],
                         form=meta[key][1], n_identities=napp, n_tie=ntie,
                         confidence=("%.2f" % conf if conf is not None else ""),
-                        breaks=";".join(broke), **rec)
+                        breaks=";".join(broke), provenance=prov_summary, **rec)
         out_rows.append(rec_full)
         for n, s, resid in ident:
             tie_rows.append(dict(cik=cik, fiscal_year=fy, sector=st["sector"], identity=n, result=s,
@@ -934,7 +940,7 @@ def main():
             sic_of.setdefault(r.get("cik", ""), r.get("sic", ""))
     out_rows, tie_rows = run(facts, sic_of)
     fields = ["cik", "fiscal_year", "sector", "taxonomy", "form", "n_identities", "n_tie",
-              "confidence", "breaks", "revenue", "cost_of_revenue", "gross_profit",
+              "confidence", "breaks", "provenance", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
               "discontinued_operations", "net_income", "net_income_to_common", "cash",
