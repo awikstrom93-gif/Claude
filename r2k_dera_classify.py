@@ -114,6 +114,16 @@ INC_CONT_AFTERTAX = ["IncomeLossFromContinuingOperationsIncludingPortionAttribut
 DISC_OPS = ["IncomeLossFromDiscontinuedOperationsNetOfTax",
             "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity",
             "DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax"]
+# discontinued operations total = income during the period + gain/loss on disposal. Filers often
+# report these as TWO lines; prefer a reported total, else SUM the operating + disposal components
+# (the disposal gain is the biggest IS_NI gap the probe found).
+DISC_TOTAL = ["IncomeLossFromDiscontinuedOperationsNetOfTax",
+              "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity",
+              "ProfitLossFromDiscontinuedOperations"]
+DISC_OP_PART = ["DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax",
+                "DiscontinuedOperationIncomeLossFromDiscontinuedOperationDuringPhaseOutPeriodNetOfTax"]
+DISC_DISPOSAL = ["DiscontinuedOperationGainLossOnDisposalOfDiscontinuedOperationNetOfTax",
+                 "DiscontinuedOperationAmountOfOtherIncomeLossFromDispositionOfDiscontinuedOperationNetOfTax"]
 NCI_IS = ["NetIncomeLossAttributableToNoncontrollingInterest",
           "ProfitLossAttributableToNoncontrollingInterests"]
 PREF_DIV = ["PreferredStockDividendsIncomeStatementImpact", "PreferredStockDividendsAndOtherAdjustments"]
@@ -436,7 +446,13 @@ def classify_filing(d, sector):
 
     # net income: consolidated (incl NCI) and parent
     consol, tcon = first(d, *NI_CONSOL)
-    disc, _ = first(d, *DISC_OPS)
+    # discontinued operations: reported total, else operating income from disc ops + gain on disposal
+    disc, _ = first(d, *DISC_TOTAL)
+    if disc is None:
+        op_d, _ = first(d, *DISC_OP_PART)
+        dsp_d, _ = first(d, *DISC_DISPOSAL)
+        parts = [x for x in (op_d, dsp_d) if x is not None]
+        disc = sum(parts) if parts else None
     em, _ = first(d, *EQUITY_METHOD)            # equity-method earnings (placement varies)
     cont_at, _ = first(d, *INC_CONT_AFTERTAX)   # reported after-tax continuing-ops subtotal (incl EM)
     if consol is None:
