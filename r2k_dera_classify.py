@@ -690,6 +690,22 @@ def classify_filing(d, sector):
                 s = sum(v for _, v in mtags)
                 if _close(s, gap):
                     hit = (s, "+".join(sorted(t for t, _ in mtags)), "mezz")
+        if hit is None:
+            # foot-validated temporary-equity residual. The filer's own bottom line
+            # (LiabilitiesAndStockholdersEquity) equals assets -> the sheet foots, and the only GAAP
+            # section between total liabilities and total equity is temporary/redeemable equity. When
+            # our liabilities AND equity each already match the filer's reported subtotals, the residual
+            # A - L - E is the filer's OWN implied temporary equity -- the value the balance sheet
+            # requires, built from the filer's reported totals (not a plug). Common for Up-C / post-SPAC
+            # / redeemable-preferred structures whose mezzanine carries a custom, unpatternable tag.
+            lse, _ = first(d, "LiabilitiesAndStockholdersEquity")
+            rL, _ = first(d, *LIAB)
+            rEi, _ = first(d, *EQ_INCL)
+            rEp, _ = first(d, *EQ_PARENT)
+            eq_ok = (rEi is not None and _close(E, rEi)) or (rEp is not None and _close(E, rEp))
+            if (lse is not None and _close(lse, A) and rL is not None and _close(L, rL)
+                    and eq_ok and gap > TOL_ABS):
+                hit = (gap, "TemporaryEquity[A-L-E; L&SE=Assets]", "mezz")
         if hit:
             v, t, slot = hit
             if slot == "equity":
@@ -1024,9 +1040,17 @@ def selftest():
         "Assets": 1000, "Liabilities": 600, "StockholdersEquity": 200,
         "ConvertiblePreferredStockSeriesH": 120, "ConvertiblePreferredStockSeriesI": 80,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # foot-validated residual mezzanine: the filer reports L&SE = Assets (sheet foots) and our L and E
+    # match the reported subtotals, but the temporary equity (100) carries a CUSTOM tag we can't match.
+    # The residual A - L - E is the filer's own implied temporary equity -> capture it, BS_FOOTS ties.
+    residual_mezz = {k: v * _m for k, v in {
+        "Assets": 1000, "LiabilitiesAndStockholdersEquity": 1000,
+        "Liabilities": 600, "StockholdersEquity": 300,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
-                   ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum)):
+                   ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
+                   ("9", residual_mezz)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1055,6 +1079,8 @@ def selftest():
     ok_mz1 = (mz1["redeemable_nci"] == 100 * _m and "BS_FOOTS" not in mz1["breaks"])
     mz2 = next(r for r in out if r["cik"] == "8")
     ok_mz2 = (mz2["redeemable_nci"] == 200 * _m and "BS_FOOTS" not in mz2["breaks"])
+    mz3 = next(r for r in out if r["cik"] == "9")
+    ok_mz3 = (mz3["redeemable_nci"] == 100 * _m and "BS_FOOTS" not in mz3["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1068,6 +1094,8 @@ def selftest():
           f"BS_FOOTS tie): {'PASS' if ok_mz1 else 'FAIL'}")
     print(f"  SELFTEST mezzanine gap-fill, multi-series sum (redeemable_nci={mz2['redeemable_nci']}, "
           f"BS_FOOTS tie): {'PASS' if ok_mz2 else 'FAIL'}")
+    print(f"  SELFTEST foot-validated residual mezz (redeemable_nci={mz3['redeemable_nci']}, "
+          f"BS_FOOTS tie): {'PASS' if ok_mz3 else 'FAIL'}")
 
 
 if __name__ == "__main__":
