@@ -166,6 +166,7 @@ NCI_EXTRA = ["NetIncomeLossAttributableToRedeemableNoncontrollingInterest",
              "MinorityInterestInNetIncomeLossJointVenturePartners",
              "NetIncomeLossAttributableToNoncontrollingInterestOfSubsidiary",
              "NetIncomeLossAttributableToNoncontrollingInterestConsolidatedEntities",
+             "NetIncomeLossAttributableToNonredeemableNoncontrollingInterest",
              "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToNoncontrollingInterest"]
 PREF_DIV = ["PreferredStockDividendsIncomeStatementImpact", "PreferredStockDividendsAndOtherAdjustments"]
 DA = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
@@ -617,6 +618,13 @@ def classify_filing(d, sector):
             consol, tcon = pretax - tax + (disc or 0), "Pretax-Tax+Disc(derived)"
     parent, tpar = first(d, *NI_PARENT)
     nci_is, tnci = first(d, *NCI_IS)
+    if nci_is is None:
+        # no main NCI line -> the NCI income attribution is carried only on a separately-struck line
+        # (JV partners, nonredeemable/redeemable, subsidiary). Sum them so consol - parent reconciles.
+        exo = [(first(d, t)[0], t) for t in NCI_EXTRA]
+        exo = [(v, t) for v, t in exo if v is not None]
+        if exo:
+            nci_is = sum(v for v, _ in exo); tnci = "+".join(t for _, t in exo)
     # when the filer reports both consol and parent NI, the true total NCI = consol - parent. If NCI
     # is split across lines, adopt main + the separately-struck components, but only when that sum
     # reconciles and the bare main does not (never double-counts a main line that already includes them).
@@ -1176,11 +1184,22 @@ def selftest():
         "NetIncomeLossAvailableToCommonStockholdersBasic": 145.8,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # same mis-tagged parent, but the NCI is carried ONLY on a separate JV-partners line (no main NCI
+    # tag) -> the engine must capture NCI from that line, then recover parent = consol - NCI = 145.8.
+    parentfix2 = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfRevenue": 600, "GrossProfit": 400, "OperatingExpenses": 250,
+        "OperatingIncomeLoss": 150,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 160,
+        "IncomeTaxExpenseBenefit": 32, "ProfitLoss": 128, "NetIncomeLoss": 128,
+        "NoncontrollingInterestInNetIncomeLossJointVenturePartnersRedeemable": -17.8,
+        "NetIncomeLossAvailableToCommonStockholdersBasic": 145.8,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
                    ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
-                   ("12", revneg), ("13", cogsneg), ("14", parentfix)):
+                   ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1221,6 +1240,8 @@ def selftest():
     ok_cgn = (cgn["cost_of_revenue"] == 500 * _m and cgn["gross_profit"] == 1500 * _m)
     pfx = next(r for r in out if r["cik"] == "14")
     ok_pfx = (pfx["net_income"] == 145.8 * _m and "IS_NCI" not in pfx["breaks"])
+    pfx2 = next(r for r in out if r["cik"] == "15")
+    ok_pfx2 = (pfx2["net_income"] == 145.8 * _m and "IS_NCI" not in pfx2["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1246,6 +1267,8 @@ def selftest():
           f"{'PASS' if ok_cgn else 'FAIL'}")
     print(f"  SELFTEST parent-NI recovery (net_income={pfx['net_income']}, expect 145.8M): "
           f"{'PASS' if ok_pfx else 'FAIL'}")
+    print(f"  SELFTEST parent-NI via separate-line NCI (net_income={pfx2['net_income']}, expect 145.8M): "
+          f"{'PASS' if ok_pfx2 else 'FAIL'}")
 
 
 if __name__ == "__main__":
