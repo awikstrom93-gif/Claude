@@ -632,6 +632,17 @@ def classify_filing(d, sector):
         parent, tpar = consol - nci_is, "Consol-NCI(derived)"
     if parent is None and consol is not None and nci_is is None:
         parent, tpar = consol, tcon       # no NCI -> parent == consolidated
+    # parent-NI sanity: income available to common cannot exceed parent NI (common = parent - preferred,
+    # preferred >= 0). When the reported nicom exceeds our parent, the parent tag is mis-tagged -- often
+    # NetIncomeLoss set equal to CONSOLIDATED while NCI is negative (NCI absorbed losses), so the true
+    # parent = consol - NCI is larger. Recover it when consol - NCI reconciles to nicom (independent
+    # confirmation), and is >= and at least as close to nicom as the mis-tagged value.
+    nicom_rep, _ = first(d, *NI_COMMON)
+    if (nicom_rep is not None and parent is not None and consol is not None and nci_is is not None
+            and nicom_rep - parent > max(TOL_ABS, 0.02 * abs(parent))):
+        cand = consol - nci_is
+        if cand >= parent and abs(cand - nicom_rep) <= abs(parent - nicom_rep):
+            parent, tpar = cand, "Consol-NCI(parent mis-tagged: nicom>parent)"
     put("net_income", parent, tpar)
     put("net_income_consolidated", consol, tcon)
     put("minority_interest", nci_is, tnci)
@@ -1154,11 +1165,22 @@ def selftest():
         "Revenues": 2000, "CostOfRevenue": -500,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # parent NI mis-tagged: NetIncomeLoss set = consolidated (128) while NCI is NEGATIVE (-17.8); the
+    # true parent = consol - NCI = 145.8 = the reported income-available-to-common. Engine must recover it.
+    parentfix = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfRevenue": 600, "GrossProfit": 400, "OperatingExpenses": 250,
+        "OperatingIncomeLoss": 150,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 160,
+        "IncomeTaxExpenseBenefit": 32, "ProfitLoss": 128, "NetIncomeLoss": 128,
+        "NetIncomeLossAttributableToNoncontrollingInterest": -17.8,
+        "NetIncomeLossAvailableToCommonStockholdersBasic": 145.8,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
                    ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
-                   ("12", revneg), ("13", cogsneg)):
+                   ("12", revneg), ("13", cogsneg), ("14", parentfix)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1197,6 +1219,8 @@ def selftest():
     ok_rvn = (rvn["revenue"] == 300 * _m)
     cgn = next(r for r in out if r["cik"] == "13")
     ok_cgn = (cgn["cost_of_revenue"] == 500 * _m and cgn["gross_profit"] == 1500 * _m)
+    pfx = next(r for r in out if r["cik"] == "14")
+    ok_pfx = (pfx["net_income"] == 145.8 * _m and "IS_NCI" not in pfx["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1220,6 +1244,8 @@ def selftest():
           f"{'PASS' if ok_rvn else 'FAIL'}")
     print(f"  SELFTEST COGS<0 sign-normalize (cost={cgn['cost_of_revenue']}, gp={cgn['gross_profit']}): "
           f"{'PASS' if ok_cgn else 'FAIL'}")
+    print(f"  SELFTEST parent-NI recovery (net_income={pfx['net_income']}, expect 145.8M): "
+          f"{'PASS' if ok_pfx else 'FAIL'}")
 
 
 if __name__ == "__main__":
