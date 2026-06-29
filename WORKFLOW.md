@@ -27,6 +27,10 @@ Run everything from the project folder (`...\Benchmark Analysis`).
   per-line 2×2 verdict (LOCKED / DEFINITIONAL_FORK / TRUST_DERA / TRUST_MS / SINGLE_SOURCE). Diagnostic
   only — writes `dual_pilot_report.txt` + `dual_pilot_lines.csv`, touches no production data.
   Run `python r2k_dual_reconstruct_pilot.py` (auto-picks a diverse hard set) or pass `--targets cik:fy,...`.
+- `r2k_debt_reconcile.py` — **debt diagnostic**: splits the DERA-vs-Morningstar debt difference into
+  FUNDED debt vs OPERATING-LEASE liabilities and reconciles each across the whole universe, by count,
+  dollar, and sector. Answers "is DERA funded debt clean, or is the gap just leases?" Writes
+  `debt_reconcile_report.txt` + `debt_reconcile_detail.csv` (real funded-debt misses on top). Diagnostic only.
 - `r2k_snapshot_charts.py` — after you add/edit charts, save them to `R2000G_charts_backup.xlsx`
 - `r2k_dera_inspect.py` — peek at the DERA schema / reconstruct a few filings
 - `r2k_reconcile_sources.py`, `r2k_calibrate_tags.py`, `r2k_identity_backstop.py` — optional QA vs Morningstar
