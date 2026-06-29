@@ -153,6 +153,14 @@ BS_GAP_EQUITY = ["MinorityInterest", "StockholdersEquityIncludingPortionAttribut
 BS_GAP_MEZZ = (TEMP_EQUITY_TOTAL + TEMP_EQUITY_PARENT + REDEEM_NCI +
                ["TemporaryEquityValueExcludingAdditionalPaidInCapital", "PreferredStockRedemptionAmount",
                 "RedeemablePreferredStockCarryingAmount"])
+# temporary / redeemable equity (the mezzanine slot) is often under CUSTOM extension tags -- SPAC
+# Class A shares "subject to possible redemption", redeemable preferred/common -- that a fixed list
+# misses. Identify it structurally by name (like debt), so the BS_FOOTS gap can be filled from the
+# as-filed custom tag. EXCLUDE per-share / share-count tags (not a dollar carrying amount).
+TEMP_EQ_PAT = re.compile(r"temporaryequity|subjecttopossibleredemption|subjecttoredemption|"
+                         r"redeemablecommon|redeemableconvertible|redeemablepreferred|"
+                         r"mandatorilyredeemable|mandatoryredemption", re.I)
+TEMP_EQ_EXCL = re.compile(r"pershare|shares|numberof|pershareamount", re.I)
 DEBT_LTNC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
              "ConvertibleDebtNoncurrent", "ConvertibleNotesPayableNoncurrent", "SeniorNotesNoncurrent",
              "UnsecuredLongTermDebt", "NotesPayableNoncurrent"]
@@ -554,9 +562,15 @@ def classify_filing(d, sector):
     used = prov.get("redeemable_nci") or ""
     if (not liab_derived) and A is not None and L is not None and E is not None and not _close(A, L + E + mzv):
         gap = A - (L + E + mzv)
-        # equity-class gap (NCI / equity-incl-NCI) -> raise total equity; mezzanine-class -> raise mezz
+        # equity-class gap (NCI / equity-incl-NCI) -> raise total equity; mezzanine-class -> raise mezz.
+        # Try the named candidates first, then a structural (pattern) match for custom temporary/
+        # redeemable-equity tags (SPAC "subject to possible redemption", redeemable preferred, ...).
         hit = next(((v, t, "equity") for v, t in cands(d, BS_GAP_EQUITY) if t not in used and _close(v, gap)),
                    next(((v, t, "mezz") for v, t in cands(d, BS_GAP_MEZZ) if t not in used and _close(v, gap)), None))
+        if hit is None:
+            hit = next(((v, t, "mezz") for t, v in d.items()
+                        if v is not None and t not in used and _close(v, gap)
+                        and TEMP_EQ_PAT.search(t) and not TEMP_EQ_EXCL.search(t)), None)
         if hit:
             v, t, slot = hit
             if slot == "equity":
