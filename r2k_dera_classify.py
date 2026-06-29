@@ -133,6 +133,19 @@ PROP_GAIN = ["GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
              "GainLossOnSaleOfProperties"]
 NCI_IS = ["NetIncomeLossAttributableToNoncontrollingInterest",
           "ProfitLossAttributableToNoncontrollingInterests"]
+# NCI income attribution is frequently SPLIT across lines: the main attribution + a separately-struck
+# redeemable / operating-partnership / subsidiary / disc-ops NCI (redeemable NCI lives in mezzanine
+# per ASC 480, so its income share is often on its own line). Summed only when it reconciles
+# consol - parent (and the bare main line does not), so a main line that already aggregates them is
+# never double-counted. The IS_NCI gap the probe most often points at.
+NCI_EXTRA = ["NetIncomeLossAttributableToRedeemableNoncontrollingInterest",
+             "NoncontrollingInterestInNetIncomeLossOperatingPartnershipsRedeemable",
+             "NoncontrollingInterestInNetIncomeLossOperatingPartnershipsNonredeemable",
+             "NoncontrollingInterestInNetIncomeLossJointVenturePartnersRedeemable",
+             "MinorityInterestInNetIncomeLossJointVenturePartners",
+             "NetIncomeLossAttributableToNoncontrollingInterestOfSubsidiary",
+             "NetIncomeLossAttributableToNoncontrollingInterestConsolidatedEntities",
+             "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToNoncontrollingInterest"]
 PREF_DIV = ["PreferredStockDividendsIncomeStatementImpact", "PreferredStockDividendsAndOtherAdjustments"]
 DA = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
       "DepreciationAndAmortization", "DepreciationAmortizationAndDepletion", "Depreciation"]
@@ -494,6 +507,17 @@ def classify_filing(d, sector):
             consol, tcon = pretax - tax + (disc or 0), "Pretax-Tax+Disc(derived)"
     parent, tpar = first(d, *NI_PARENT)
     nci_is, tnci = first(d, *NCI_IS)
+    # when the filer reports both consol and parent NI, the true total NCI = consol - parent. If NCI
+    # is split across lines, adopt main + the separately-struck components, but only when that sum
+    # reconciles and the bare main does not (never double-counts a main line that already includes them).
+    if nci_is is not None and consol is not None and parent is not None:
+        extras = [first(d, t)[0] for t in NCI_EXTRA]
+        extras = [v for v in extras if v is not None]
+        if extras:
+            target = consol - parent
+            summed = nci_is + sum(extras)
+            if _close(summed, target) and not _close(nci_is, target):
+                nci_is, tnci = summed, (tnci or "NCI") + "+separateNCI"
     if parent is None and consol is not None and nci_is is not None:
         parent, tpar = consol - nci_is, "Consol-NCI(derived)"
     if parent is None and consol is not None and nci_is is None:
@@ -923,8 +947,19 @@ def selftest():
         "ProfitLoss": 70, "NetIncomeLoss": 70,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # NCI split across lines: consol 100, parent 85 -> true total NCI 15 = main 10 + redeemable 5.
+    # The engine must aggregate the separate redeemable-NCI line so minority_interest=15 and IS_NCI ties.
+    splitnci = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfRevenue": 600, "GrossProfit": 400, "OperatingExpenses": 270,
+        "OperatingIncomeLoss": 130,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 130,
+        "IncomeTaxExpenseBenefit": 30, "ProfitLoss": 100, "NetIncomeLoss": 85,
+        "NetIncomeLossAttributableToNoncontrollingInterest": 10,
+        "NetIncomeLossAttributableToRedeemableNoncontrollingInterest": 5,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
-    for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit)):
+    for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit), ("5", splitnci)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -944,11 +979,15 @@ def selftest():
                and "IS_NI" not in dops["breaks"])
     rt = next(r for r in out if r["cik"] == "4")
     ok_reit = (rt["net_income_consolidated"] == 70 * _m and "IS_NI" not in rt["breaks"])
+    sn = next(r for r in out if r["cik"] == "5")
+    ok_snci = (sn["minority_interest"] == 15 * _m and "IS_NCI" not in sn["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
           f"IS_NI tie): {'PASS' if ok_reit else 'FAIL'}")
+    print(f"  SELFTEST split-NCI aggregation (minority_interest={sn['minority_interest']}, "
+          f"IS_NCI tie): {'PASS' if ok_snci else 'FAIL'}")
 
 
 if __name__ == "__main__":
