@@ -950,6 +950,37 @@ def run(facts_rows, sic_of=None):
         ident.append(("SBC_CONSISTENCY(IS=CF)", *cons(sbc_is, sbc_cf)))
         stage[key] = dict(rec=rec, ident=ident, sector=sector, prov=prov)
 
+    # ---- source-XBRL scale correction: a filing whose magnitudes are uniformly ~1000x SMALLER than
+    # BOTH neighbors is a filer decimals/scale mis-tag (e.g. cik 1048268 FY2013: Assets tagged 179,252
+    # instead of 179,252,000). Rescale that year's dollar outputs x1000. Gated on the precise
+    # dip-and-recover signature (300x-3000x vs BOTH neighbors) so a genuine large change never triggers.
+    _DOLLARS = {"revenue", "cost_of_revenue", "gross_profit", "operating_income", "ebitda",
+                "depreciation_amortization", "interest_expense", "pretax_income", "tax_expense",
+                "net_income_consolidated", "minority_interest", "discontinued_operations", "net_income",
+                "net_income_to_common", "cash", "restricted_cash", "cash_total", "short_term_investments",
+                "ppe_net", "total_current_assets", "total_assets", "total_current_liabilities",
+                "total_liabilities", "total_debt", "total_debt_incl_leases", "operating_lease_liability",
+                "parent_equity", "minority_interest_bs", "total_equity", "redeemable_nci",
+                "retained_earnings", "dividends_paid", "share_based_comp", "cfo", "cfi", "cff",
+                "capex", "free_cash_flow"}
+    for (cik, fy), st in list(stage.items()):
+        if not fy.isdigit():
+            continue
+        a = st["rec"].get("total_assets")
+        p = stage.get((cik, str(int(fy) - 1)))
+        n = stage.get((cik, str(int(fy) + 1)))
+        if not a or p is None or n is None:
+            continue
+        ap, an = p["rec"].get("total_assets"), n["rec"].get("total_assets")
+        if not ap or not an:
+            continue
+        if 300 <= abs(ap / a) <= 3000 and 300 <= abs(an / a) <= 3000:   # ~1000x smaller than both
+            rec = st["rec"]
+            for k, v in list(rec.items()):
+                if isinstance(v, (int, float)) and (k in _DOLLARS or k.startswith("_")):
+                    rec[k] = v * 1000
+            rec["debt_flag"] = ((rec.get("debt_flag") or "") + ";RESCALED_1000x").strip(";")
+
     # ---- pass 2: cross-year cash roll-forward (cash[t] = cash[t-1] + dCash[t]) ----
     # ties the cash flow statement's net change to the balance-sheet cash year over year -- the
     # leg that makes the three statements actually flow. First covered year per company is n/a.
@@ -1202,6 +1233,14 @@ def selftest():
                    ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
+    # cik 16: a 3-year company whose MIDDLE year (2023) is uniformly 1000x too small (filer scale
+    # mis-tag); the engine must rescale it x1000 so total_assets returns to 300M.
+    for yr, sc in (("2022", _m), ("2023", _m / 1000.0), ("2024", _m)):
+        for tag, base in {"Assets": 300, "Liabilities": 180, "StockholdersEquity": 120, "Revenues": 250,
+                          "CostOfRevenue": 150, "GrossProfit": 100,
+                          "NetCashProvidedByUsedInOperatingActivities": 40}.items():
+            facts.append(dict(cik="16", fiscal_year=yr, taxonomy="usgaap", form="10-K",
+                              tag=tag, value=str(base * sc)))
     out, tie = run(facts)
     for r in out:
         print(f"\n  cik {r['cik']} sector={r['sector']} conf={r['confidence']} breaks=[{r['breaks']}]")
@@ -1242,6 +1281,8 @@ def selftest():
     ok_pfx = (pfx["net_income"] == 145.8 * _m and "IS_NCI" not in pfx["breaks"])
     pfx2 = next(r for r in out if r["cik"] == "15")
     ok_pfx2 = (pfx2["net_income"] == 145.8 * _m and "IS_NCI" not in pfx2["breaks"])
+    rsc = next(r for r in out if r["cik"] == "16" and r["fiscal_year"] == "2023")
+    ok_rsc = (rsc["total_assets"] == 300 * _m and "RESCALED_1000x" in (rsc.get("debt_flag") or ""))
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1269,6 +1310,8 @@ def selftest():
           f"{'PASS' if ok_pfx else 'FAIL'}")
     print(f"  SELFTEST parent-NI via separate-line NCI (net_income={pfx2['net_income']}, expect 145.8M): "
           f"{'PASS' if ok_pfx2 else 'FAIL'}")
+    print(f"  SELFTEST 1000x scale correction (2023 total_assets={rsc['total_assets']}, expect 300M): "
+          f"{'PASS' if ok_rsc else 'FAIL'}")
 
 
 if __name__ == "__main__":
