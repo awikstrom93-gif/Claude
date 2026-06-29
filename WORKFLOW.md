@@ -112,8 +112,13 @@ Outputs `R2000G_Benchmark_Review_charted.xlsx`. (Uses `R2000G_charts_backup.xlsx
 ---
 
 ## D. Validation / QA (recommended each refresh)
-- **`tieout_report.csv`** — per-filing accounting-identity tie-outs. ~94% tie; the `breaks`
-  column flags the rest (immaterial to index aggregates).
+- **`tieout_report.csv`** — per-filing **three-statement** accounting-identity tie-outs:
+  balance sheet foots (A=L+E+mezz, equity=parent+NCI), income statement cascades (Rev−COGS=GP,
+  Pretax−Tax+Disc=Consol NI, Consol−Parent=NCI), and the **cash flow articulates** — CF_FOOT
+  (CFO+CFI+CFF+FX=ΔCash), CF_BS_CASH (CF ending cash = BS cash + restricted), and the cross-year
+  CASH_ROLL (cash[t]=cash[t−1]+ΔCash[t]). ~99% of legs tie; the `breaks` column flags the rest
+  (mostly pre-2018 ASU 2016-18 restricted-cash transition + insurer cash structure — immaterial
+  to the trailing-window index aggregates). `confidence` = fraction of applicable legs that tie.
 - **Aggregate sanity check** vs FactSet + Morningstar (gross/net margin validated; operating
   margin is as-filed GAAP, ~2pp below normalized vendor figures — a methodology footnote, not a bug).
 

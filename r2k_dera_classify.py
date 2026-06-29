@@ -109,6 +109,20 @@ CFF = ["NetCashProvidedByUsedInFinancingActivities",
 CAPEX = ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets",
          "PaymentsForCapitalImprovements", "PaymentsToAcquireMachineryAndEquipment",
          "PaymentsToAcquireOilAndGasPropertyAndEquipment"]
+# cash-flow articulation: foot the CF, tie ending cash to the BS, roll cash across years.
+# post-2018 filers reconcile cash+restricted, so the restricted-inclusive tags come first.
+FX_CASH = ["EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+           "EffectOfExchangeRateOnCashAndCashEquivalents",
+           "EffectOfExchangeRateOnCashAndCashEquivalentsContinuingOperations"]
+DCASH = ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+         "CashAndCashEquivalentsPeriodIncreaseDecrease",
+         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseExcludingExchangeRateEffect"]
+CF_END_CASH = ["CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]   # CF ending balance (incl restricted)
+RESTR_TOTAL = ["RestrictedCashAndCashEquivalentsAtCarryingValue", "RestrictedCashAndCashEquivalents",
+               "RestrictedCash"]
+RESTR_CUR = ["RestrictedCashCurrent", "RestrictedCashAndCashEquivalentsAtCarryingValueCurrent"]
+RESTR_NC = ["RestrictedCashNoncurrent", "RestrictedCashAndCashEquivalentsNoncurrent",
+            "RestrictedCashAndInvestmentsNoncurrent"]
 # bank / insurer markers and lines
 BANK_NII_NET = ["InterestIncomeExpenseNet", "InterestIncomeExpenseAfterProvisionForLoanLoss"]
 BANK_INT_INC = ["InterestAndDividendIncomeOperating", "InterestAndFeeIncomeLoansAndLeases"]
@@ -385,6 +399,29 @@ def classify_filing(d, sector):
         (r.get("cfo") - abs(capex)) if (r.get("cfo") is not None and capex is not None) else None,
         "CFO-|Capex|(derived)" if (r.get("cfo") is not None and capex is not None) else None)
 
+    # ---------- cash-flow articulation (foot CF; ending cash = BS cash incl restricted) ----------
+    # Pre-ASU-2016-18 (FY<2018) the CF reconciled cash & equivalents only; after, cash + restricted.
+    # Match the basis to the ΔCash tag the filer used so each era is internally consistent.
+    fx_c, _ = first(d, *FX_CASH)
+    dcash, tdc = first(d, *DCASH)
+    restr_basis = bool(tdc and "RestrictedCash" in tdc)
+    cf_end, _ = first(d, *CF_END_CASH)
+    rcash, trc = first(d, *RESTR_TOTAL)
+    if rcash is None:
+        rc, _ = first(d, *RESTR_CUR); rnc, _ = first(d, *RESTR_NC)
+        parts = [x for x in (rc, rnc) if x is not None]
+        rcash = sum(parts) if parts else None
+        trc = "RestrictedCash(cur+nc)" if parts else None
+    put("restricted_cash", rcash, trc)
+    cash_total = (cash + (rcash or 0)) if cash is not None else None   # cash + restricted
+    put("cash_total", cash_total, "cash+restricted" if cash_total is not None else None)
+    # ending-cash basis the CF reconciles to: restricted-inclusive post-2018, cash-only before
+    cf_basis = cf_end if cf_end is not None else cash_total
+    r["_cf_end"] = cf_end if restr_basis else None      # CF_BS_CASH only when restricted-inclusive
+    r["_cash_total"] = cash_total
+    r["_dcash"] = dcash
+    r["_roll_cash"] = (cf_basis if restr_basis else cash)   # roll cash on the matching basis
+
     # ---------- identity tie-outs ----------
     ident = []
     def tie(name, lhs, rhs):
@@ -405,6 +442,12 @@ def classify_filing(d, sector):
         (None if pretax is None or tax is None else pretax - tax + (disc or 0)))
     tie("IS_NCI(Consol-Parent=NCI)",
         (None if consol is None or parent is None else consol - parent), nci_is)
+    # cash-flow articulation (within-year): the CF foots, and its ending cash equals BS cash +
+    # restricted cash. The cross-year roll-forward (cash[t]=cash[t-1]+dCash) is added in run().
+    tie("CF_FOOT(CFO+CFI+CFF+FX=dCash)",
+        (None if (r.get("cfo") is None or r.get("cfi") is None or r.get("cff") is None)
+         else r["cfo"] + r["cfi"] + r["cff"] + (fx_c or 0)), dcash)
+    tie("CF_BS_CASH(CFend=cash+restr)", cf_end, cash_total)
     return r, prov, ident
 
 
@@ -421,25 +464,17 @@ def run(facts_rows, sic_of=None):
         if r.get("stmt", "") in ("BS", "") and r.get("uom", "USD") in ("USD", ""):
             bs[key][r["tag"]] = v
         meta[key] = (r.get("taxonomy", ""), r.get("form", ""))
-    out_rows = []; tie_rows = []
+    # ---- pass 1: per-filing rebuild + within-year identities + structural debt ----
+    stage = {}
     for key in sorted(by):
         cik, fy = key
-        d = by[key]
-        sector = detect_sector(d)
-        rec, prov, ident = classify_filing(d, sector)
-        # ---- structural debt reconstruction (funded incl finance leases; op-lease separate) ----
+        sector = detect_sector(by[key])
+        rec, prov, ident = classify_filing(by[key], sector)
         dd = reconstruct_debt(bs[key])
         rec["total_debt"] = dd["funded"]
         rec["total_debt_incl_leases"] = dd["incl_op"]
         rec["operating_lease_liability"] = dd["op_lease"]
         prov["total_debt"] = dd["provenance"]
-        ntie = sum(1 for _, s, _ in ident if s == "tie")
-        napp = sum(1 for _, s, _ in ident if s != "n/a")
-        conf = ntie / napp if napp else None
-        broke = [n for n, s, _ in ident if s == "BREAK"]
-        # debt confidence flag (kept separate from identity breaks):
-        #   financial -> debt is a funding book, exclude from operating-company leverage screens
-        #   DEBT>LIAB -> reconstructed debt exceeds total liabilities (likely over-capture)
         flags = []
         if sector in ("bank", "insurer") or is_financial_sic((sic_of or {}).get(cik)):
             flags.append("financial")
@@ -447,13 +482,40 @@ def run(facts_rows, sic_of=None):
         if dd["funded"] is not None and tl is not None and dd["funded"] > 1.05 * tl:
             flags.append("DEBT>LIAB")
         rec["debt_flag"] = ";".join(flags)
-        rec_full = dict(cik=cik, fiscal_year=fy, sector=sector, taxonomy=meta[key][0],
+        stage[key] = dict(rec=rec, ident=ident, sector=sector)
+
+    # ---- pass 2: cross-year cash roll-forward (cash[t] = cash[t-1] + dCash[t]) ----
+    # ties the cash flow statement's net change to the balance-sheet cash year over year -- the
+    # leg that makes the three statements actually flow. First covered year per company is n/a.
+    for (cik, fy), st in stage.items():
+        rec = st["rec"]
+        lhs = rec.get("_roll_cash"); dc = rec.get("_dcash")
+        prior = stage.get((cik, str(int(fy) - 1))) if fy.isdigit() else None
+        rhs = None
+        if prior is not None and dc is not None:
+            pc = prior["rec"].get("_roll_cash")
+            rhs = (pc + dc) if pc is not None else None
+        if lhs is None or rhs is None:
+            st["ident"].append(("CASH_ROLL(cash[t]=cash[t-1]+dCash)", "n/a", None))
+        else:
+            ok = abs(lhs - rhs) <= max(TOL_ABS, TOL_REL * max(abs(lhs), abs(rhs)))
+            st["ident"].append(("CASH_ROLL(cash[t]=cash[t-1]+dCash)", "tie" if ok else "BREAK", lhs - rhs))
+
+    # ---- pass 3: finalize confidence/breaks over all identities (incl the cash-flow legs) ----
+    out_rows = []; tie_rows = []
+    for key in sorted(stage):
+        cik, fy = key; st = stage[key]; rec = st["rec"]; ident = st["ident"]
+        ntie = sum(1 for _, s, _ in ident if s == "tie")
+        napp = sum(1 for _, s, _ in ident if s != "n/a")
+        conf = ntie / napp if napp else None
+        broke = [n for n, s, _ in ident if s == "BREAK"]
+        rec_full = dict(cik=cik, fiscal_year=fy, sector=st["sector"], taxonomy=meta[key][0],
                         form=meta[key][1], n_identities=napp, n_tie=ntie,
                         confidence=("%.2f" % conf if conf is not None else ""),
                         breaks=";".join(broke), **rec)
         out_rows.append(rec_full)
         for n, s, resid in ident:
-            tie_rows.append(dict(cik=cik, fiscal_year=fy, sector=sector, identity=n, result=s,
+            tie_rows.append(dict(cik=cik, fiscal_year=fy, sector=st["sector"], identity=n, result=s,
                                  residual=("" if resid is None else "%.0f" % resid)))
     return out_rows, tie_rows
 
@@ -471,7 +533,8 @@ def main():
               "confidence", "breaks", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
-              "discontinued_operations", "net_income", "net_income_to_common", "cash", "short_term_investments",
+              "discontinued_operations", "net_income", "net_income_to_common", "cash",
+              "restricted_cash", "cash_total", "short_term_investments",
               "total_current_assets", "total_assets", "total_current_liabilities",
               "total_liabilities", "total_debt", "total_debt_incl_leases",
               "operating_lease_liability", "debt_flag", "parent_equity", "minority_interest_bs",
