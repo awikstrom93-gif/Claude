@@ -454,15 +454,29 @@ def classify_filing(d, sector):
 
     # net income: consolidated (incl NCI) and parent
     consol, tcon = first(d, *NI_CONSOL)
-    # discontinued operations: reported total, else operating income from disc ops + gain on disposal
-    disc, _ = first(d, *DISC_TOTAL)
-    if disc is None:
-        op_d, _ = first(d, *DISC_OP_PART)
-        dsp_d, _ = first(d, *DISC_DISPOSAL)
-        parts = [x for x in (op_d, dsp_d) if x is not None]
-        disc = sum(parts) if parts else None
     em, _ = first(d, *EQUITY_METHOD)            # equity-method earnings (placement varies)
     cont_at, _ = first(d, *INC_CONT_AFTERTAX)   # reported after-tax continuing-ops subtotal (incl EM)
+    # discontinued operations: reported total, else operating income from disc ops + gain on disposal.
+    disc, disc_src = first(d, *DISC_TOTAL)
+    op_d, _ = first(d, *DISC_OP_PART)
+    dsp_d, _ = first(d, *DISC_DISPOSAL)
+    if disc is None:
+        parts = [x for x in (op_d, dsp_d) if x is not None]
+        disc = sum(parts) if parts else None
+        disc_src = ("DiscOps:OpPart+Disposal(summed)" if len(parts) > 1
+                    else ("IncomeLossFromDiscontinuedOperationsNetOfTax" if disc is not None else None))
+    elif dsp_d is not None:
+        # a disc-ops TOTAL and a separate gain-on-disposal are both tagged. Some filers' "total" is
+        # only the OPERATING portion, with the disposal struck separately -> the disposal gain is then
+        # missing from the cascade (the single biggest IS_NI gap the probe found). Identity decides:
+        # adopt total+disposal only when it reconciles Pretax-Tax+Disc to the reported consolidated
+        # NI and the bare total does not (so we never double-count a total that already includes it).
+        cont = (cont_at if cont_at is not None
+                else (pretax - tax if (pretax is not None and tax is not None) else None))
+        if consol is not None and cont is not None:
+            implied = consol - cont
+            if _close(disc + dsp_d, implied) and not _close(disc, implied):
+                disc, disc_src = disc + dsp_d, "DiscTotal+Disposal"
     if consol is None:
         # prefer the reported after-tax continuing subtotal (it already contains equity-method and
         # other below-the-line items); else the standard Pretax - Tax + Disc derivation.
@@ -485,7 +499,7 @@ def classify_filing(d, sector):
         nicom, tnicom = parent - pref, "Parent-Preferred(derived)"
     put("net_income_to_common", nicom, tnicom)
 
-    put("discontinued_operations", disc, "IncomeLossFromDiscontinuedOperationsNetOfTax" if disc is not None else None)
+    put("discontinued_operations", disc, disc_src)
     da, tda = first(d, *DA); put("depreciation_amortization", da, tda)
     ebitda = (oi + da) if (oi is not None and da is not None) else None
     put("ebitda", ebitda, "OperatingIncome+D&A(derived)" if ebitda is not None else None)
@@ -866,8 +880,22 @@ def selftest():
             "IncomeTaxExpenseBenefit": 50, "NetIncomeLoss": 210,
             "Assets": 13000, "Liabilities": 11500, "StockholdersEquity": 1500,
             "NetCashProvidedByUsedInOperatingActivities": 300}
+    # disc-ops disposal: "total" is the OPERATING portion only (-2M); disposal (+5M) tagged separately;
+    # reported consol = 90 - 20 + (-2 + 5) = 73M. Engine must adopt total+disposal (disc=3M), not -2M.
+    # (values at $M scale so the disposal gap exceeds the absolute tie-out tolerance.)
+    _m = 1_000_000
+    discops = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfRevenue": 600, "GrossProfit": 400, "OperatingExpenses": 300,
+        "OperatingIncomeLoss": 100,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 90,
+        "IncomeTaxExpenseBenefit": 20,
+        "IncomeLossFromDiscontinuedOperationsNetOfTax": -2,
+        "DiscontinuedOperationGainLossOnDisposalOfDiscontinuedOperationNetOfTax": 5,
+        "ProfitLoss": 73, "NetIncomeLoss": 73,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
-    for cik, d in (("1", industrial), ("2", bank)):
+    for cik, d in (("1", industrial), ("2", bank), ("3", discops)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -882,7 +910,12 @@ def selftest():
           and ind["minority_interest"] == 5 and ind["total_equity"] == 2000 and ind["total_debt"] == 850
           and bk["sector"] == "bank" and bk["revenue"] == 520 and bk["operating_income"] == 260
           and bk["gross_profit"] is None and bk["confidence"] == "1.00")
+    dops = next(r for r in out if r["cik"] == "3")
+    ok_dops = (dops["discontinued_operations"] == 3 * _m and dops["net_income_consolidated"] == 73 * _m
+               and "IS_NI" not in dops["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
+    print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
+          f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
 
 
 if __name__ == "__main__":
