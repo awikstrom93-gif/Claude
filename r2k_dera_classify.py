@@ -32,9 +32,11 @@ OUT = BASE / "fundamentals_dera.csv"
 TIEOUT = BASE / "tieout_report.csv"
 TOL_REL, TOL_ABS = 0.005, 5000.0                # identity tie tolerance (BS / IS -- should tie exactly)
 CF_TOL_REL, CF_TOL_ABS = 0.01, 2_000_000.0      # cash-flow legs -- materiality (reconciliation noise)
-# reported but NOT counted toward confidence: CF_BS_CASH's restricted-cash decomposition is fragile
-# (restricted-cash tag coverage), and CASH_ROLL already proves the CF<->BS cash linkage robustly.
-NON_GATING = {"CF_BS_CASH(CFend=cash+restr)"}
+# reported but NOT counted toward confidence: these break for legitimate, identifiable reasons
+# rather than data error -- CF_BS_CASH (restricted-cash tag coverage), RE_ROLL (cumulative-effect
+# accounting adoptions / declared-vs-paid dividend timing / treasury retirements). They are
+# high-value diagnostics to surface, not trust penalties.
+NON_GATING = {"CF_BS_CASH(CFend=cash+restr)", "RE_ROLL(RE[t]=RE[t-1]+NI-Div)"}
 
 
 def fnum(x):
@@ -127,6 +129,33 @@ RESTR_TOTAL = ["RestrictedCashAndCashEquivalentsAtCarryingValue", "RestrictedCas
 RESTR_CUR = ["RestrictedCashCurrent", "RestrictedCashAndCashEquivalentsAtCarryingValueCurrent"]
 RESTR_NC = ["RestrictedCashNoncurrent", "RestrictedCashAndCashEquivalentsNoncurrent",
             "RestrictedCashAndInvestmentsNoncurrent"]
+# retained-earnings roll-forward (IS net income + CF dividends -> BS retained earnings) and
+# D&A / SBC consistency (income statement add-back == cash-flow add-back).
+RETAINED = ["RetainedEarningsAccumulatedDeficit", "RetainedEarningsAccumulatedDeficitLimitedPartnership"]
+DIV_TOTAL = ["PaymentsOfDividends"]                      # total cash dividends paid (parent)
+DIV_COMMON = ["PaymentsOfDividendsCommonStock"]
+DIV_PREF = ["PaymentsOfDividendsPreferredStockAndPreferenceStock", "PaymentsOfDividendsPreferredStock"]
+# operating D&A (for EBITDA + the IS<->CF check): depreciation + amortization of intangibles only.
+# Prefer a reported subtotal; else sum components, EXCLUDING financing/premium/lease amortizations.
+DA_SUBTOTAL = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
+               "DepreciationAndAmortization", "DepreciationAmortizationAndDepletion"]
+DA_PAT = re.compile(r"depreciation|amortization|depletion", re.I)
+DA_EXCL = re.compile(r"financingcost|debtissuance|debtdiscount|ofpremium|ofdiscount|deferred|"
+                     r"unearned|assetretirement|operatinglease|rightofuse|accumulated|"
+                     r"beforetax|netoftax|period$|usefullife|straightlinebasis", re.I)
+SBC_TAGS = ["ShareBasedCompensation", "ShareBasedCompensationExpense",
+            "AllocatedShareBasedCompensationExpense", "StockBasedCompensation"]
+
+
+def sum_da(facts):
+    """operating depreciation & amortization from a statement's facts: reported subtotal if present,
+    else the sum of depreciation/intangible-amortization components (excluding financing/lease/etc.)."""
+    for t in DA_SUBTOTAL:
+        if facts.get(t) is not None:
+            return facts[t]
+    comps = [v for tg, v in facts.items()
+             if v is not None and DA_PAT.search(tg) and not DA_EXCL.search(tg)]
+    return sum(comps) if comps else None
 # bank / insurer markers and lines
 BANK_NII_NET = ["InterestIncomeExpenseNet", "InterestIncomeExpenseAfterProvisionForLoanLoss"]
 BANK_INT_INC = ["InterestAndDividendIncomeOperating", "InterestAndFeeIncomeLoansAndLeases"]
@@ -426,6 +455,19 @@ def classify_filing(d, sector):
     r["_dcash"] = dcash
     r["_roll_cash"] = (cf_basis if restr_basis else cash)   # roll cash on the matching basis
 
+    # retained earnings + dividends (for the cross-year RE roll-forward in run()). Dividends reduce
+    # parent RE -> common + preferred (NOT noncontrolling-interest distributions).
+    re_bal, tre = first(d, *RETAINED)
+    put("retained_earnings", re_bal, tre)
+    div_t, _ = first(d, *DIV_TOTAL)
+    if div_t is None:
+        dc, _ = first(d, *DIV_COMMON); dp, _ = first(d, *DIV_PREF)
+        parts = [x for x in (dc, dp) if x is not None]
+        div_t = sum(parts) if parts else None
+    put("dividends_paid", div_t, None)
+    r["_re"] = re_bal
+    r["_div"] = div_t
+
     # ---------- identity tie-outs ----------
     ident = []
     def tie(name, lhs, rhs, rel=TOL_REL, ab=TOL_ABS):
@@ -457,17 +499,22 @@ def classify_filing(d, sector):
 
 
 def run(facts_rows, sic_of=None):
-    by = defaultdict(dict); bs = defaultdict(dict); meta = {}
+    by = defaultdict(dict); bs = defaultdict(dict)
+    isf = defaultdict(dict); cff = defaultdict(dict); meta = {}
     for r in facts_rows:
         v = fnum(r["value"])
         if v is None:
             continue
         key = (r["cik"], r["fiscal_year"])
         by[key][r["tag"]] = v
-        # balance-sheet, reported-currency facts only -> debt reconstruction (stmt/uom absent in
-        # the selftest, so treat blank as eligible)
-        if r.get("stmt", "") in ("BS", "") and r.get("uom", "USD") in ("USD", ""):
+        stmt = r.get("stmt", ""); usd = r.get("uom", "USD") in ("USD", "")
+        # statement-split facts: BS for debt; IS vs CF for the D&A / SBC consistency checks
+        if usd and stmt in ("BS", ""):
             bs[key][r["tag"]] = v
+        if usd and stmt in ("IS", ""):
+            isf[key][r["tag"]] = v
+        if usd and stmt in ("CF", ""):
+            cff[key][r["tag"]] = v
         meta[key] = (r.get("taxonomy", ""), r.get("form", ""))
     # ---- pass 1: per-filing rebuild + within-year identities + structural debt ----
     stage = {}
@@ -487,6 +534,33 @@ def run(facts_rows, sic_of=None):
         if dd["funded"] is not None and tl is not None and dd["funded"] > 1.05 * tl:
             flags.append("DEBT>LIAB")
         rec["debt_flag"] = ";".join(flags)
+
+        # ---- D&A capture + IS<->CF consistency (a non-financial / EBITDA concept) ----
+        def cons(lhs, rhs):
+            if lhs is None or rhs is None:
+                return ("n/a", None)
+            ok = abs(lhs - rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(lhs), abs(rhs)))
+            return ("tie" if ok else "BREAK", lhs - rhs)
+        if sector == "commercial":
+            da_is, da_cf = sum_da(isf[key]), sum_da(cff[key])
+            # use the most complete operating D&A (CF lists every add-back) -> also fixes EBITDA
+            # where the income statement buries D&A in COGS/SG&A under non-standard tags.
+            da_best = da_cf if da_cf is not None else (da_is if da_is is not None
+                                                       else rec.get("depreciation_amortization"))
+            if da_best is not None:
+                rec["depreciation_amortization"] = da_best
+                oi = rec.get("operating_income")
+                rec["ebitda"] = (oi + da_best) if oi is not None else rec.get("ebitda")
+            ident.append(("DA_CONSISTENCY(IS=CF)", *cons(da_is, da_cf)))
+        else:
+            # banks/insurers: D&A mixes premium/discount & intangible amortization -> not a clean
+            # operating concept and EBITDA is n/a, so don't impose the consistency check.
+            ident.append(("DA_CONSISTENCY(IS=CF)", "n/a", None))
+        # SBC add-back (cash flow) vs expensed (income statement, when separately tagged)
+        sbc_cf = next((cff[key][t] for t in SBC_TAGS if cff[key].get(t) is not None), None)
+        sbc_is = next((isf[key][t] for t in SBC_TAGS if isf[key].get(t) is not None), None)
+        rec["share_based_comp"] = sbc_cf if sbc_cf is not None else sbc_is
+        ident.append(("SBC_CONSISTENCY(IS=CF)", *cons(sbc_is, sbc_cf)))
         stage[key] = dict(rec=rec, ident=ident, sector=sector)
 
     # ---- pass 2: cross-year cash roll-forward (cash[t] = cash[t-1] + dCash[t]) ----
@@ -505,6 +579,21 @@ def run(facts_rows, sic_of=None):
         else:
             ok = abs(lhs - rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(lhs), abs(rhs)))
             st["ident"].append(("CASH_ROLL(cash[t]=cash[t-1]+dCash)", "tie" if ok else "BREAK", lhs - rhs))
+
+        # ---- retained-earnings roll-forward: RE[t] = RE[t-1] + NI(parent) - dividends ----
+        # the canonical IS->BS tie (net income, less payout, accumulates into book equity). Breaks
+        # legitimately flag cumulative-effect accounting adoptions (ASC 606/842, CECL), treasury
+        # retirements, and declared-vs-paid dividend timing -- which is exactly what we want to see.
+        re_t = rec.get("_re"); ni_p = rec.get("net_income"); div = rec.get("_div") or 0
+        re_rhs = None
+        if prior is not None and re_t is not None and ni_p is not None:
+            re_1 = prior["rec"].get("_re")
+            re_rhs = (re_1 + ni_p - div) if re_1 is not None else None
+        if re_t is None or re_rhs is None:
+            st["ident"].append(("RE_ROLL(RE[t]=RE[t-1]+NI-Div)", "n/a", None))
+        else:
+            ok = abs(re_t - re_rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(re_t), abs(re_rhs)))
+            st["ident"].append(("RE_ROLL(RE[t]=RE[t-1]+NI-Div)", "tie" if ok else "BREAK", re_t - re_rhs))
 
     # ---- pass 3: finalize confidence/breaks over all identities (incl the cash-flow legs) ----
     out_rows = []; tie_rows = []
@@ -544,7 +633,8 @@ def main():
               "total_current_assets", "total_assets", "total_current_liabilities",
               "total_liabilities", "total_debt", "total_debt_incl_leases",
               "operating_lease_liability", "debt_flag", "parent_equity", "minority_interest_bs",
-              "total_equity", "redeemable_nci", "cfo", "cfi", "cff", "capex", "free_cash_flow"]
+              "total_equity", "redeemable_nci", "retained_earnings", "dividends_paid",
+              "share_based_comp", "cfo", "cfi", "cff", "capex", "free_cash_flow"]
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
