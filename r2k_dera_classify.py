@@ -124,6 +124,13 @@ DISC_OP_PART = ["DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTa
                 "DiscontinuedOperationIncomeLossFromDiscontinuedOperationDuringPhaseOutPeriodNetOfTax"]
 DISC_DISPOSAL = ["DiscontinuedOperationGainLossOnDisposalOfDiscontinuedOperationNetOfTax",
                  "DiscontinuedOperationAmountOfOtherIncomeLossFromDispositionOfDiscontinuedOperationNetOfTax"]
+# REIT gains on sale of real estate, struck BELOW the pre-tax subtotal -> a below-the-line bridge
+# item to consolidated NI (like equity-method earnings). REITs are largely untaxed, so the net-of-tax,
+# before-tax, and generic variants all flow ~dollar-for-dollar to NI; offered as an addend that the
+# IS_NI cascade adopts only when it reconciles to the reported consolidated NI (the next IS_NI gap).
+PROP_GAIN = ["GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
+             "GainLossOnSaleOfPropertiesBeforeApplicableIncomeTaxes",
+             "GainLossOnSaleOfProperties"]
 NCI_IS = ["NetIncomeLossAttributableToNoncontrollingInterest",
           "ProfitLossAttributableToNoncontrollingInterests"]
 PREF_DIV = ["PreferredStockDividendsIncomeStatementImpact", "PreferredStockDividendsAndOtherAdjustments"]
@@ -456,6 +463,7 @@ def classify_filing(d, sector):
     consol, tcon = first(d, *NI_CONSOL)
     em, _ = first(d, *EQUITY_METHOD)            # equity-method earnings (placement varies)
     cont_at, _ = first(d, *INC_CONT_AFTERTAX)   # reported after-tax continuing-ops subtotal (incl EM)
+    prop_gain, _ = first(d, *PROP_GAIN)         # REIT gain on sale of real estate (below-pretax bridge)
     # discontinued operations: reported total, else operating income from disc ops + gain on disposal.
     disc, disc_src = first(d, *DISC_TOTAL)
     op_d, _ = first(d, *DISC_OP_PART)
@@ -658,18 +666,27 @@ def classify_filing(d, sector):
         ob_rhs = (min(opb, key=lambda c: abs(c - pretax)) if (opb and pretax is not None)
                   else (opb[0] if opb else None))
         tie("OI_PRETAX(OI+nonop=Pretax)", pretax, ob_rhs, rel=CF_TOL_REL, ab=CF_TOL_ABS)
-    # IS_NI: consolidated NI = Pretax - Tax + Disc, with equity-method earnings counted whether the
-    # filer struck them above or below the tax line, or via the reported continuing-ops subtotal.
-    # The cascade ties if the reported consol matches ANY valid construction (pick the closest).
+    # IS_NI: consolidated NI = Pretax - Tax + Disc, plus any below-the-pretax bridge items the filer
+    # struck separately -- equity-method earnings (above or below the tax line) and REIT gains on sale
+    # of real estate. Each is a real as-filed component that legitimately belongs in the NI bridge;
+    # we offer base, base+each, and base+both, then accept whichever construction the reported consol
+    # actually matches (closest within tolerance). Adding only genuine line items (not free residuals)
+    # keeps this from over-fitting -- a coincidental tie within 0.5%/$5k is implausible.
     consol_rep = r.get("net_income_consolidated")
+    addends = [x for x in (em, prop_gain) if x is not None]
+
+    def _expand(start):
+        cs = [start]
+        for a in addends:
+            cs.append(start + a)
+        if len(addends) == 2:
+            cs.append(start + addends[0] + addends[1])
+        return cs
     ni_cands = []
     if pretax is not None and tax is not None:
-        base = pretax - tax + (disc or 0)
-        ni_cands.append(base)
-        if em is not None:
-            ni_cands.append(base + em)         # equity method struck below the tax line
+        ni_cands += _expand(pretax - tax + (disc or 0))
     if cont_at is not None:
-        ni_cands.append(cont_at + (disc or 0))  # reported after-tax continuing subtotal + disc
+        ni_cands += _expand(cont_at + (disc or 0))  # reported after-tax continuing subtotal + disc
     ni_rhs = (min(ni_cands, key=lambda c: abs(c - consol_rep)) if (ni_cands and consol_rep is not None)
               else (ni_cands[0] if ni_cands else None))
     tie("IS_NI(Pretax-Tax+Disc=Consol)", consol_rep, ni_rhs)
@@ -894,8 +911,20 @@ def selftest():
         "ProfitLoss": 73, "NetIncomeLoss": 73,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # REIT property-sale gain struck BELOW the pre-tax subtotal: pretax (pre-gain) 50, tax 0 (REIT),
+    # gain on sale 20 -> reported consol = 50 - 0 + 20 = 70. The base cascade (50) is short by the gain;
+    # the engine must adopt the gain as a below-line addend so IS_NI ties.
+    reit = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfRevenue": 600, "GrossProfit": 400, "OperatingExpenses": 300,
+        "OperatingIncomeLoss": 100,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 50,
+        "IncomeTaxExpenseBenefit": 0,
+        "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes": 20,
+        "ProfitLoss": 70, "NetIncomeLoss": 70,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
-    for cik, d in (("1", industrial), ("2", bank), ("3", discops)):
+    for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -913,9 +942,13 @@ def selftest():
     dops = next(r for r in out if r["cik"] == "3")
     ok_dops = (dops["discontinued_operations"] == 3 * _m and dops["net_income_consolidated"] == 73 * _m
                and "IS_NI" not in dops["breaks"])
+    rt = next(r for r in out if r["cik"] == "4")
+    ok_reit = (rt["net_income_consolidated"] == 70 * _m and "IS_NI" not in rt["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
+    print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
+          f"IS_NI tie): {'PASS' if ok_reit else 'FAIL'}")
 
 
 if __name__ == "__main__":
