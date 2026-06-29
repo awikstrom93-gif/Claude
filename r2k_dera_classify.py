@@ -427,7 +427,15 @@ def classify_filing(d, sector):
         put("gross_profit", gp, tg)
 
     pretax, tp = first(d, *PRETAX); put("pretax_income", pretax, tp)
-    tax, tt = first(d, *TAX); put("tax_expense", tax, tt)
+    tax, tt = first(d, *TAX)
+    # when only the CURRENT tax piece is tagged (no reported total), total tax = current + deferred,
+    # else the income cascade is short by the deferred portion (probe-confirmed IS_NI gap).
+    if tt == "CurrentIncomeTaxExpenseBenefit":
+        dft, _ = first(d, "DeferredIncomeTaxExpenseBenefit",
+                       "DeferredIncomeTaxExpenseBenefitContinuingOperations")
+        if dft is not None:
+            tax, tt = tax + dft, "Current+DeferredIncomeTax"
+    put("tax_expense", tax, tt)
 
     # operating income: direct tag, else sector rule, else GP - OpEx
     oi, toi = first(d, *OINC)
