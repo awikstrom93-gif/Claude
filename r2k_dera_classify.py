@@ -299,9 +299,11 @@ INS_BENEFITS = ["BenefitsLossesAndExpenses", "PolicyholderBenefitsAndClaimsIncur
 # (analyst convention); operating leases are tracked separately for a lease-adjusted column.
 # ============================================================================================
 DEBT_INCL = re.compile(r"debt|borrow|notespayable|senior.?notes?|term.?loan|revolv|"
-                       r"line.?of.?credit|lineofcredit|convertible|financingobligation|"
+                       r"line.?of.?credit|lineofcredit|financingobligation|"
                        r"loanspayable|subordinat|mediumterm|commercialpaper|"
                        r"vehicleprogram|floor.?plan", re.I)   # incl fleet/floorplan (consolidated debt)
+# NOTE: bare "convertible" was dropped from DEBT_INCL -- it swept convertible PREFERRED stock (equity)
+# into debt. Convertible DEBT/notes still match via the debt/notespayable/senior/subordinated tokens.
 LEASE_FIN_PAT = re.compile(r"(finance|capital)lease.*(liabilit|obligation)", re.I)
 LEASE_OP_PAT = re.compile(r"operatinglease.*liabilit", re.I)
 DEBT_EXCL = re.compile(r"securit|heldtomaturity|availableforsale|receivable|investment|"
@@ -309,7 +311,12 @@ DEBT_EXCL = re.compile(r"securit|heldtomaturity|availableforsale|receivable|inve
                        r"interestexpense|rightofuseasset|netinvestmentinlease|salestypelease|"
                        r"fixedmaturit|weightedaverage|allowance|unamortized|issuancecost|"
                        r"financingcost|covenant|redemption|conversion|numberof|percentage|"
-                       r"paymentsof|accruedinterest|deferred|restrictedcash|grossnotes|noncash", re.I)
+                       r"paymentsof|accruedinterest|deferred|restrictedcash|grossnotes|noncash|"
+                       # not debt: preferred/equity swept in by name; the ASSET side of secured-borrowing
+                       # transfers; VIE sub-portions of a parent borrowings line; footnote carrying-amount
+                       # roll-ups that overlap the balance-sheet debt lines (all caused debt>liabilities).
+                       r"preferred|liquidation|capitalization|stockholdersequity|equitydeficit|andequity|"
+                       r"variableinterestentity|assetscarryingamount|debtinstrumentcarryingamount", re.I)
 GRAND_LEASE_INCL = ["DebtAndCapitalLeaseObligations", "DebtAndCapitalLeaseObligation",
                     "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"]
 GRAND_DEBT_ONLY = ["DebtLongtermAndShorttermCombinedAmount"]
@@ -335,6 +342,16 @@ def _sum_present(bs, names):
 def _is_current(tag):
     t = tag.lower()
     return ("current" in t) and ("noncurrent" not in t) and ("excludingcurrent" not in t)
+
+
+def _dedup_components(leaves):
+    """Drop total/component double-counts among matched debt leaves: a tag whose normalized name
+    EXTENDS another present tag's name (e.g. SecuredDebt -> SecuredDebtNonrelatedParty) is a component
+    of that more-general total, so keep the total and drop the component."""
+    nm = {t: re.sub(r"[^a-z0-9]", "", t.lower()) for t in leaves}
+    drop = {b for b in leaves for a in leaves
+            if a != b and len(nm[a]) >= 8 and len(nm[b]) > len(nm[a]) and nm[b].startswith(nm[a])}
+    return {t: v for t, v in leaves.items() if t not in drop}
 
 
 def reconstruct_debt(bs):
@@ -371,13 +388,16 @@ def reconstruct_debt(bs):
             else:
                 nonc, nsrc = first(bs, *LT_NC)
                 cur, csrc = first(bs, *LT_CUR)
-                leaves_nc, leaves_cur = {}, {}
+                leaves = {}
                 for t, v in bs.items():
                     if (v is None or t in _SUBTOTAL or t in _LEASE_TAGS or t in STBORROW
                             or LEASE_FIN_PAT.search(t) or LEASE_OP_PAT.search(t)):
                         continue
                     if DEBT_INCL.search(t) and not DEBT_EXCL.search(t):
-                        (leaves_cur if _is_current(t) else leaves_nc)[t] = v
+                        leaves[t] = v
+                leaves = _dedup_components(leaves)      # drop total/component double-counts
+                leaves_nc = {t: v for t, v in leaves.items() if not _is_current(t)}
+                leaves_cur = {t: v for t, v in leaves.items() if _is_current(t)}
                 if nonc is not None:
                     prov.append(nsrc)
                 else:
@@ -1053,10 +1073,19 @@ def selftest():
         "Assets": 1000, "LiabilitiesAndStockholdersEquity": 1000,
         "Liabilities": 600, "StockholdersEquity": 300,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # debt over-capture guards: SecuredDebtNonrelatedParty is a COMPONENT of SecuredDebt (drop it);
+    # convertible PREFERRED, a debt+equity capitalization line, and a footnote carrying-amount roll-up
+    # must NOT be swept into funded debt. True funded debt = SecuredDebt 500 (< liabilities 700).
+    debt_overcap = {k: v * _m for k, v in {
+        "Assets": 2000, "Liabilities": 700, "StockholdersEquity": 1300,
+        "SecuredDebt": 500, "SecuredDebtNonrelatedParty": 480,
+        "Series6ConvertiblePreferredStock": 1000, "CapitalizationLongtermDebtAndEquity": 3000,
+        "DebtInstrumentCarryingAmount": 900,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
-                   ("9", residual_mezz)):
+                   ("9", residual_mezz), ("10", debt_overcap)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1087,6 +1116,8 @@ def selftest():
     ok_mz2 = (mz2["redeemable_nci"] == 200 * _m and "BS_FOOTS" not in mz2["breaks"])
     mz3 = next(r for r in out if r["cik"] == "9")
     ok_mz3 = (mz3["redeemable_nci"] == 100 * _m and "BS_FOOTS" not in mz3["breaks"])
+    dov = next(r for r in out if r["cik"] == "10")
+    ok_dov = (dov["total_debt"] == 500 * _m)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1102,6 +1133,8 @@ def selftest():
           f"BS_FOOTS tie): {'PASS' if ok_mz2 else 'FAIL'}")
     print(f"  SELFTEST foot-validated residual mezz (redeemable_nci={mz3['redeemable_nci']}, "
           f"BS_FOOTS tie): {'PASS' if ok_mz3 else 'FAIL'}")
+    print(f"  SELFTEST debt over-capture guard (total_debt={dov['total_debt']}, "
+          f"expect 500M): {'PASS' if ok_dov else 'FAIL'}")
 
 
 if __name__ == "__main__":
