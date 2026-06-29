@@ -25,7 +25,10 @@ import os, csv, sys
 from collections import defaultdict
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
-FUND_DERA = BASE / "fundamentals_dera.csv"
+# prefer the cross-source-RESOLVED fundamentals if r2k_resolve.py has produced them, so the
+# analytics run on the verified/adopted values; fall back to the raw DERA rebuild otherwise.
+FUND_DERA = (BASE / "fundamentals_dera_resolved.csv") if (BASE / "fundamentals_dera_resolved.csv").exists() \
+    else (BASE / "fundamentals_dera.csv")
 INDEX = BASE / "dera_filing_index.csv"
 XWALK = BASE / "securities_crosswalk.csv"
 OUT = BASE / os.environ.get("R2KG_FUND_OUT", "edgar_annual_fundamentals_ASFILED.csv")
@@ -43,7 +46,7 @@ EXTRA = ["ebitda", "depreciation_amortization", "interest_expense", "net_income_
          "total_current_assets", "total_current_liabilities", "total_liabilities", "total_equity",
          "redeemable_nci", "total_debt_incl_leases", "operating_lease_liability", "debt_flag",
          "restricted_cash", "cash_total", "retained_earnings", "dividends_paid", "share_based_comp",
-         "ppe_net", "cfi", "cff", "confidence", "breaks"]
+         "ppe_net", "cfi", "cff", "confidence", "breaks", "source"]
 PIPE_FIELDS = ["cik", "ticker", "name", "fiscal_year", "fye_date", "filed_date",
                "revenue", "net_income", "operating_income", "gross_profit", "tax_expense",
                "pretax_income", "stockholders_equity", "total_assets", "cash",

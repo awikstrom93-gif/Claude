@@ -13,10 +13,15 @@ Run everything from the project folder (`...\Benchmark Analysis`).
 `r2k_morningstar_parse.py` → `r2k_build_maps.py` → `r2k_dera_index.py` → `r2k_dera_extract.py`
 
 **RUN — every data refresh (the recurring run)**
-`r2k_dera_classify.py` → `r2k_dera_to_fundamentals.py` → `r2k_step3_analytics.py` →
+`r2k_dera_classify.py` → `r2k_debt_reconcile.py` → `r2k_plausibility.py` → `r2k_resolve.py` →
+`r2k_dera_to_fundamentals.py` → `r2k_step3_analytics.py` →
 `r2k_step4_performance.py` → `r2k_step5_cohort_attribution.py` → `r2k_step6_index_comparison.py` →
 `r2k_step8_concentration.py` → `r2k_step9_biotech.py` → `r2k_step7_consolidate.py` →
 `r2k_refresh_charts_data.py`
+
+> Verification chain: `classify` rebuilds + ties out → `debt_reconcile` + `plausibility` flag what
+> doesn't tie / isn't plausible → `resolve` adopts Morningstar where ours breaks and theirs foots
+> (provenance in `resolution_audit.csv`) → `to_fundamentals` auto-prefers `fundamentals_dera_resolved.csv`.
 
 **NEVER run directly — shared library** (imported by the steps)
 `r2k_perf_io.py`
