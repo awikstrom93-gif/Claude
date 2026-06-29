@@ -35,6 +35,11 @@ Run everything from the project folder (`...\Benchmark Analysis`).
   the R2000G's weight has lease-adjusted debt that ties Morningstar vs forks vs is missing, with the
   highest-weight disagreements listed. Reads `debt_reconcile_detail.csv` + holdings + `security_cik_map.json`.
   Writes `debt_materiality_report.txt`. Diagnostic only.
+- `r2k_plausibility.py` — **the verification leg**: catches self-consistent-but-WRONG values the identities
+  can't (revenue<0, GM>100%, negative D&A, debt>liabilities, implausible YoY), and combines them with the
+  tie-out into a per-name RELIABILITY tier (clean / watch / review), weighted by index weight. Tells you
+  what % of index weight is safe to aggregate and ranks the names still needing resolution. Reads
+  `fundamentals_dera.csv` (+ holdings/maps). Writes `plausibility_report.txt` + `plausibility_flags.csv`.
 - `r2k_snapshot_charts.py` — after you add/edit charts, save them to `R2000G_charts_backup.xlsx`
 - `r2k_dera_inspect.py` — peek at the DERA schema / reconstruct a few filings
 - `r2k_reconcile_sources.py`, `r2k_calibrate_tags.py`, `r2k_identity_backstop.py` — optional QA vs Morningstar
