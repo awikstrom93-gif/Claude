@@ -43,7 +43,7 @@ EXTRA = ["ebitda", "depreciation_amortization", "interest_expense", "net_income_
          "total_current_assets", "total_current_liabilities", "total_liabilities", "total_equity",
          "redeemable_nci", "total_debt_incl_leases", "operating_lease_liability", "debt_flag",
          "restricted_cash", "cash_total", "retained_earnings", "dividends_paid", "share_based_comp",
-         "cfi", "cff", "confidence", "breaks"]
+         "ppe_net", "cfi", "cff", "confidence", "breaks"]
 PIPE_FIELDS = ["cik", "ticker", "name", "fiscal_year", "fye_date", "filed_date",
                "revenue", "net_income", "operating_income", "gross_profit", "tax_expense",
                "pretax_income", "stockholders_equity", "total_assets", "cash",

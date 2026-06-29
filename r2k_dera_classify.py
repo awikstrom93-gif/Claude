@@ -37,7 +37,9 @@ CF_TOL_REL, CF_TOL_ABS = 0.01, 2_000_000.0      # cash-flow legs -- materiality 
 # accounting adoptions / declared-vs-paid dividend timing / treasury retirements). They are
 # high-value diagnostics to surface, not trust penalties.
 NON_GATING = {"CF_BS_CASH(CFend=cash+restr)", "RE_ROLL(RE[t]=RE[t-1]+NI-Div)",
-              "DA_CONSISTENCY(IS=CF)"}   # IS vs CF D&A legitimately differs by presentation
+              "DA_CONSISTENCY(IS=CF)",   # IS vs CF D&A legitimately differs by presentation
+              "OI_PRETAX(OI+nonop=Pretax)",   # non-operating section is filer-specific
+              "PPE_ROLL(PPE[t]=PPE[t-1]+capex-dep)"}   # disposals/M&A/impairment break it legitimately
 
 
 def fnum(x):
@@ -92,8 +94,17 @@ CASH = ["CashAndCashEquivalentsAtCarryingValue", "Cash", "CashAndCashEquivalents
 STI = ["ShortTermInvestments", "OtherShortTermInvestments", "AvailableForSaleSecuritiesCurrent"]
 ASSETS = ["Assets"]
 ASSETS_CUR = ["AssetsCurrent"]
+ASSETS_NC = ["AssetsNoncurrent"]
 LIAB = ["Liabilities"]
 LIAB_CUR = ["LiabilitiesCurrent"]
+LIAB_NC = ["LiabilitiesNoncurrent"]
+PPE_NET = ["PropertyPlantAndEquipmentNet"]
+# operating-income -> pretax bridge (the non-operating section). Prefer the reported aggregate net
+# non-operating; else build from interest expense + interest income + other non-operating items.
+NONOP_AGG = ["NonoperatingIncomeExpense"]
+NONOP_OTHER = ["OtherNonoperatingIncomeExpense", "OtherNonoperatingGainsLosses",
+               "NonoperatingGainsLosses", "OtherNonoperatingIncome"]
+INT_INCOME = ["InvestmentIncomeInterest", "InterestIncomeOther", "InvestmentIncomeNonoperating"]
 EQ_PARENT = ["StockholdersEquity", "PartnersCapital", "MembersEquity", "CommonStockholdersEquity"]
 EQ_INCL = ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
            "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest"]
@@ -409,9 +420,12 @@ def classify_filing(d, sector):
     cash, tcash = first(d, *CASH); put("cash", cash, tcash)
     sti, tsti = first(d, *STI); put("short_term_investments", sti, tsti)
     ta, tta = first(d, *ASSETS); put("total_assets", ta, tta)
-    put("total_current_assets", *first(d, *ASSETS_CUR))
+    ca, _ = first(d, *ASSETS_CUR); put("total_current_assets", ca, None)
+    nca, _ = first(d, *ASSETS_NC)
     tl, ttl = first(d, *LIAB); put("total_liabilities", tl, ttl)
-    put("total_current_liabilities", *first(d, *LIAB_CUR))
+    cl, _ = first(d, *LIAB_CUR); put("total_current_liabilities", cl, None)
+    ncl, _ = first(d, *LIAB_NC)
+    ppe, tppe = first(d, *PPE_NET); put("ppe_net", ppe, tppe)
     eqp, teqp = first(d, *EQ_PARENT)
     eqi, teqi = first(d, *EQ_INCL)
     ncibs, _ = first(d, *NCI_BS)
@@ -486,6 +500,7 @@ def classify_filing(d, sector):
     put("dividends_paid", div_t, None)
     r["_re"] = re_bal
     r["_div"] = div_t
+    r["_ppe"] = ppe                                   # for the cross-year PP&E roll-forward in run()
 
     # ---------- identity tie-outs ----------
     ident = []
@@ -499,10 +514,25 @@ def classify_filing(d, sector):
     tie("BS_FOOTS(A=L+E+mezz)", (None if liab_derived else A),
         (None if (liab_derived or L is None or E is None) else L + E + (mz or 0)))
     tie("BS_EQUITY(incl=parent+NCI)", eqi, (None if eqp is None or ncibs is None else eqp + ncibs))
+    # balance-sheet subtotal foots: total = current + non-current (only when the filer reports the
+    # non-current subtotal; many give current + total only, in which case this is n/a, not a break).
+    tie("BS_ASSETS(cur+noncur=total)", ta, (None if ca is None or nca is None else ca + nca))
+    tie("BS_LIAB(cur+noncur=total)", tl, (None if cl is None or ncl is None else cl + ncl))
     if sector == "commercial":
         tie("IS_GP(Rev-COGS)", r.get("gross_profit"),
             (None if r.get("revenue") is None or r.get("cost_of_revenue") is None
              else r["revenue"] - r["cost_of_revenue"]))
+        # OI -> Pretax bridge (the non-operating section): Pretax = OI + net non-operating. Prefer the
+        # reported aggregate (interest may be inside it or struck separately -> try both); n/a when
+        # only scattered components are tagged. Non-gating (non-operating is filer-specific).
+        nonop_agg, _ = first(d, *NONOP_AGG)
+        opb = []
+        if oi is not None and nonop_agg is not None:
+            opb.append(oi + nonop_agg)
+            opb.append(oi + nonop_agg - (inte or 0))
+        ob_rhs = (min(opb, key=lambda c: abs(c - pretax)) if (opb and pretax is not None)
+                  else (opb[0] if opb else None))
+        tie("OI_PRETAX(OI+nonop=Pretax)", pretax, ob_rhs, rel=CF_TOL_REL, ab=CF_TOL_ABS)
     # IS_NI: consolidated NI = Pretax - Tax + Disc, with equity-method earnings counted whether the
     # filer struck them above or below the tax line, or via the reported continuing-ops subtotal.
     # The cascade ties if the reported consol matches ANY valid construction (pick the closest).
@@ -631,6 +661,22 @@ def run(facts_rows, sic_of=None):
             ok = abs(re_t - re_rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(re_t), abs(re_rhs)))
             st["ident"].append(("RE_ROLL(RE[t]=RE[t-1]+NI-Div)", "tie" if ok else "BREAK", re_t - re_rhs))
 
+        # ---- PP&E roll-forward: PP&E[t] ~= PP&E[t-1] + capex - depreciation ----
+        # the asset-side articulation: capex (CF) builds PP&E, depreciation (IS) reduces it. A
+        # diagnostic (non-gating): breaks flag disposals, acquisitions, impairments, and -- usefully
+        # -- implausible D&A (depreciation a balance sheet can't support). Uses total D&A as a proxy
+        # for depreciation, so intangible-heavy filers carry a small expected residual.
+        ppe_t = rec.get("_ppe"); capex = rec.get("capex"); da = rec.get("depreciation_amortization")
+        ppe_rhs = None
+        if prior is not None and ppe_t is not None and capex is not None and da is not None:
+            ppe_1 = prior["rec"].get("_ppe")
+            ppe_rhs = (ppe_1 + abs(capex) - da) if ppe_1 is not None else None
+        if ppe_t is None or ppe_rhs is None:
+            st["ident"].append(("PPE_ROLL(PPE[t]=PPE[t-1]+capex-dep)", "n/a", None))
+        else:
+            ok = abs(ppe_t - ppe_rhs) <= max(CF_TOL_ABS * 5, 0.05 * max(abs(ppe_t), abs(ppe_rhs)))
+            st["ident"].append(("PPE_ROLL(PPE[t]=PPE[t-1]+capex-dep)", "tie" if ok else "BREAK", ppe_t - ppe_rhs))
+
     # ---- pass 3: finalize confidence/breaks over all identities (incl the cash-flow legs) ----
     out_rows = []; tie_rows = []
     for key in sorted(stage):
@@ -665,7 +711,7 @@ def main():
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
               "discontinued_operations", "net_income", "net_income_to_common", "cash",
-              "restricted_cash", "cash_total", "short_term_investments",
+              "restricted_cash", "cash_total", "short_term_investments", "ppe_net",
               "total_current_assets", "total_assets", "total_current_liabilities",
               "total_liabilities", "total_debt", "total_debt_incl_leases",
               "operating_lease_liability", "debt_flag", "parent_equity", "minority_interest_bs",
