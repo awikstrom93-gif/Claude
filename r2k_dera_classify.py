@@ -39,7 +39,11 @@ CF_TOL_REL, CF_TOL_ABS = 0.01, 2_000_000.0      # cash-flow legs -- materiality 
 NON_GATING = {"CF_BS_CASH(CFend=cash+restr)", "RE_ROLL(RE[t]=RE[t-1]+NI-Div)",
               "DA_CONSISTENCY(IS=CF)",   # IS vs CF D&A legitimately differs by presentation
               "OI_PRETAX(OI+nonop=Pretax)",   # non-operating section is filer-specific
-              "PPE_ROLL(PPE[t]=PPE[t-1]+capex-dep)"}   # disposals/M&A/impairment break it legitimately
+              "PPE_ROLL(PPE[t]=PPE[t-1]+capex-dep)",   # disposals/M&A/impairment break it legitimately
+              # current/non-current split: BS_FOOTS already gates the balance sheet; these break on
+              # held-for-sale / presentation quirks where the non-current subtotal is tagged, so they
+              # are diagnostics, not trust penalties.
+              "BS_ASSETS(cur+noncur=total)", "BS_LIAB(cur+noncur=total)"}
 
 
 def fnum(x):
