@@ -95,6 +95,17 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "Revenue"]
 COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices",
         "CostOfSales"]
+# COGS is frequently SPLIT across lines: a base cost line + separately-struck services cost,
+# depreciation/amortization inside COGS, or restructuring/impairment charged to COGS. Summed onto the
+# base only when it reconciles revenue - GP (and the base alone does not), so a base line that already
+# aggregates them is never double-counted. The IS_GP gap the probe most often points at.
+COGS_EXTRA = ["CostOfServices", "CostOfServicesLicensesAndServices",
+              "CostOfGoodsSoldAmortization", "CostOfGoodsSoldDepreciation",
+              "CostOfGoodsSoldDepreciationAndAmortization",
+              "CostOfGoodsAndServicesSoldAmortization", "CostOfGoodsAndServicesSoldDepreciation",
+              "CostOfGoodsAndServicesSoldImpairmentCharges",
+              "CostOfGoodsSoldRestructuringCharges", "CostofGoodsSoldRestructuringCharges",
+              "RestructuringCostsCostOfGoodsSold"]
 OPEX = ["OperatingExpenses", "OperatingCostsAndExpenses", "CostsAndExpenses"]
 OINC = ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities"]
 PRETAX = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
@@ -424,8 +435,22 @@ def classify_filing(d, sector):
         put("cost_of_revenue", None, "n/a(financial)")
         put("gross_profit", None, "n/a(financial)")
     else:
-        cogs, tc = first(d, *COGS); put("cost_of_revenue", cogs, tc)
+        cogs, tc = first(d, *COGS)
         gp0, _ = first(d, "GrossProfit")
+        # aggregate split COGS components: when revenue and GP are reported, true COGS = rev - GP.
+        # Adopt base + the separately-struck component lines only when that sum reconciles and the
+        # base alone does not (never double-counts a base line that already includes them).
+        rev_total = next((d[t] for t in ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
+                                         "RevenueFromContractWithCustomerIncludingAssessedTax",
+                                         "SalesRevenueNet", "Revenue") if d.get(t) is not None), None)
+        if cogs is not None and gp0 is not None and rev_total is not None:
+            extras = [d[t] for t in COGS_EXTRA if d.get(t) is not None and t != tc]
+            if extras:
+                target = rev_total - gp0
+                summed = cogs + sum(extras)
+                if _close(summed, target) and not _close(cogs, target):
+                    cogs, tc = summed, (tc or "COGS") + "+splitCOGS"
+        put("cost_of_revenue", cogs, tc)
         rev_cands = [(t, d[t]) for t in REV if t in d and d[t] is not None]
         rev = tr = None
         # identity-driven: when GP & COGS are known, the TRUE revenue is GP+COGS -> pick that tag
@@ -958,8 +983,19 @@ def selftest():
         "NetIncomeLossAttributableToRedeemableNoncontrollingInterest": 5,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # split COGS: a product+services filer reports CostOfGoodsSold 400 + a separate CostOfServices 200;
+    # reported GrossProfit 400 = rev 1000 - true COGS 600. The engine must aggregate the services cost
+    # so cost_of_revenue=600 and IS_GP ties (the base line alone, 400, leaves a 200 gap).
+    splitcogs = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfGoodsSold": 400, "CostOfServices": 200, "GrossProfit": 400,
+        "OperatingExpenses": 250, "OperatingIncomeLoss": 150,
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 150,
+        "IncomeTaxExpenseBenefit": 30, "ProfitLoss": 120, "NetIncomeLoss": 120,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
     facts = []
-    for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit), ("5", splitnci)):
+    for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
+                   ("5", splitnci), ("6", splitcogs)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -981,6 +1017,9 @@ def selftest():
     ok_reit = (rt["net_income_consolidated"] == 70 * _m and "IS_NI" not in rt["breaks"])
     sn = next(r for r in out if r["cik"] == "5")
     ok_snci = (sn["minority_interest"] == 15 * _m and "IS_NCI" not in sn["breaks"])
+    sc = next(r for r in out if r["cik"] == "6")
+    ok_scogs = (sc["cost_of_revenue"] == 600 * _m and sc["gross_profit"] == 400 * _m
+                and "IS_GP" not in sc["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -988,6 +1027,8 @@ def selftest():
           f"IS_NI tie): {'PASS' if ok_reit else 'FAIL'}")
     print(f"  SELFTEST split-NCI aggregation (minority_interest={sn['minority_interest']}, "
           f"IS_NCI tie): {'PASS' if ok_snci else 'FAIL'}")
+    print(f"  SELFTEST split-COGS aggregation (cost_of_revenue={sc['cost_of_revenue']}, "
+          f"IS_GP tie): {'PASS' if ok_scogs else 'FAIL'}")
 
 
 if __name__ == "__main__":
