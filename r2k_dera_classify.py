@@ -314,9 +314,11 @@ DEBT_EXCL = re.compile(r"securit|heldtomaturity|availableforsale|receivable|inve
                        r"paymentsof|accruedinterest|deferred|restrictedcash|grossnotes|noncash|"
                        # not debt: preferred/equity swept in by name; the ASSET side of secured-borrowing
                        # transfers; VIE sub-portions of a parent borrowings line; footnote carrying-amount
-                       # roll-ups that overlap the balance-sheet debt lines (all caused debt>liabilities).
+                       # roll-ups that overlap the balance-sheet debt lines (all caused debt>liabilities);
+                       # the EQUITY component of a convertible note; and "liabilities OTHER THAN debt".
                        r"preferred|liquidation|capitalization|stockholdersequity|equitydeficit|andequity|"
-                       r"variableinterestentity|assetscarryingamount|debtinstrumentcarryingamount", re.I)
+                       r"variableinterestentity|assetscarryingamount|debtinstrumentcarryingamount|"
+                       r"equitycomponent|otherthanlongtermdebt|otherthanlongtermdebtnoncurrent", re.I)
 GRAND_LEASE_INCL = ["DebtAndCapitalLeaseObligations", "DebtAndCapitalLeaseObligation",
                     "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"]
 GRAND_DEBT_ONLY = ["DebtLongtermAndShorttermCombinedAmount"]
@@ -345,12 +347,29 @@ def _is_current(tag):
 
 
 def _dedup_components(leaves):
-    """Drop total/component double-counts among matched debt leaves: a tag whose normalized name
-    EXTENDS another present tag's name (e.g. SecuredDebt -> SecuredDebtNonrelatedParty) is a component
-    of that more-general total, so keep the total and drop the component."""
+    """Drop debt double-counts among matched leaves:
+      (a) PREFIX: a tag whose name extends another present tag's (SecuredDebt -> SecuredDebtNonrelated
+          Party) is a component of that more-general total -> keep the total, drop the component;
+      (b) GROSS: a 'Gross' line whose non-gross sibling is also present (OtherLongtermDebtGrossNoncurrent
+          vs OtherLongTermDebtNoncurrent) -> keep the net carrying value, drop the gross;
+      (c) DUP current/noncurrent: a current and noncurrent line of the same base with IDENTICAL value
+          is a filer tagging error (the same amount tagged twice) -> drop the current one."""
     nm = {t: re.sub(r"[^a-z0-9]", "", t.lower()) for t in leaves}
-    drop = {b for b in leaves for a in leaves
-            if a != b and len(nm[a]) >= 8 and len(nm[b]) > len(nm[a]) and nm[b].startswith(nm[a])}
+    drop = set()
+    for b in leaves:
+        for a in leaves:
+            if a == b or b in drop:
+                continue
+            # (a) prefix-component
+            if len(nm[a]) >= 8 and len(nm[b]) > len(nm[a]) and nm[b].startswith(nm[a]):
+                drop.add(b)
+            # (b) gross vs net
+            elif "gross" in nm[b] and nm[b].replace("gross", "") == nm[a]:
+                drop.add(b)
+            # (c) duplicate current/noncurrent with identical value
+            elif (leaves[a] == leaves[b] and "current" in nm[b]
+                  and nm[a].replace("noncurrent", "") == nm[b].replace("noncurrent", "").replace("current", "")):
+                drop.add(b)
     return {t: v for t, v in leaves.items() if t not in drop}
 
 
@@ -388,6 +407,8 @@ def reconstruct_debt(bs):
             else:
                 nonc, nsrc = first(bs, *LT_NC)
                 cur, csrc = first(bs, *LT_CUR)
+                if nonc is not None and cur is not None and nonc == cur:
+                    cur, csrc = None, None     # identical current==noncurrent -> duplicate tag, drop current
                 leaves = {}
                 for t, v in bs.items():
                     if (v is None or t in _SUBTOTAL or t in _LEASE_TAGS or t in STBORROW
@@ -416,6 +437,18 @@ def reconstruct_debt(bs):
         funded += fl; prov.append(fln or "FinanceLease")
     elif funded is None and fl is not None:
         funded = fl; prov.append(fln or "FinanceLease")
+    # hard bound: funded debt is a SUBSET of total liabilities. If the reconstruction still exceeds
+    # liabilities it is an unresolved over-capture (overlapping totals/components we cannot disentangle
+    # by name -- e.g. a NonRecourseDebt total alongside its NonRecourseSecuredNotes) -> fall back to the
+    # largest single as-filed debt line that itself fits within liabilities (a real, conservative value)
+    # and flag it in the provenance rather than emit an impossible number.
+    tl = bs.get("Liabilities")
+    if tl is not None and tl > 0 and funded is not None and funded > 1.15 * tl:
+        singles = [v for t, v in bs.items() if v is not None and DEBT_INCL.search(t)
+                   and not DEBT_EXCL.search(t) and not LEASE_OP_PAT.search(t)
+                   and not LEASE_FIN_PAT.search(t) and v <= 1.05 * tl]
+        if singles:
+            funded = max(singles); prov.append("[overcapture>liab->largest single line]")
     incl_op = (funded or 0) + (opl or 0) if (funded is not None or opl is not None) else None
     return dict(funded=funded, op_lease=opl, incl_op=incl_op,
                 provenance="+".join(p for p in prov if p))
@@ -1082,10 +1115,17 @@ def selftest():
         "Series6ConvertiblePreferredStock": 1000, "CapitalizationLongtermDebtAndEquity": 3000,
         "DebtInstrumentCarryingAmount": 900,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # hard-bound fallback: overlapping non-recourse totals/components sum to 2,963 > liabilities 1,600
+    # (impossible) and don't share name prefixes -> fall back to the largest single debt line <= liab.
+    debt_overcap2 = {k: v * _m for k, v in {
+        "Assets": 3000, "Liabilities": 1600, "StockholdersEquity": 1400,
+        "NonRecourseDebt": 1200, "NonRecourseSecuredNotesPayable": 1545,
+        "LineOfCredit": 70, "ConvertibleNotesPayable": 148,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
-                   ("9", residual_mezz), ("10", debt_overcap)):
+                   ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1118,6 +1158,8 @@ def selftest():
     ok_mz3 = (mz3["redeemable_nci"] == 100 * _m and "BS_FOOTS" not in mz3["breaks"])
     dov = next(r for r in out if r["cik"] == "10")
     ok_dov = (dov["total_debt"] == 500 * _m)
+    dov2 = next(r for r in out if r["cik"] == "11")
+    ok_dov2 = (dov2["total_debt"] == 1545 * _m)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1135,6 +1177,8 @@ def selftest():
           f"BS_FOOTS tie): {'PASS' if ok_mz3 else 'FAIL'}")
     print(f"  SELFTEST debt over-capture guard (total_debt={dov['total_debt']}, "
           f"expect 500M): {'PASS' if ok_dov else 'FAIL'}")
+    print(f"  SELFTEST debt hard-bound fallback (total_debt={dov2['total_debt']}, "
+          f"expect 1545M): {'PASS' if ok_dov2 else 'FAIL'}")
 
 
 if __name__ == "__main__":
