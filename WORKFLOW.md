@@ -31,6 +31,10 @@ Run everything from the project folder (`...\Benchmark Analysis`).
   FUNDED debt vs OPERATING-LEASE liabilities and reconciles each across the whole universe, by count,
   dollar, and sector. Answers "is DERA funded debt clean, or is the gap just leases?" Writes
   `debt_reconcile_report.txt` + `debt_reconcile_detail.csv` (real funded-debt misses on top). Diagnostic only.
+- `r2k_debt_materiality.py` — **weights the debt residual by INDEX WEIGHT** (not name count): what % of
+  the R2000G's weight has lease-adjusted debt that ties Morningstar vs forks vs is missing, with the
+  highest-weight disagreements listed. Reads `debt_reconcile_detail.csv` + holdings + `security_cik_map.json`.
+  Writes `debt_materiality_report.txt`. Diagnostic only.
 - `r2k_snapshot_charts.py` — after you add/edit charts, save them to `R2000G_charts_backup.xlsx`
 - `r2k_dera_inspect.py` — peek at the DERA schema / reconstruct a few filings
 - `r2k_reconcile_sources.py`, `r2k_calibrate_tags.py`, `r2k_identity_backstop.py` — optional QA vs Morningstar

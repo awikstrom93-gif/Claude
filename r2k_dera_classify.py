@@ -128,7 +128,8 @@ INS_BENEFITS = ["BenefitsLossesAndExpenses", "PolicyholderBenefitsAndClaimsIncur
 # ============================================================================================
 DEBT_INCL = re.compile(r"debt|borrow|notespayable|senior.?notes?|term.?loan|revolv|"
                        r"line.?of.?credit|lineofcredit|convertible|financingobligation|"
-                       r"loanspayable|subordinat|mediumterm|commercialpaper", re.I)
+                       r"loanspayable|subordinat|mediumterm|commercialpaper|"
+                       r"vehicleprogram|floor.?plan", re.I)   # incl fleet/floorplan (consolidated debt)
 LEASE_FIN_PAT = re.compile(r"(finance|capital)lease.*(liabilit|obligation)", re.I)
 LEASE_OP_PAT = re.compile(r"operatinglease.*liabilit", re.I)
 DEBT_EXCL = re.compile(r"securit|heldtomaturity|availableforsale|receivable|investment|"
@@ -226,6 +227,20 @@ def reconstruct_debt(bs):
     incl_op = (funded or 0) + (opl or 0) if (funded is not None or opl is not None) else None
     return dict(funded=funded, op_lease=opl, incl_op=incl_op,
                 provenance="+".join(p for p in prov if p))
+
+
+def is_financial_sic(sic):
+    """SIC ranges where 'debt' is a funding book, not corporate leverage -- depository &
+    non-depository credit, mortgage finance, brokers/dealers, holding & investment offices /
+    BDCs. We flag these so a financial intermediary's funding debt (e.g. Farmer Mac's ~$29B) is
+    not silently fed into the same leverage screens as an operating company. Insurers (6300-6411)
+    are caught by detect_sector. Real estate / REITs (6500s) are left as operating (normal
+    property debt)."""
+    try:
+        s = int(str(sic)[:4])
+    except (TypeError, ValueError):
+        return False
+    return (6000 <= s <= 6299) or (6700 <= s <= 6799)
 
 
 def detect_sector(d):
@@ -422,10 +437,16 @@ def run(facts_rows, sic_of=None):
         napp = sum(1 for _, s, _ in ident if s != "n/a")
         conf = ntie / napp if napp else None
         broke = [n for n, s, _ in ident if s == "BREAK"]
-        # containment sanity: funded debt cannot exceed total liabilities (flag, never silently emit)
+        # debt confidence flag (kept separate from identity breaks):
+        #   financial -> debt is a funding book, exclude from operating-company leverage screens
+        #   DEBT>LIAB -> reconstructed debt exceeds total liabilities (likely over-capture)
+        flags = []
+        if sector in ("bank", "insurer") or is_financial_sic((sic_of or {}).get(cik)):
+            flags.append("financial")
         tl = rec.get("total_liabilities")
         if dd["funded"] is not None and tl is not None and dd["funded"] > 1.05 * tl:
-            broke = broke + ["DEBT>LIAB"]
+            flags.append("DEBT>LIAB")
+        rec["debt_flag"] = ";".join(flags)
         rec_full = dict(cik=cik, fiscal_year=fy, sector=sector, taxonomy=meta[key][0],
                         form=meta[key][1], n_identities=napp, n_tie=ntie,
                         confidence=("%.2f" % conf if conf is not None else ""),
@@ -441,7 +462,11 @@ def main():
     if not FACTS.exists():
         raise SystemExit(f"!! {FACTS.name} not found -- run r2k_dera_extract.py first.")
     facts = list(csv.DictReader(open(FACTS, encoding="utf-8")))
-    out_rows, tie_rows = run(facts)
+    sic_of = {}
+    if INDEX.exists():
+        for r in csv.DictReader(open(INDEX, encoding="utf-8")):
+            sic_of.setdefault(r.get("cik", ""), r.get("sic", ""))
+    out_rows, tie_rows = run(facts, sic_of)
     fields = ["cik", "fiscal_year", "sector", "taxonomy", "form", "n_identities", "n_tie",
               "confidence", "breaks", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
@@ -449,7 +474,7 @@ def main():
               "discontinued_operations", "net_income", "net_income_to_common", "cash", "short_term_investments",
               "total_current_assets", "total_assets", "total_current_liabilities",
               "total_liabilities", "total_debt", "total_debt_incl_leases",
-              "operating_lease_liability", "parent_equity", "minority_interest_bs",
+              "operating_lease_liability", "debt_flag", "parent_equity", "minority_interest_bs",
               "total_equity", "redeemable_nci", "cfo", "cfi", "cff", "capex", "free_cash_flow"]
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")

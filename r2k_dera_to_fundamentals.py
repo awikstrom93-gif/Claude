@@ -41,7 +41,7 @@ DIRECT = {"revenue": "revenue", "net_income": "net_income", "operating_income": 
 EXTRA = ["ebitda", "depreciation_amortization", "interest_expense", "net_income_consolidated",
          "minority_interest", "discontinued_operations", "net_income_to_common",
          "total_current_assets", "total_current_liabilities", "total_liabilities", "total_equity",
-         "redeemable_nci", "total_debt_incl_leases", "operating_lease_liability",
+         "redeemable_nci", "total_debt_incl_leases", "operating_lease_liability", "debt_flag",
          "cfi", "cff", "confidence", "breaks"]
 PIPE_FIELDS = ["cik", "ticker", "name", "fiscal_year", "fye_date", "filed_date",
                "revenue", "net_income", "operating_income", "gross_profit", "tax_expense",
