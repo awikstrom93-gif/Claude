@@ -76,7 +76,10 @@ def line_item_checks(r):
     add(tl is not None and tl < 0, tl, "CRIT", "liabilities<0", f"tl={n(tl)}")
     add(ppe is not None and ta is not None and ta > 0 and ppe > ta * 1.01, (ppe or 0) - (ta or 0),
         "CRIT", "PPE>assets", f"ppe={n(ppe)} ta={n(ta)}")
-    add(mezz is not None and mezz < 0, mezz, "CRIT", "mezz<0", f"mezz={n(mezz)}")
+    # NOTE: mezz<0 and mezz>assets are NOT independent errors -- a deeply-negative-equity company
+    # (large redeemable preferred + huge accumulated deficit) legitimately has mezz = A-L-E > assets,
+    # and small negative redeemable NCI from accumulated losses is real. Balance-sheet consistency is
+    # owned authoritatively by BS_FOOTS (A=L+E+mezz); duplicating it here only produced false positives.
     add(inte is not None and inte < 0, inte, "CRIT", "interest<0", f"int={n(inte)}")
     add(nicom is not None and ni is not None and ni > 0 and nicom > ni * 1.02, (nicom or 0) - (ni or 0),
         "CRIT", "NItoCommon>parentNI", f"nicom={n(nicom)} ni={n(ni)}")
@@ -84,8 +87,6 @@ def line_item_checks(r):
     # SUSPECT -- usually wrong, occasionally legitimate
     add(debt is not None and tl is not None and tl > 0 and debt > tl * 1.05, (debt or 0) - (tl or 0),
         "SUSPECT", "debt>liabilities", f"debt={n(debt)} tl={n(tl)}")
-    add(mezz is not None and ta is not None and ta > 0 and mezz > ta, (mezz or 0) - (ta or 0),
-        "SUSPECT", "mezz>assets", f"mezz={n(mezz)} ta={n(ta)}")
     add(inte is not None and debt is not None and debt > 0 and inte > debt * 0.4, inte,
         "SUSPECT", "interest>40%ofdebt", f"int={n(inte)} debt={n(debt)}")
     add(da is not None and rev is not None and rev > 0 and da > rev, (da or 0) - (rev or 0),
