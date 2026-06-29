@@ -42,7 +42,7 @@ import os, csv, sys
 from collections import defaultdict
 
 # reuse the PRODUCTION accounting brain so the DERA side is identical to what ships
-from r2k_dera_classify import classify_filing, detect_sector, first, fnum, OPEX
+from r2k_dera_classify import classify_filing, detect_sector, first, fnum, OPEX, reconstruct_debt
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 FACTS = BASE / "dera_facts.csv"
@@ -154,10 +154,12 @@ DCASH_TAGS = ["CashAndCashEquivalentsPeriodIncreaseDecrease",
               "CashAndCashEquivalentsPeriodIncreaseDecreaseExcludingExchangeRateEffect"]
 
 
-def dera_statement(d):
-    """d = {tag: value} for one filing. Returns (sector, statement dict S, prov, dera_idents)."""
+def dera_statement(d, bs=None):
+    """d = {tag: value} for one filing; bs = balance-sheet-only {tag: value} for debt rebuild.
+    Returns (sector, statement dict S, prov, dera_idents)."""
     sector = detect_sector(d)
     r, prov, _ = classify_filing(d, sector)
+    dd = reconstruct_debt(bs if bs is not None else d)   # lease-adjusted, apples-to-apples with MS
     opex, _ = first(d, *OPEX)
     fx, _ = first(d, *FX_TAGS)
     dcash, _ = first(d, *DCASH_TAGS)
@@ -175,7 +177,7 @@ def dera_statement(d):
         # are not retained -> those articulation legs are n/a on the DERA side (a known gap the
         # pilot is meant to surface, not paper over).
         cash_begin=None, cash_end=None, ni_cf=None,
-        total_debt=r.get("total_debt"),
+        total_debt=dd["incl_op"],          # funded + operating leases (matches MS's lease-inclusive line)
     )
     return sector, S, prov, compute_identities(S, sector)
 
@@ -333,8 +335,8 @@ def load_ms(target_ciks):
 
 
 def load_dera_facts(target_ciks):
-    """{(cik, fy): {tag: value}} for target ciks, streamed."""
-    by = defaultdict(dict)
+    """({(cik,fy): {tag: value}} all facts, {(cik,fy): {tag: value}} BS-only USD facts) for debt."""
+    by = defaultdict(dict); bsby = defaultdict(dict)
     if not FACTS.exists():
         raise SystemExit(f"!! {FACTS.name} not found -- run r2k_dera_extract.py first.")
     with open(FACTS, newline="", encoding="utf-8") as f:
@@ -344,8 +346,11 @@ def load_dera_facts(target_ciks):
             v = fnum(d.get("value"))
             if v is None:
                 continue
-            by[(d["cik"], d["fiscal_year"])][d["tag"]] = v
-    return by
+            key = (d["cik"], d["fiscal_year"])
+            by[key][d["tag"]] = v
+            if d.get("stmt", "") in ("BS", "") and d.get("uom", "USD") in ("USD", ""):
+                bsby[key][d["tag"]] = v
+    return by, bsby
 
 
 def load_index():
@@ -475,7 +480,7 @@ def main():
     target_ciks = {c for _, c, _ in targets}
     ms = load_ms(target_ciks)
 
-    facts = load_dera_facts(target_ciks)
+    facts, bsfacts = load_dera_facts(target_ciks)
     idx = load_index()
 
     rep = [
@@ -494,7 +499,7 @@ def main():
             rep.append(f"[{label}] CIK {cik} FY{fy}: no data in either source -- skipped\n")
             continue
         if d:
-            sector, S_d, _, id_d = dera_statement(d)
+            sector, S_d, _, id_d = dera_statement(d, bsfacts.get((cik, fy)))
         else:
             sector, S_d, id_d = "?", {}, []
         if m:

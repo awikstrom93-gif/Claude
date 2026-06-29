@@ -22,7 +22,7 @@ SELFTEST: python r2k_dera_classify.py --selftest   (synthetic industrial + bank)
 ============================================================
 """
 from pathlib import Path
-import os, csv, sys
+import os, csv, sys, re
 from collections import defaultdict
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
@@ -118,6 +118,114 @@ PROVISION = ["ProvisionForLoanLeaseAndOtherLosses", "ProvisionForLoanAndLeaseLos
              "ProvisionForLoanLossesExpensed"]
 INS_PREMIUMS = ["PremiumsEarnedNet"]
 INS_BENEFITS = ["BenefitsLossesAndExpenses", "PolicyholderBenefitsAndClaimsIncurredNet"]
+
+
+# ============================================================================================
+# STRUCTURAL DEBT RECONSTRUCTION  --  rebuild funded debt from the balance-sheet debt lines as
+# filed, by PATTERN (so custom extension tags are caught, not just the standard taxonomy), with
+# subtotal-preference to avoid double-counting. Funded debt INCLUDES finance/capital leases
+# (analyst convention); operating leases are tracked separately for a lease-adjusted column.
+# ============================================================================================
+DEBT_INCL = re.compile(r"debt|borrow|notespayable|senior.?notes?|term.?loan|revolv|"
+                       r"line.?of.?credit|lineofcredit|convertible|financingobligation|"
+                       r"loanspayable|subordinat|mediumterm|commercialpaper", re.I)
+LEASE_FIN_PAT = re.compile(r"(finance|capital)lease.*(liabilit|obligation)", re.I)
+LEASE_OP_PAT = re.compile(r"operatinglease.*liabilit", re.I)
+DEBT_EXCL = re.compile(r"securit|heldtomaturity|availableforsale|receivable|investment|"
+                       r"repaymentsof|proceedsfrom|faceamount|fairvalue|interestrate|"
+                       r"interestexpense|rightofuseasset|netinvestmentinlease|salestypelease|"
+                       r"fixedmaturit|weightedaverage|allowance|unamortized|issuancecost|"
+                       r"financingcost|covenant|redemption|conversion|numberof|percentage|"
+                       r"paymentsof|accruedinterest|deferred|restrictedcash|grossnotes|noncash", re.I)
+GRAND_LEASE_INCL = ["DebtAndCapitalLeaseObligations", "DebtAndCapitalLeaseObligation",
+                    "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"]
+GRAND_DEBT_ONLY = ["DebtLongtermAndShorttermCombinedAmount"]
+LT_TOTAL_INCL_CUR = ["LongTermDebt"]                      # total LTD incl current maturities (excl ST/leases)
+LT_NC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"]
+LT_CUR = ["LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent", "DebtCurrent"]
+STBORROW = ["ShortTermBorrowings", "OtherShortTermBorrowings", "CommercialPaper"]
+FINLEASE_TOT = ["FinanceLeaseLiability", "CapitalLeaseObligations"]
+FINLEASE_CUR = ["FinanceLeaseLiabilityCurrent", "CapitalLeaseObligationsCurrent"]
+FINLEASE_NC = ["FinanceLeaseLiabilityNoncurrent", "CapitalLeaseObligationsNoncurrent"]
+OPLEASE_TOT = ["OperatingLeaseLiability"]
+OPLEASE_CUR = ["OperatingLeaseLiabilityCurrent"]
+OPLEASE_NC = ["OperatingLeaseLiabilityNoncurrent"]
+_SUBTOTAL = set(GRAND_LEASE_INCL + GRAND_DEBT_ONLY + LT_TOTAL_INCL_CUR + LT_NC + LT_CUR)
+_LEASE_TAGS = set(FINLEASE_TOT + FINLEASE_CUR + FINLEASE_NC + OPLEASE_TOT + OPLEASE_CUR + OPLEASE_NC)
+
+
+def _sum_present(bs, names):
+    parts = [(n, bs[n]) for n in names if bs.get(n) is not None]
+    return (sum(v for _, v in parts) if parts else None), [n for n, _ in parts]
+
+
+def _is_current(tag):
+    t = tag.lower()
+    return ("current" in t) and ("noncurrent" not in t) and ("excludingcurrent" not in t)
+
+
+def reconstruct_debt(bs):
+    """bs: {tag: value} for the filing's BALANCE-SHEET facts (USD). Returns funded debt (incl
+    finance leases), operating-lease liability, lease-adjusted total, and provenance. Never plugs a
+    vendor value -- it sums the as-filed debt lines, preferring a reported subtotal over its parts."""
+    prov = []
+    fl, fln = first(bs, *FINLEASE_TOT)
+    if fl is None:
+        flc, _ = first(bs, *FINLEASE_CUR); flnc, _ = first(bs, *FINLEASE_NC)
+        parts = [x for x in (flc, flnc) if x is not None]
+        fl = sum(parts) if parts else None
+    opl, _ = first(bs, *OPLEASE_TOT)
+    if opl is None:
+        oc, _ = first(bs, *OPLEASE_CUR); onc, _ = first(bs, *OPLEASE_NC)
+        parts = [x for x in (oc, onc) if x is not None]
+        opl = sum(parts) if parts else None
+
+    leases_in_core = False
+    core, src = first(bs, *GRAND_LEASE_INCL)
+    if core is not None:
+        leases_in_core = True; prov.append(src)
+    else:
+        core, src = first(bs, *GRAND_DEBT_ONLY)
+        if core is not None:
+            prov.append(src)
+        else:
+            ltt, ltsrc = first(bs, *LT_TOTAL_INCL_CUR)
+            stb, ssrc = _sum_present(bs, STBORROW)
+            if ltt is not None:                       # LongTermDebt already includes current maturities
+                core = ltt; prov.append(ltsrc)
+                if stb:
+                    core += stb; prov += ssrc
+            else:
+                nonc, nsrc = first(bs, *LT_NC)
+                cur, csrc = first(bs, *LT_CUR)
+                leaves_nc, leaves_cur = {}, {}
+                for t, v in bs.items():
+                    if (v is None or t in _SUBTOTAL or t in _LEASE_TAGS or t in STBORROW
+                            or LEASE_FIN_PAT.search(t) or LEASE_OP_PAT.search(t)):
+                        continue
+                    if DEBT_INCL.search(t) and not DEBT_EXCL.search(t):
+                        (leaves_cur if _is_current(t) else leaves_nc)[t] = v
+                if nonc is not None:
+                    prov.append(nsrc)
+                else:
+                    nonc = sum(leaves_nc.values()) if leaves_nc else None; prov += list(leaves_nc)
+                if cur is not None:
+                    prov.append(csrc)
+                else:
+                    cur = sum(leaves_cur.values()) if leaves_cur else None; prov += list(leaves_cur)
+                parts = [x for x in (nonc, cur, stb) if x is not None]
+                core = sum(parts) if parts else None
+                if stb:
+                    prov += ssrc
+
+    funded = core
+    if funded is not None and fl is not None and not leases_in_core:
+        funded += fl; prov.append(fln or "FinanceLease")
+    elif funded is None and fl is not None:
+        funded = fl; prov.append(fln or "FinanceLease")
+    incl_op = (funded or 0) + (opl or 0) if (funded is not None or opl is not None) else None
+    return dict(funded=funded, op_lease=opl, incl_op=incl_op,
+                provenance="+".join(p for p in prov if p))
 
 
 def detect_sector(d):
@@ -247,13 +355,11 @@ def classify_filing(d, sector):
     if tl is None and ta is not None and total_equity is not None:
         tl = ta - total_equity - (mezz or 0); liab_derived = True
         r["total_liabilities"] = tl; prov["total_liabilities"] = "Assets-Equity-Mezz(derived)"
-    # total debt = current + long-term (lease-inclusive); sum present components, else None
-    ltnc, _ = first(d, *DEBT_LTNC); lttot, _ = first(d, *DEBT_LTTOT)
-    cur, _ = first(d, *DEBT_CUR); loc, _ = first(d, *LINE_OF_CREDIT)
-    lt = ltnc if ltnc is not None else lttot
-    parts = [x for x in (lt, cur, loc) if x is not None]
-    put("total_debt", sum(parts) if parts else None,
-        "sum(LT+current+LOC)" if parts else None)
+    # total debt is reconstructed structurally in run() (needs balance-sheet-only facts); the role
+    # keys are created here so the schema is stable even if run() can't compute them.
+    put("total_debt", None, None)
+    put("total_debt_incl_leases", None, None)
+    put("operating_lease_liability", None, None)
 
     # ---------- cash flow ----------
     put("cfo", *first(d, *CFO))
@@ -288,13 +394,17 @@ def classify_filing(d, sector):
 
 
 def run(facts_rows, sic_of=None):
-    by = defaultdict(dict); meta = {}
+    by = defaultdict(dict); bs = defaultdict(dict); meta = {}
     for r in facts_rows:
         v = fnum(r["value"])
         if v is None:
             continue
         key = (r["cik"], r["fiscal_year"])
         by[key][r["tag"]] = v
+        # balance-sheet, reported-currency facts only -> debt reconstruction (stmt/uom absent in
+        # the selftest, so treat blank as eligible)
+        if r.get("stmt", "") in ("BS", "") and r.get("uom", "USD") in ("USD", ""):
+            bs[key][r["tag"]] = v
         meta[key] = (r.get("taxonomy", ""), r.get("form", ""))
     out_rows = []; tie_rows = []
     for key in sorted(by):
@@ -302,10 +412,20 @@ def run(facts_rows, sic_of=None):
         d = by[key]
         sector = detect_sector(d)
         rec, prov, ident = classify_filing(d, sector)
+        # ---- structural debt reconstruction (funded incl finance leases; op-lease separate) ----
+        dd = reconstruct_debt(bs[key])
+        rec["total_debt"] = dd["funded"]
+        rec["total_debt_incl_leases"] = dd["incl_op"]
+        rec["operating_lease_liability"] = dd["op_lease"]
+        prov["total_debt"] = dd["provenance"]
         ntie = sum(1 for _, s, _ in ident if s == "tie")
         napp = sum(1 for _, s, _ in ident if s != "n/a")
         conf = ntie / napp if napp else None
         broke = [n for n, s, _ in ident if s == "BREAK"]
+        # containment sanity: funded debt cannot exceed total liabilities (flag, never silently emit)
+        tl = rec.get("total_liabilities")
+        if dd["funded"] is not None and tl is not None and dd["funded"] > 1.05 * tl:
+            broke = broke + ["DEBT>LIAB"]
         rec_full = dict(cik=cik, fiscal_year=fy, sector=sector, taxonomy=meta[key][0],
                         form=meta[key][1], n_identities=napp, n_tie=ntie,
                         confidence=("%.2f" % conf if conf is not None else ""),
@@ -328,7 +448,8 @@ def main():
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
               "discontinued_operations", "net_income", "net_income_to_common", "cash", "short_term_investments",
               "total_current_assets", "total_assets", "total_current_liabilities",
-              "total_liabilities", "total_debt", "parent_equity", "minority_interest_bs",
+              "total_liabilities", "total_debt", "total_debt_incl_leases",
+              "operating_lease_liability", "parent_equity", "minority_interest_bs",
               "total_equity", "redeemable_nci", "cfo", "cfi", "cff", "capex", "free_cash_flow"]
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -359,7 +480,8 @@ def selftest():
                   "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 1900,
                   "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": 2000,
                   "MinorityInterest": 100, "NetCashProvidedByUsedInOperatingActivities": 150,
-                  "PaymentsToAcquirePropertyPlantAndEquipment": 40, "LongTermDebt": 800, "DebtCurrent": 50}
+                  "PaymentsToAcquirePropertyPlantAndEquipment": 40,
+                  "LongTermDebtNoncurrent": 800, "LongTermDebtCurrent": 50}
     bank = {"InterestAndDividendIncomeOperating": 600, "InterestExpenseOperating": 200,
             "InterestIncomeExpenseNet": 400, "ProvisionForLoanLeaseAndOtherLosses": 10,
             "NoninterestIncome": 120, "NoninterestExpense": 250,
