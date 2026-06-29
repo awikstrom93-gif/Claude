@@ -574,7 +574,7 @@ def run(facts_rows, sic_of=None):
             ok = abs(lhs - rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(lhs), abs(rhs)))
             return ("tie" if ok else "BREAK", lhs - rhs)
         if sector == "commercial":
-            da_is, da_cf = sum_da(isf[key]), sum_da(cff[key])
+            da_cf = sum_da(cff[key])    # cash flow is authoritative for TOTAL operating D&A
             # GAP-FILL ONLY: keep the standard-tag D&A where present (don't override a good value);
             # only fill from the cash-flow add-back when the income-statement role found nothing
             # (e.g. FirstCash, which tags D&A under non-standard names). Recompute EBITDA only then.
@@ -583,7 +583,11 @@ def run(facts_rows, sic_of=None):
                 oi = rec.get("operating_income")
                 if oi is not None:
                     rec["ebitda"] = oi + da_cf
-            ident.append(("DA_CONSISTENCY(IS=CF)", *cons(da_is, da_cf)))
+            # CONSISTENCY is only valid when the income statement states a TOTAL D&A (a recognized
+            # subtotal). Most income statements bury D&A in COGS/SG&A and break out only part of it,
+            # so comparing that partial figure to the CF's full add-back is apples-to-oranges -> n/a.
+            da_is_total = next((isf[key][t] for t in DA_SUBTOTAL if isf[key].get(t) is not None), None)
+            ident.append(("DA_CONSISTENCY(IS=CF)", *cons(da_is_total, da_cf)))
         else:
             # banks/insurers: D&A mixes premium/discount & intangible amortization -> not a clean
             # operating concept and EBITDA is n/a, so don't impose the consistency check.
