@@ -149,7 +149,10 @@ TEMP_EQUITY_TOTAL = ["TemporaryEquityCarryingAmountIncludingPortionAttributableT
 TEMP_EQUITY_PARENT = ["TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmount"]
 # components that legitimately sit between liabilities and equity, or are NCI/preferred not yet in
 # total equity. When A != L + E, the identity gives the GAP size; these tags name which line it is.
-BS_GAP_EQUITY = ["MinorityInterest", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+BS_GAP_EQUITY = ["MinorityInterest", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+                 # partnership / LLC noncontrolling interest (equity-class NCI) the probe found at the gap
+                 "MembersEquityAttributableToNoncontrollingInterest", "MinorityInterestInPreferredUnitHolders",
+                 "MinorityInterestInOperatingPartnerships", "MinorityInterestInLimitedPartnerships"]
 BS_GAP_MEZZ = (TEMP_EQUITY_TOTAL + TEMP_EQUITY_PARENT + REDEEM_NCI +
                ["TemporaryEquityValueExcludingAdditionalPaidInCapital", "PreferredStockRedemptionAmount",
                 "RedeemablePreferredStockCarryingAmount"])
@@ -159,8 +162,9 @@ BS_GAP_MEZZ = (TEMP_EQUITY_TOTAL + TEMP_EQUITY_PARENT + REDEEM_NCI +
 # as-filed custom tag. EXCLUDE per-share / share-count tags (not a dollar carrying amount).
 TEMP_EQ_PAT = re.compile(r"temporaryequity|subjecttopossibleredemption|subjecttoredemption|"
                          r"redeemablecommon|redeemableconvertible|redeemablepreferred|"
-                         r"mandatorilyredeemable|mandatoryredemption", re.I)
-TEMP_EQ_EXCL = re.compile(r"pershare|shares|numberof|pershareamount", re.I)
+                         r"mandatorilyredeemable|mandatoryredemption|"
+                         r"redeemablenoncontrollinginterest", re.I)   # redeemable NCI = mezzanine (ASC 480)
+TEMP_EQ_EXCL = re.compile(r"pershare|shares|numberof|pershareamount|fairvaluedisclosure", re.I)
 DEBT_LTNC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
              "ConvertibleDebtNoncurrent", "ConvertibleNotesPayableNoncurrent", "SeniorNotesNoncurrent",
              "UnsecuredLongTermDebt", "NotesPayableNoncurrent"]
