@@ -185,6 +185,9 @@ EQ_INCL = ["StockholdersEquityIncludingPortionAttributableToNoncontrollingIntere
 NCI_BS = ["MinorityInterest"]
 REDEEM_NCI = ["RedeemableNoncontrollingInterestEquityCarryingAmount",
               "RedeemableNoncontrollingInterestEquityOtherCarryingAmount",
+              "RedeemableNoncontrollingInterestEquityCommonCarryingAmount",
+              "RedeemableNoncontrollingInterestEquityPreferredCarryingAmount",
+              "NoncontrollingInterestRedeemable",
               "RedeemableNoncontrollingInterestEquityFairValue"]
 TEMP_EQUITY_TOTAL = ["TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests"]
 TEMP_EQUITY_PARENT = ["TemporaryEquityCarryingAmountAttributableToParent", "TemporaryEquityCarryingAmount"]
@@ -196,16 +199,23 @@ BS_GAP_EQUITY = ["MinorityInterest", "StockholdersEquityIncludingPortionAttribut
                  "MinorityInterestInOperatingPartnerships", "MinorityInterestInLimitedPartnerships"]
 BS_GAP_MEZZ = (TEMP_EQUITY_TOTAL + TEMP_EQUITY_PARENT + REDEEM_NCI +
                ["TemporaryEquityValueExcludingAdditionalPaidInCapital", "PreferredStockRedemptionAmount",
-                "RedeemablePreferredStockCarryingAmount"])
+                "RedeemablePreferredStockCarryingAmount", "TotalMezzanineEquity",
+                "PreferredStockValueNotIncludedInStockholdersEquity", "PreferredStockOfSubsidiaryValue"])
 # temporary / redeemable equity (the mezzanine slot) is often under CUSTOM extension tags -- SPAC
 # Class A shares "subject to possible redemption", redeemable preferred/common -- that a fixed list
 # misses. Identify it structurally by name (like debt), so the BS_FOOTS gap can be filled from the
 # as-filed custom tag. EXCLUDE per-share / share-count tags (not a dollar carrying amount).
-TEMP_EQ_PAT = re.compile(r"temporaryequity|subjecttopossibleredemption|subjecttoredemption|"
+TEMP_EQ_PAT = re.compile(r"temporaryequity|mezzanine|subjecttopossibleredemption|subjecttoredemption|"
                          r"redeemablecommon|redeemableconvertible|redeemablepreferred|"
                          r"mandatorilyredeemable|mandatoryredemption|"
-                         r"redeemablenoncontrollinginterest", re.I)   # redeemable NCI = mezzanine (ASC 480)
-TEMP_EQ_EXCL = re.compile(r"pershare|shares|numberof|pershareamount|fairvaluedisclosure", re.I)
+                         r"redeemablenoncontrollinginterest|"          # redeemable NCI = mezzanine (ASC 480)
+                         r"convertiblepreferred|preferredstockvalue|"  # custom preferred series outside equity
+                         r"preferredstockofsubsidiary|warrantsandrights", re.I)
+# EXCLUDE per-share / share-count tags (not a dollar carrying amount) AND the look-alike traps the
+# broad probe surfaced: liquidation-preference disclosures and product-WARRANTY accruals (a liability,
+# not mezzanine -- adding it would foot the sheet with the wrong classification).
+TEMP_EQ_EXCL = re.compile(r"pershare|shares|numberof|pershareamount|fairvaluedisclosure|"
+                          r"liquidationpreference|productwarranty|parorstated", re.I)
 DEBT_LTNC = ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
              "ConvertibleDebtNoncurrent", "ConvertibleNotesPayableNoncurrent", "SeniorNotesNoncurrent",
              "UnsecuredLongTermDebt", "NotesPayableNoncurrent"]
@@ -670,6 +680,16 @@ def classify_filing(d, sector):
             hit = next(((v, t, "mezz") for t, v in d.items()
                         if v is not None and t not in used and _close(v, gap)
                         and TEMP_EQ_PAT.search(t) and not TEMP_EQ_EXCL.search(t)), None)
+        if hit is None:
+            # multi-series mezzanine: a redeemable NCI split into common + preferred, or several
+            # preferred series -- no single line equals the gap, but their SUM does. Adopt the summed
+            # temporary/redeemable-equity lines only when the sum closes the gap (identity-gated).
+            mtags = [(t, v) for t, v in d.items() if v is not None and t not in used
+                     and TEMP_EQ_PAT.search(t) and not TEMP_EQ_EXCL.search(t)]
+            if len(mtags) > 1:
+                s = sum(v for _, v in mtags)
+                if _close(s, gap):
+                    hit = (s, "+".join(sorted(t for t, _ in mtags)), "mezz")
         if hit:
             v, t, slot = hit
             if slot == "equity":
@@ -993,9 +1013,20 @@ def selftest():
         "IncomeTaxExpenseBenefit": 30, "ProfitLoss": 120, "NetIncomeLoss": 120,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # mezzanine gap-fill: the sheet doesn't foot because redeemable/temporary equity (between
+    # liabilities and permanent equity) is uncaptured. (7) a single custom convertible-preferred
+    # series = the gap; (8) two preferred series that SUM to the gap (multi-series mezzanine).
+    mezz_single = {k: v * _m for k, v in {
+        "Assets": 1000, "Liabilities": 600, "StockholdersEquity": 300,
+        "ConvertiblePreferredStockSeriesC": 100,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    mezz_sum = {k: v * _m for k, v in {
+        "Assets": 1000, "Liabilities": 600, "StockholdersEquity": 200,
+        "ConvertiblePreferredStockSeriesH": 120, "ConvertiblePreferredStockSeriesI": 80,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
-                   ("5", splitnci), ("6", splitcogs)):
+                   ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     out, tie = run(facts)
@@ -1020,6 +1051,10 @@ def selftest():
     sc = next(r for r in out if r["cik"] == "6")
     ok_scogs = (sc["cost_of_revenue"] == 600 * _m and sc["gross_profit"] == 400 * _m
                 and "IS_GP" not in sc["breaks"])
+    mz1 = next(r for r in out if r["cik"] == "7")
+    ok_mz1 = (mz1["redeemable_nci"] == 100 * _m and "BS_FOOTS" not in mz1["breaks"])
+    mz2 = next(r for r in out if r["cik"] == "8")
+    ok_mz2 = (mz2["redeemable_nci"] == 200 * _m and "BS_FOOTS" not in mz2["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1029,6 +1064,10 @@ def selftest():
           f"IS_NCI tie): {'PASS' if ok_snci else 'FAIL'}")
     print(f"  SELFTEST split-COGS aggregation (cost_of_revenue={sc['cost_of_revenue']}, "
           f"IS_GP tie): {'PASS' if ok_scogs else 'FAIL'}")
+    print(f"  SELFTEST mezzanine gap-fill, single series (redeemable_nci={mz1['redeemable_nci']}, "
+          f"BS_FOOTS tie): {'PASS' if ok_mz1 else 'FAIL'}")
+    print(f"  SELFTEST mezzanine gap-fill, multi-series sum (redeemable_nci={mz2['redeemable_nci']}, "
+          f"BS_FOOTS tie): {'PASS' if ok_mz2 else 'FAIL'}")
 
 
 if __name__ == "__main__":
