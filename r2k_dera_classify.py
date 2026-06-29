@@ -36,7 +36,8 @@ CF_TOL_REL, CF_TOL_ABS = 0.01, 2_000_000.0      # cash-flow legs -- materiality 
 # rather than data error -- CF_BS_CASH (restricted-cash tag coverage), RE_ROLL (cumulative-effect
 # accounting adoptions / declared-vs-paid dividend timing / treasury retirements). They are
 # high-value diagnostics to surface, not trust penalties.
-NON_GATING = {"CF_BS_CASH(CFend=cash+restr)", "RE_ROLL(RE[t]=RE[t-1]+NI-Div)"}
+NON_GATING = {"CF_BS_CASH(CFend=cash+restr)", "RE_ROLL(RE[t]=RE[t-1]+NI-Div)",
+              "DA_CONSISTENCY(IS=CF)"}   # IS vs CF D&A legitimately differs by presentation
 
 
 def fnum(x):
@@ -69,6 +70,12 @@ TAX = ["IncomeTaxExpenseBenefit", "IncomeTaxExpenseBenefitContinuingOperations",
 NI_PARENT = ["NetIncomeLoss", "ProfitLossAttributableToOwnersOfParent"]
 NI_CONSOL = ["ProfitLoss", "NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest"]
 NI_COMMON = ["NetIncomeLossAvailableToCommonStockholdersBasic"]
+# equity-method earnings (may sit ABOVE or BELOW the tax line -- both are valid GAAP) and the
+# reported after-tax continuing-operations subtotal, used to make the IS_NI cascade tie either way.
+EQUITY_METHOD = ["IncomeLossFromEquityMethodInvestments",
+                 "IncomeLossFromContinuingOperationsAfterEquityMethodInvestments"]
+INC_CONT_AFTERTAX = ["IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest",
+                     "IncomeLossFromContinuingOperations"]
 DISC_OPS = ["IncomeLossFromDiscontinuedOperationsNetOfTax",
             "IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity",
             "DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax"]
@@ -135,26 +142,31 @@ RETAINED = ["RetainedEarningsAccumulatedDeficit", "RetainedEarningsAccumulatedDe
 DIV_TOTAL = ["PaymentsOfDividends"]                      # total cash dividends paid (parent)
 DIV_COMMON = ["PaymentsOfDividendsCommonStock"]
 DIV_PREF = ["PaymentsOfDividendsPreferredStockAndPreferenceStock", "PaymentsOfDividendsPreferredStock"]
-# operating D&A (for EBITDA + the IS<->CF check): depreciation + amortization of intangibles only.
-# Prefer a reported subtotal; else sum components, EXCLUDING financing/premium/lease amortizations.
+# operating D&A (for EBITDA + the IS<->CF diagnostic): depreciation/depletion + intangible
+# amortization ONLY. Prefer a reported subtotal; else sum depreciation components plus a separately
+# tagged intangible amortization. Deliberately NARROW -- generic "amortization" on the cash flow
+# also covers deferred-cost / lease / debt-discount amortizations that are not operating D&A.
 DA_SUBTOTAL = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccretionNet",
                "DepreciationAndAmortization", "DepreciationAmortizationAndDepletion"]
-DA_PAT = re.compile(r"depreciation|amortization|depletion", re.I)
-DA_EXCL = re.compile(r"financingcost|debtissuance|debtdiscount|ofpremium|ofdiscount|deferred|"
-                     r"unearned|assetretirement|operatinglease|rightofuse|accumulated|"
-                     r"beforetax|netoftax|period$|usefullife|straightlinebasis", re.I)
+DA_DEP_PAT = re.compile(r"depreciation|depletion", re.I)   # catches DepreciationAndAmortization* too
+DA_INTANGIBLE = ["AmortizationOfIntangibleAssets", "AmortizationOfAcquiredIntangibleAssets",
+                 "AmortizationOfFiniteLivedIntangibleAssets", "AmortizationOfDevelopedTechnology"]
 SBC_TAGS = ["ShareBasedCompensation", "ShareBasedCompensationExpense",
             "AllocatedShareBasedCompensationExpense", "StockBasedCompensation"]
 
 
 def sum_da(facts):
-    """operating depreciation & amortization from a statement's facts: reported subtotal if present,
-    else the sum of depreciation/intangible-amortization components (excluding financing/lease/etc.)."""
+    """operating depreciation & amortization: a reported D&A subtotal if present, else depreciation/
+    depletion components plus a separately-tagged intangible amortization (narrow on purpose)."""
     for t in DA_SUBTOTAL:
         if facts.get(t) is not None:
             return facts[t]
-    comps = [v for tg, v in facts.items()
-             if v is not None and DA_PAT.search(tg) and not DA_EXCL.search(tg)]
+    comps = [v for tg, v in facts.items() if v is not None and DA_DEP_PAT.search(tg)]
+    intang = next((facts[t] for t in DA_INTANGIBLE if facts.get(t) is not None), None)
+    # avoid double counting: only add intangible amortization if no component already covers it
+    if intang is not None and not any("amortization" in tg.lower() for tg in
+                                      [t for t, v in facts.items() if v is not None and DA_DEP_PAT.search(t)]):
+        comps.append(intang)
     return sum(comps) if comps else None
 # bank / insurer markers and lines
 BANK_NII_NET = ["InterestIncomeExpenseNet", "InterestIncomeExpenseAfterProvisionForLoanLoss"]
@@ -363,8 +375,15 @@ def classify_filing(d, sector):
     # net income: consolidated (incl NCI) and parent
     consol, tcon = first(d, *NI_CONSOL)
     disc, _ = first(d, *DISC_OPS)
-    if consol is None and pretax is not None and tax is not None:
-        consol, tcon = pretax - tax + (disc or 0), "Pretax-Tax+Disc(derived)"
+    em, _ = first(d, *EQUITY_METHOD)            # equity-method earnings (placement varies)
+    cont_at, _ = first(d, *INC_CONT_AFTERTAX)   # reported after-tax continuing-ops subtotal (incl EM)
+    if consol is None:
+        # prefer the reported after-tax continuing subtotal (it already contains equity-method and
+        # other below-the-line items); else the standard Pretax - Tax + Disc derivation.
+        if cont_at is not None:
+            consol, tcon = cont_at + (disc or 0), "ContinuingAfterTax+Disc(derived)"
+        elif pretax is not None and tax is not None:
+            consol, tcon = pretax - tax + (disc or 0), "Pretax-Tax+Disc(derived)"
     parent, tpar = first(d, *NI_PARENT)
     nci_is, tnci = first(d, *NCI_IS)
     if parent is None and consol is not None and nci_is is not None:
@@ -484,8 +503,21 @@ def classify_filing(d, sector):
         tie("IS_GP(Rev-COGS)", r.get("gross_profit"),
             (None if r.get("revenue") is None or r.get("cost_of_revenue") is None
              else r["revenue"] - r["cost_of_revenue"]))
-    tie("IS_NI(Pretax-Tax+Disc=Consol)", r.get("net_income_consolidated"),
-        (None if pretax is None or tax is None else pretax - tax + (disc or 0)))
+    # IS_NI: consolidated NI = Pretax - Tax + Disc, with equity-method earnings counted whether the
+    # filer struck them above or below the tax line, or via the reported continuing-ops subtotal.
+    # The cascade ties if the reported consol matches ANY valid construction (pick the closest).
+    consol_rep = r.get("net_income_consolidated")
+    cands = []
+    if pretax is not None and tax is not None:
+        base = pretax - tax + (disc or 0)
+        cands.append(base)
+        if em is not None:
+            cands.append(base + em)            # equity method struck below the tax line
+    if cont_at is not None:
+        cands.append(cont_at + (disc or 0))    # reported after-tax continuing subtotal + disc
+    ni_rhs = (min(cands, key=lambda c: abs(c - consol_rep)) if (cands and consol_rep is not None)
+              else (cands[0] if cands else None))
+    tie("IS_NI(Pretax-Tax+Disc=Consol)", consol_rep, ni_rhs)
     tie("IS_NCI(Consol-Parent=NCI)",
         (None if consol is None or parent is None else consol - parent), nci_is)
     # cash-flow articulation (within-year), judged on MATERIALITY (1% / $2M) -- cash-flow
@@ -543,14 +575,14 @@ def run(facts_rows, sic_of=None):
             return ("tie" if ok else "BREAK", lhs - rhs)
         if sector == "commercial":
             da_is, da_cf = sum_da(isf[key]), sum_da(cff[key])
-            # use the most complete operating D&A (CF lists every add-back) -> also fixes EBITDA
-            # where the income statement buries D&A in COGS/SG&A under non-standard tags.
-            da_best = da_cf if da_cf is not None else (da_is if da_is is not None
-                                                       else rec.get("depreciation_amortization"))
-            if da_best is not None:
-                rec["depreciation_amortization"] = da_best
+            # GAP-FILL ONLY: keep the standard-tag D&A where present (don't override a good value);
+            # only fill from the cash-flow add-back when the income-statement role found nothing
+            # (e.g. FirstCash, which tags D&A under non-standard names). Recompute EBITDA only then.
+            if rec.get("depreciation_amortization") is None and da_cf is not None:
+                rec["depreciation_amortization"] = da_cf
                 oi = rec.get("operating_income")
-                rec["ebitda"] = (oi + da_best) if oi is not None else rec.get("ebitda")
+                if oi is not None:
+                    rec["ebitda"] = oi + da_cf
             ident.append(("DA_CONSISTENCY(IS=CF)", *cons(da_is, da_cf)))
         else:
             # banks/insurers: D&A mixes premium/discount & intangible amortization -> not a clean
