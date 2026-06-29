@@ -38,6 +38,8 @@ CONC = BASE / "R2000G_Concentration.xlsx"               # step 8 (optional)
 BIO = BASE / "R2000G_Biotech.xlsx"                       # step 9 (optional)
 OUT = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
 CHART_BACKUP = BASE / os.environ.get("R2KG_CHART_BACKUP", "R2000G_charts_backup.xlsx")
+FLAGS = BASE / "plausibility_flags.csv"      # reliability tier per (cik, fy)  -- from r2k_plausibility
+FUND = BASE / "fundamentals_dera.csv"        # confidence / breaks / provenance -- from r2k_dera_classify
 
 TITLE = Font(bold=True, size=14, color="1F4E5F")
 H = Font(bold=True, size=11, color="1F4E5F")
@@ -413,6 +415,99 @@ def key_charts(wb):
         ws.add_chart(ch, "A69")
 
 
+def data_reliability(wb):
+    """A per-name DATA RELIABILITY tab: for the latest snapshot of every constituent, its reliability
+    tier (clean/watch/review), three-statement tie-out confidence, which identities break, the
+    plausibility flags, and the provenance of any engineered values -- so the Committee can see, at a
+    glance, that each number is tied, sanity-checked, and auditable. Degrades gracefully if inputs are
+    absent. Returns the sheet name (or None)."""
+    import csv as _csv, json as _json
+    if not FLAGS.exists():
+        return None
+    flags = list(_csv.DictReader(open(FLAGS, encoding="utf-8")))
+    # latest snapshot row per cik
+    latest = {}
+    for r in flags:
+        c, fy = r.get("cik"), r.get("fiscal_year", "")
+        if fy.isdigit() and (c not in latest or fy > latest[c]["fiscal_year"]):
+            latest[c] = r
+    # provenance + breaks from fundamentals (latest year per cik)
+    prov = {}
+    if FUND.exists():
+        for r in _csv.DictReader(open(FUND, encoding="utf-8")):
+            c, fy = r.get("cik"), r.get("fiscal_year", "")
+            if fy.isdigit() and (c not in prov or fy > prov[c]["fiscal_year"]):
+                prov[c] = r
+    # index weight + ticker (optional, via r2k_plausibility loaders + the cik map)
+    cik2w, cik2tkr = {}, {}
+    try:
+        from r2k_plausibility import load_weights, load_cikmap
+        weights, cm = load_weights(), load_cikmap()
+        for nt, w in (weights or {}).items():
+            c = cm.get(nt)
+            if c:
+                cik2w[c] = w
+    except Exception:
+        pass
+    cmap = BASE / "security_cik_map.json"
+    if cmap.exists():
+        try:
+            for tk, v in _json.load(open(cmap)).items():
+                c = v.get("cik") if isinstance(v, dict) else v
+                c = str(int(c)) if str(c).isdigit() else str(c)
+                cik2tkr.setdefault(c, tk)
+        except Exception:
+            pass
+
+    rows = []
+    for c, fr in latest.items():
+        pr = prov.get(c, {})
+        rows.append({
+            "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0),
+            "fy": fr.get("fiscal_year", ""), "tier": fr.get("tier", ""),
+            "conf": fr.get("confidence", "") or pr.get("confidence", ""),
+            "breaks": pr.get("breaks", ""),
+            "flags": ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x),
+            "prov": pr.get("provenance", ""),
+        })
+    rows.sort(key=lambda x: (-x["wt"], x["cik"]))
+    tw = sum(cik2w.values()) or 0.0
+    clean_w = sum(r["wt"] for r in rows if r["tier"] == "clean")
+
+    ws = wb.create_sheet("Data Reliability")
+    ws.cell(1, 1, "Data Reliability — three-statement tie-out, sanity, and provenance").font = TITLE
+    sub = (f"Per constituent (latest fiscal year). Reliability = identities tie (three statements "
+           f"articulate) AND values are plausible. "
+           + (f"{100*clean_w/tw:.1f}% of index weight is CLEAN." if tw else
+              "(index weights unavailable — name-count view.)"))
+    ws.cell(2, 1, sub).font = BODY
+    ws.cell(3, 1, "clean = ties out and plausible   |   watch = a cash-flow leg or a benign flag   |   "
+                  "review = a P&L/balance-sheet break or a critical flag (resolve before relying on it)"
+            ).font = Font(size=9, italic=True, color="555555")
+    headers = ["Ticker", "CIK", "Index Wt %", "Latest FY", "Reliability", "Tie-out conf",
+               "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
+    _hdr_row(ws, 5, headers)
+    tier_fill = {"clean": PatternFill("solid", fgColor="E2EFDA"),
+                 "watch": PatternFill("solid", fgColor="FFF2CC"),
+                 "review": PatternFill("solid", fgColor="FCE4D6")}
+    for i, r in enumerate(rows, start=6):
+        ws.cell(i, 1, r["tkr"]); ws.cell(i, 2, r["cik"])
+        ws.cell(i, 3, round(r["wt"], 3) if r["wt"] else None)
+        ws.cell(i, 4, r["fy"])
+        tc = ws.cell(i, 5, r["tier"]); tc.fill = tier_fill.get(r["tier"], PatternFill())
+        ws.cell(i, 6, r["conf"]); ws.cell(i, 7, r["breaks"])
+        ws.cell(i, 8, r["flags"]); ws.cell(i, 9, r["prov"])
+        for col in range(1, 10):
+            ws.cell(i, col).font = BODY
+    widths = [10, 12, 11, 10, 12, 12, 24, 26, 60]
+    for col, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + col)].width = w
+    ws.freeze_panes = "A6"
+    print(f"  Data Reliability tab: {len(rows)} names"
+          + (f", {100*clean_w/tw:.1f}% weight clean" if tw else ""))
+    return "Data Reliability"
+
+
 def main():
     missing = [f.name for f in (PERF, QUAL, ATTR) if not f.exists()]
     if missing:
@@ -426,6 +521,9 @@ def main():
 
     exec_summary(wb, srcwb)
     reading_guide(wb); glossary(wb)
+    rel_tab = data_reliability(wb)
+    if rel_tab is None:
+        print("  (Data Reliability tab skipped: plausibility_flags.csv not found -- run r2k_plausibility.py)")
     copied = []
     for src, orig, new in SHEETS:
         tag = paths[src]
@@ -443,7 +541,7 @@ def main():
     else:
         key_charts(wb)
     # explicit tab order: Exec Summary, Reading Guide, Glossary, Contents, Key Charts, then data tabs
-    front = ["Executive Summary", "Reading Guide", "Glossary", "Contents", "Key Charts"]
+    front = ["Executive Summary", "Reading Guide", "Glossary", "Data Reliability", "Contents", "Key Charts"]
     order = [s for s in front if s in wb.sheetnames] + [nm for nm in copied if nm not in front]
     wb._sheets.sort(key=lambda s: order.index(s.title) if s.title in order else 999)
     wb.save(OUT)
