@@ -60,3 +60,21 @@ temporal_cik_map.json
 universe_ciks.csv
 inventory_report.txt
 _archive_*/
+
+# Panel-era generated outputs (rebuilt by r2k_universe / the view modules / probes, not source)
+r2k_panel.csv
+r2k_panel_q.csv
+cik_audit.csv
+cik_audit.txt
+fundamentals_dera_resolved.csv
+plausibility_flags.csv
+plausibility_report.txt
+audit_findings.csv
+audit_report.txt
+r2k_factor_spreads*.txt
+r2k_valuation*.txt
+r2k_solvency.txt
+r2k_persistence.txt
+benchmark_reconcile.txt
+cf_articulation_probe.txt
+*_probe.txt
