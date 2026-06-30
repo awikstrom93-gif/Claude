@@ -98,9 +98,22 @@ def is_biotech(h):
     return any(k in il for k in BIO_KEYWORDS)
 
 
+def find(pats):
+    """First file in BASE matching any of the glob patterns (or None)."""
+    for p in pats:
+        c = list(BASE.glob(p))
+        if c:
+            return c[0]
+    return None
+
+
+def sp600g_holdings():
+    return find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+
+
 # ============================ the panel (one row per snapshot x constituent) ============================
 # identity columns first, then every company_metrics field.
-ID_COLS = ["year", "snapshot", "ticker", "nt", "name", "cik", "fy0", "weight",
+ID_COLS = ["index", "year", "snapshot", "ticker", "nt", "name", "cik", "fy0", "weight",
            "gics", "ms_industry", "is_biotech", "covered", "reason"]
 METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equity", "assets",
                "cash", "debt", "cfo", "fcf", "sector", "rev_yoy", "rev_cagr3", "ni_yoy",
@@ -111,24 +124,20 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
 PANEL_COLS = ID_COLS + METRIC_COLS
 
 
-def build_panel(verbose=True):
-    """Build the canonical panel: list of dicts, one per (snapshot x constituent), covered or not.
-    Uncovered names are kept (metrics blank, reason set) so the panel is the FULL historical ledger."""
-    nfacts = norm_facts(load_fundamentals())
-    base, temporal = load_maps()
-    tmap = ticker_cik_map(base, temporal)
-    hold = load_monthly_holdings(find_holdings(), verbose=False)
+def _index_rows(index, holdings_path, nfacts, tmap):
+    """All (snapshot x constituent) rows for one index from its holdings workbook."""
+    hold = load_monthly_holdings(holdings_path, verbose=False)
     spine = annual_spine(hold)
     rows = []
     for year in sorted(spine):
         snap = spine[year]
         for h in hold[snap]:
             cik, cf, reason = resolve_identity(h, tmap, nfacts)
-            rec = {"year": year, "snapshot": str(snap)[:10], "ticker": h.get("ticker", ""),
-                   "nt": h["nt"], "name": h.get("name", ""), "cik": cik or "", "fy0": "",
-                   "weight": h.get("weight", 0.0) or 0.0, "gics": h.get("gics", ""),
-                   "ms_industry": h.get("ms_industry", ""), "is_biotech": int(is_biotech(h)),
-                   "covered": 0, "reason": reason}
+            rec = {"index": index, "year": year, "snapshot": str(snap)[:10],
+                   "ticker": h.get("ticker", ""), "nt": h["nt"], "name": h.get("name", ""),
+                   "cik": cik or "", "fy0": "", "weight": h.get("weight", 0.0) or 0.0,
+                   "gics": h.get("gics", ""), "ms_industry": h.get("ms_industry", ""),
+                   "is_biotech": int(is_biotech(h)), "covered": 0, "reason": reason}
             for k in METRIC_COLS:
                 rec[k] = None
             if cf:
@@ -137,15 +146,34 @@ def build_panel(verbose=True):
                     rec["reason"] = "no-fy0-before-snapshot"
                 else:
                     cm = company_metrics(cf, fy0)
-                    rec["fy0"] = fy0
-                    rec["covered"] = 1
+                    rec["fy0"], rec["covered"] = fy0, 1
                     for k in METRIC_COLS:
                         rec[k] = cm.get(k)
             rows.append(rec)
+    return rows, len(spine)
+
+
+def build_panel(verbose=True):
+    """Build the canonical panel: one row per (index x snapshot x constituent), covered or not.
+    R2000G always; S&P 600 Growth too if its holdings workbook is present. Uncovered names are
+    kept (metrics blank, reason set) so the panel is the FULL historical ledger for each index."""
+    nfacts = norm_facts(load_fundamentals())
+    base, temporal = load_maps()
+    tmap = ticker_cik_map(base, temporal)
+    rows, nyr = _index_rows("R2KG", find_holdings(), nfacts, tmap)
+    sp = sp600g_holdings()
+    if sp:
+        sp_rows, _ = _index_rows("SP600G", sp, nfacts, tmap)
+        rows += sp_rows
     if verbose:
-        ny = len(spine); ncov = sum(r["covered"] for r in rows)
-        print(f"  panel: {len(rows)} constituent-years across {ny} snapshots, {ncov} covered "
-              f"({100*ncov/len(rows):.1f}%)")
+        for idx in ("R2KG", "SP600G"):
+            ir = [r for r in rows if r["index"] == idx]
+            if ir:
+                nc = sum(r["covered"] for r in ir)
+                print(f"  panel[{idx}]: {len(ir)} constituent-years, {nc} covered "
+                      f"({100*nc/len(ir):.1f}%)")
+        if not sp:
+            print("  (no S&P 600 Growth holdings file found -- panel is R2000G-only)")
     return rows
 
 
@@ -187,6 +215,7 @@ def load_panel(path=PANEL_CSV):
             r["fy0"] = int(_to_num(r["fy0"])) if r.get("fy0") not in (None, "") else None
             r["covered"] = int(_to_num(r.get("covered")) or 0)
             r["is_biotech"] = int(_to_num(r.get("is_biotech")) or 0)
+            r["index"] = r.get("index") or "R2KG"   # old caches without the column are R2000G
             rows.append(r)
     return rows
 
@@ -214,12 +243,15 @@ def quality_trends_from_panel(rows):
 ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"
 
 
-def get_panel():
-    """Load the cached panel, building+caching it if absent. The single entry point views use."""
+def get_panel(index="R2KG"):
+    """Load the cached panel, building+caching it if absent. The single entry point views use.
+    Defaults to R2000G rows only (so existing R2KG views are unaffected by adding SP600G to the
+    panel); pass index=None for ALL rows, or index="SP600G" for the comparison universe."""
     if PANEL_CSV.exists():
-        return load_panel()
-    rows = build_panel(); write_panel(rows)
-    return rows
+        rows = load_panel()
+    else:
+        rows = build_panel(); write_panel(rows)
+    return rows if index is None else [r for r in rows if r["index"] == index]
 
 
 def diff_sheet(sheet, hdr, rows, src=ANALYTICS, tol=0.05, keycols=1):
@@ -273,9 +305,10 @@ def main():
     rows = build_panel(verbose=True)
     write_panel(rows)
     print(f"  -> {PANEL_CSV.name}")
-    print("\n  VERIFY -- Quality Trends headline straight off the panel (base-first identity):")
+    r2kg = [r for r in rows if r["index"] == "R2KG"]
+    print("\n  VERIFY -- R2000G Quality Trends headline straight off the panel (base-first identity):")
     print(f"    {'year':<6}{'TotRev$B':>10}{'TotNI$B':>10}{'%Unprof':>9}{'covered':>9}")
-    for y, rev, ni, unprof, n in quality_trends_from_panel(rows):
+    for y, rev, ni, unprof, n in quality_trends_from_panel(r2kg):
         flag = "  <- 2016 NI should be ~13.2 (was 6.5 under the legacy temporal-first bug)" if y == 2016 else ""
         print(f"    {y:<6}{rev:>10.1f}{ni:>10.1f}{unprof:>9.1f}{n:>9}{flag}")
 
