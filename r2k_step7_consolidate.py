@@ -459,6 +459,9 @@ def data_reliability(wb):
         except Exception:
             pass
 
+    def _short(s, n=180):
+        return s if len(s) <= n else s[:n - 1] + "…"
+
     rows = []
     for c, fr in latest.items():
         pr = prov.get(c, {})
@@ -468,21 +471,28 @@ def data_reliability(wb):
             "conf": fr.get("confidence", "") or pr.get("confidence", ""),
             "breaks": pr.get("breaks", ""),
             "flags": ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x),
-            "prov": pr.get("provenance", ""),
+            "prov": _short(pr.get("provenance", "")),
         })
+    # focus on the CURRENT index constituents (those carrying weight); the full universe -- S&P 600
+    # Growth comparison names and former holdings -- is in fundamentals_dera.csv / plausibility_flags.csv.
+    if any(r["wt"] for r in rows):
+        rows = [r for r in rows if r["wt"] > 0]
     rows.sort(key=lambda x: (-x["wt"], x["cik"]))
-    tw = sum(cik2w.values()) or 0.0
+    tw = sum(r["wt"] for r in rows) or 0.0
     clean_w = sum(r["wt"] for r in rows if r["tier"] == "clean")
+    from collections import Counter as _Counter
+    tc = _Counter(r["tier"] for r in rows)
 
     ws = wb.create_sheet("Data Reliability")
     ws.cell(1, 1, "Data Reliability — three-statement tie-out, sanity, and provenance").font = TITLE
-    sub = (f"Per constituent (latest fiscal year). Reliability = identities tie (three statements "
-           f"articulate) AND values are plausible. "
+    sub = (f"{len(rows):,} index constituents (latest fiscal year). Reliability = identities tie (three "
+           f"statements articulate) AND values are plausible. "
            + (f"{100*clean_w/tw:.1f}% of index weight is CLEAN." if tw else
               "(index weights unavailable — name-count view.)"))
     ws.cell(2, 1, sub).font = BODY
-    ws.cell(3, 1, "clean = ties out and plausible   |   watch = a cash-flow leg or a benign flag   |   "
-                  "review = a P&L/balance-sheet break or a critical flag (resolve before relying on it)"
+    ws.cell(3, 1, f"by name:  clean {tc['clean']}   |   watch {tc['watch']}   |   review {tc['review']}"
+                  "        clean = ties out and plausible · watch = a cash-flow leg or benign flag · "
+                  "review = a P&L/balance-sheet break or critical flag (resolve before relying on it)"
             ).font = Font(size=9, italic=True, color="555555")
     headers = ["Ticker", "CIK", "Index Wt %", "Latest FY", "Reliability", "Tie-out conf",
                "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
