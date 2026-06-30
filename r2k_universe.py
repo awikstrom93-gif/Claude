@@ -90,34 +90,44 @@ def resolve_identity(h, tmap, nfacts, snap_dt=None, temporal=None, skey=None):
     from 2021; WMGI -> Wright NV from 2016; ARRY -> Array Technologies once Array Biopharma is gone),
     with no hand-coded overrides.  When base==the only candidate (the ~13k normal names) nothing
     changes.  Survivorship-mapped file CIKs are harmless here -- a stale entity loses on freshness."""
-    cands = []
-    for c in (tmap.get(h["nt"]), h.get("cik")):       # base first, then the holdings-file CIK
-        if c:
-            cands.append(c)
-    if temporal is not None and skey:
-        td = temporal.get(skey) or temporal.get(f"{skey[:4]}-04-30") or {}   # year-April fallback
-        tc = td.get(h.get("ticker")) or td.get(str(h.get("ticker") or "").upper()) or td.get(h["nt"])
-        if tc:
-            cands.append(tc)
-    best = None
-    for i, cand in enumerate(cands):
-        cik = canon_cik(cand)
-        cf = fund_for(nfacts, cik)
+    def _fy0(cf):
         if not cf:
-            continue
-        fy0 = pick_fy0(cf, snap_dt) if snap_dt is not None else None
-        if fy0 is None:
-            ys = [y for y in cf if isinstance(y, int)]
-            fy0 = max(ys) if ys else None
-        if fy0 is None:
-            continue
-        key = (fy0, -i)                                # freshest fy0 wins; ties -> lower i (base first)
-        if best is None or key > best[0]:
-            best = (key, cik, cf)
-    if best:
-        return best[1], best[2], "ok"
-    cik = canon_cik(cands[0]) if cands else None
-    return cik, None, ("no-cik-for-ticker" if not cik else "no-fundamentals")
+            return None
+        if snap_dt is not None:
+            fy0 = pick_fy0(cf, snap_dt)
+            if fy0 is not None:
+                return fy0
+        ys = [y for y in cf if isinstance(y, int)]
+        return max(ys) if ys else None
+
+    base_cik = canon_cik(tmap.get(h["nt"]))
+    base_cf = fund_for(nfacts, base_cik)
+    base_fy0 = _fy0(base_cf)
+
+    # CONSERVATIVE: keep base unless base is DEFUNCT/stale -- its newest fiscal year is older than the
+    # normal one-year reporting lag (fy0 < snapshot_year - 1), the signature of an entity that stopped
+    # filing. Only THEN do we switch to a still-filing alternative. Normal names (base fy0 = Y-1) and
+    # the merger-overlap years (both entities filing -> tie) are untouched, so base-first is preserved.
+    snap_year = snap_dt.year if snap_dt is not None else None
+    base_stale = base_fy0 is None or (snap_year is not None and base_fy0 < snap_year - 1)
+    chosen_cik, chosen_cf = base_cik, base_cf
+    if base_stale:
+        alts = [h.get("cik")]
+        if temporal is not None and skey:
+            td = temporal.get(skey) or temporal.get(f"{skey[:4]}-04-30") or {}
+            alts.append(td.get(h.get("ticker")) or td.get(str(h.get("ticker") or "").upper()) or td.get(h["nt"]))
+        best = base_fy0 if base_fy0 is not None else -1
+        for cand in alts:
+            cik = canon_cik(cand)
+            if not cik or cik == base_cik:
+                continue
+            cf = fund_for(nfacts, cik)
+            fy0 = _fy0(cf)
+            if fy0 is not None and fy0 > best:        # switch only to a strictly FRESHER alternative
+                best, chosen_cik, chosen_cf = fy0, cik, cf
+    if chosen_cik is None:
+        return None, None, "no-cik-for-ticker"
+    return chosen_cik, chosen_cf, ("ok" if chosen_cf else "no-fundamentals")
 
 
 def is_biotech(h):
