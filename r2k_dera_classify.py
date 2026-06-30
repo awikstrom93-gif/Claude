@@ -881,7 +881,49 @@ def classify_filing(d, sector):
     return r, prov, ident
 
 
-def run(facts_rows, sic_of=None):
+_NAME_SUFFIX = ("incorporated", "corporation", "company", "holdings", "holding", "group", "industries",
+                "international", "enterprises", "inc", "corp", "co", "ltd", "llc", "lp", "plc", "the",
+                "sa", "nv", "ag", "trust", "partners")
+
+
+def _norm_name(s):
+    s = re.sub(r"[^a-z0-9 ]", "", (s or "").lower())
+    for suf in _NAME_SUFFIX:
+        s = re.sub(rf"\b{suf}\b", "", s)
+    return re.sub(r"\s+", "", s)
+
+
+def _flag_predecessors(out_rows, name_of):
+    """Mark a CIK's earlier years as PREDECESSOR when the SEC registrant NAME changes substantially AND
+    total assets step >=4x at the same boundary -- the signature of a reverse merger (a different,
+    usually larger, entity previously occupied this CIK). Conservative on purpose: a same-name
+    divestiture (real shrink) or a rebrand that keeps the core name is NOT flagged."""
+    from collections import defaultdict as _dd
+    by = _dd(list)
+    for r in out_rows:
+        if str(r.get("fiscal_year", "")).isdigit():
+            by[r["cik"]].append(r)
+    for cik, rows in by.items():
+        rows.sort(key=lambda r: r["fiscal_year"])
+        boundary = None
+        for i in range(1, len(rows)):
+            a0, a1 = rows[i - 1].get("total_assets"), rows[i].get("total_assets")
+            n0 = _norm_name(name_of.get((cik, rows[i - 1]["fiscal_year"])))
+            n1 = _norm_name(name_of.get((cik, rows[i]["fiscal_year"])))
+            if not a0 or not a1 or len(n0) < 3 or len(n1) < 3:
+                continue
+            step = max(a0, a1) / min(a0, a1)
+            # "substantially different" = neither normalized name contains the other (a rebrand that
+            # keeps the core name -- "Acme" -> "Acme Bio" -- is NOT a different entity).
+            diff = (n0 not in n1) and (n1 not in n0)
+            if step >= 4 and diff:
+                boundary = i      # rows[:i] precede the current entity
+        if boundary is not None:
+            for r in rows[:boundary]:
+                r["entity_flag"] = "PREDECESSOR"
+
+
+def run(facts_rows, sic_of=None, name_of=None):
     by = defaultdict(dict); bs = defaultdict(dict)
     isf = defaultdict(dict); cff = defaultdict(dict); meta = {}
     for r in facts_rows:
@@ -1047,11 +1089,12 @@ def run(facts_rows, sic_of=None):
         rec_full = dict(cik=cik, fiscal_year=fy, sector=st["sector"], taxonomy=meta[key][0],
                         form=meta[key][1], n_identities=napp, n_tie=ntie,
                         confidence=("%.2f" % conf if conf is not None else ""),
-                        breaks=";".join(broke), provenance=prov_summary, **rec)
+                        breaks=";".join(broke), provenance=prov_summary, entity_flag="", **rec)
         out_rows.append(rec_full)
         for n, s, resid in ident:
             tie_rows.append(dict(cik=cik, fiscal_year=fy, sector=st["sector"], identity=n, result=s,
                                  residual=("" if resid is None else "%.0f" % resid)))
+    _flag_predecessors(out_rows, name_of or {})    # mark reverse-merger predecessor years
     return out_rows, tie_rows
 
 
@@ -1059,13 +1102,16 @@ def main():
     if not FACTS.exists():
         raise SystemExit(f"!! {FACTS.name} not found -- run r2k_dera_extract.py first.")
     facts = list(csv.DictReader(open(FACTS, encoding="utf-8")))
-    sic_of = {}
+    sic_of, name_of = {}, {}
     if INDEX.exists():
         for r in csv.DictReader(open(INDEX, encoding="utf-8")):
             sic_of.setdefault(r.get("cik", ""), r.get("sic", ""))
-    out_rows, tie_rows = run(facts, sic_of)
+            fy = r.get("fy", "")
+            if str(fy).isdigit():
+                name_of[(r.get("cik", ""), str(fy))] = r.get("name", "")
+    out_rows, tie_rows = run(facts, sic_of, name_of)
     fields = ["cik", "fiscal_year", "sector", "taxonomy", "form", "n_identities", "n_tie",
-              "confidence", "breaks", "provenance", "revenue", "cost_of_revenue", "gross_profit",
+              "confidence", "breaks", "provenance", "entity_flag", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
               "pretax_income", "tax_expense", "net_income_consolidated", "minority_interest",
               "discontinued_operations", "net_income", "net_income_to_common", "cash",
@@ -1298,6 +1344,17 @@ def selftest():
     ok_cg = (cg["cost_of_revenue"] == 900 * _m and "IS_GP" not in cg["breaks"])
     ci = next(r for r in out if r["cik"] == "18")
     ok_ci = (ci["cost_of_revenue"] == 900 * _m and "IS_GP" not in ci["breaks"])
+    # predecessor (reverse-merger) detection: name change + >=4x asset step flags the earlier years;
+    # a same-name divestiture (real shrink, no name change) must NOT be flagged.
+    pred = [{"cik": "X", "fiscal_year": y, "total_assets": a * _m, "entity_flag": ""}
+            for y, a in (("2013", 20000), ("2014", 21000), ("2015", 3000), ("2016", 3200))]
+    _flag_predecessors(pred, {("X", "2013"): "BigCorp Industries Inc", ("X", "2014"): "BigCorp Industries Inc",
+                              ("X", "2015"): "NewCo Therapeutics Inc", ("X", "2016"): "NewCo Therapeutics Inc"})
+    div = [{"cik": "Y", "fiscal_year": y, "total_assets": a * _m, "entity_flag": ""}
+           for y, a in (("2014", 20000), ("2015", 3000))]
+    _flag_predecessors(div, {("Y", "2014"): "Acme Corp", ("Y", "2015"): "Acme Corp"})
+    ok_pred = ([r["entity_flag"] for r in pred] == ["PREDECESSOR", "PREDECESSOR", "", ""]
+               and all(r["entity_flag"] == "" for r in div))
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1331,6 +1388,8 @@ def selftest():
           f"{'PASS' if ok_cg else 'FAIL'}")
     print(f"  SELFTEST impairment-in-COGS (cost_of_revenue={ci['cost_of_revenue']}, expect 900M): "
           f"{'PASS' if ok_ci else 'FAIL'}")
+    print(f"  SELFTEST predecessor-entity detection (reverse merger flagged, divestiture not): "
+          f"{'PASS' if ok_pred else 'FAIL'}")
 
 
 if __name__ == "__main__":

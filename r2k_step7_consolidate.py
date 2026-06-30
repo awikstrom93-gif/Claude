@@ -466,9 +466,13 @@ def data_reliability(wb):
     # its historical values verified here. The full universe (R2000G constituents across the review
     # period, plus the S&P 600 Growth comparison names) is included; filter by ticker/year/tier.
     rows = []
+    pred_excluded = 0
     for fr in flags:
         c, fy = fr.get("cik"), fr["fiscal_year"]
         pr = prov.get((c, fy), {})
+        if pr.get("entity_flag") == "PREDECESSOR":      # a different entity occupied this CIK pre-merger
+            pred_excluded += 1
+            continue
         rows.append({
             "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0), "fy": fy,
             "tier": fr.get("tier", ""), "conf": fr.get("confidence", "") or pr.get("confidence", ""),
@@ -491,6 +495,8 @@ def data_reliability(wb):
            + (f"{100*clean_w/tw:.1f}% of CURRENT index weight is CLEAN." if tw else
               "(index weights unavailable — name-count view.)"))
     ws.cell(2, 1, sub).font = BODY
+    if pred_excluded:
+        ws.cell(2, 1).value = sub + f"  ({pred_excluded:,} predecessor-entity years excluded — reverse mergers.)"
     ws.cell(3, 1, f"company-years:  clean {tc['clean']:,}   |   watch {tc['watch']:,}   |   review {tc['review']:,}"
                   "      clean = ties out and plausible · watch = a cash-flow leg or benign flag · "
                   "review = a P&L/balance-sheet break or critical flag"

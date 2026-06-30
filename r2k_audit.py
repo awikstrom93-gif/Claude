@@ -102,8 +102,13 @@ def main():
     rows = list(csv.DictReader(open(FUND, encoding="utf-8")))
     for r in rows:
         for k, v in list(r.items()):
-            if k not in ("cik", "fiscal_year", "sector", "taxonomy", "form", "breaks", "provenance", "debt_flag"):
+            if k not in ("cik", "fiscal_year", "sector", "taxonomy", "form", "breaks", "provenance",
+                         "debt_flag", "entity_flag"):
                 r[k] = fnum(v)
+    # drop reverse-merger PREDECESSOR years -- a different entity occupied the CIK then, so its values
+    # (and YoY jumps at the boundary) are not this constituent's and must not pollute the audit.
+    predecessor = {(r["cik"], r["fiscal_year"]) for r in rows if r.get("entity_flag") == "PREDECESSOR"}
+    rows = [r for r in rows if (r["cik"], r["fiscal_year"]) not in predecessor]
     by_key = {(r["cik"], r["fiscal_year"]): r for r in rows}
     by_cik = defaultdict(list)
     for r in rows:
