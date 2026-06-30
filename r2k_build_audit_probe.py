@@ -20,9 +20,23 @@ from datetime import date
 from collections import defaultdict
 
 from r2k_step3_analytics import (load_fundamentals, load_maps, pick_fy0, company_metrics,
-                                  find_holdings, _cik_in_facts)
+                                  find_holdings)
 from r2k_step6_index_comparison import norm_facts, fund_for, ticker_cik_map, annual_spine
 from r2k_perf_io import load_monthly_holdings, ntk
+
+
+def _cik_in_facts(facts, cand):
+    """Whichever string form of a candidate CIK is a key in facts, else None.
+    (Defined locally so the probe runs against any version of step3.)"""
+    if not cand:
+        return None
+    forms = (str(cand), str(cand).zfill(10))
+    if str(cand).isdigit():
+        forms = forms + (str(int(cand)),)
+    for form in forms:
+        if form in facts:
+            return form
+    return None
 
 
 def temp_first(temporal, base, skey, raw, nt, facts):
