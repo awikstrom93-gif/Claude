@@ -32,6 +32,7 @@ from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
+from r2k_universe import norm_facts, fund_for, ticker_cik_map   # consolidated: one definition
 
 OUT = BASE / "R2000G_Biotech.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
@@ -92,28 +93,7 @@ def theme_of(ind):
     return "Other"
 
 
-def norm_facts(facts):
-    out = {}
-    for k, v in facts.items():
-        try: out[str(int(k))] = v
-        except (TypeError, ValueError): out[str(k)] = v
-    return out
-
-
-def ticker_cik_map(base, temporal):
-    tmap = dict(base)
-    for _, d in (temporal or {}).items():
-        for tk, c in d.items():
-            if c: tmap.setdefault(ntk(tk), str(c))
-    return tmap
-
-
-def fund_for(nf, cik):
-    if not cik: return None
-    try: return nf.get(str(int(cik)))
-    except (TypeError, ValueError): return nf.get(str(cik))
-
-
+# norm_facts / ticker_cik_map / fund_for imported from r2k_universe (single source of truth).
 def annual_spine(holdings):
     out = {}
     for d in sorted(holdings):

@@ -33,6 +33,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE
+from r2k_universe import annual_spine   # consolidated: one definition
 
 OUT = BASE / "R2000G_Concentration.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
@@ -58,15 +59,7 @@ def _hdr(ws, row, hs, fill=HDR):
         x.alignment = Alignment(horizontal="center", wrap_text=True)
 
 
-def annual_spine(holdings):
-    out = {}
-    for d in sorted(holdings):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
-
-
+# annual_spine imported from r2k_universe (single source of truth).
 def weight_conc(rows):
     ws = sorted((h["weight"] for h in rows), reverse=True)
     tw = sum(ws) or 1e-9

@@ -36,6 +36,7 @@ from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
+from r2k_universe import norm_facts, fund_for, ticker_cik_map   # consolidated: one definition
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
@@ -45,28 +46,7 @@ COH_LABEL = {"profitable": "Profitable", "fallen": "Fallen (was profitable)",
              "never_profitable": "Never profitable", "unknown": "Unknown (no NI)"}
 
 
-def ticker_cik_map(base, temporal):
-    """Flat ntk(ticker) -> CIK from the security map + every temporal snapshot, so holdings
-    rows WITHOUT a CIK column (the R2000G file) can still be resolved by ticker."""
-    tmap = dict(base)
-    for _, d in (temporal or {}).items():
-        for tk, c in d.items():
-            if c: tmap.setdefault(ntk(tk), str(c))
-    return tmap
-
-
-def norm_facts(facts):
-    """Re-key fundamentals by canonical int-string CIK so any zero-padding matches."""
-    out = {}
-    for k, v in facts.items():
-        try: out[str(int(k))] = v
-        except (TypeError, ValueError): out[str(k)] = v
-    return out
-
-def fund_for(nf, cik):
-    if not cik: return None
-    try: return nf.get(str(int(cik)))
-    except (TypeError, ValueError): return nf.get(str(cik))
+# ticker_cik_map / norm_facts / fund_for are imported from r2k_universe (single source of truth).
 
 
 def nearest_prior(sorted_dates, target):
