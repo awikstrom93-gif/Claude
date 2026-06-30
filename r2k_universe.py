@@ -81,18 +81,43 @@ def canon_cik(raw):
     except (TypeError, ValueError): return str(raw)
 
 
-def resolve_identity(h, tmap, nfacts):
-    """(cik, cf, reason).  BASE-FIRST: the security map (point-in-time-ish) wins; the holdings row's
-    own CIK is only a fallback for tickers the map lacks.  Vendor holdings files SURVIVORSHIP-map a
-    reused ticker to its CURRENT issuer (e.g. a 2016 'CZR' row carries Eldorado's CIK, '2016 BBBY'
-    carries Overstock's), which is wrong point-in-time -- so we must NOT prefer the file's CIK."""
-    raw = tmap.get(h["nt"]) or h.get("cik")
-    cik = canon_cik(raw)
-    cf = fund_for(nfacts, cik)
-    if not raw:   reason = "no-cik-for-ticker"
-    elif not cf:  reason = "no-fundamentals"
-    else:         reason = "ok"
-    return cik, cf, reason
+def resolve_identity(h, tmap, nfacts, snap_dt=None, temporal=None, skey=None):
+    """(cik, cf, reason).  POINT-IN-TIME by FISCAL-YEAR FRESHNESS: among the candidate CIKs for this
+    ticker (base security map, holdings-file CIK, temporal map), pick the one whose pick_fy0 is the
+    NEWEST fiscal year <= the snapshot -- i.e. the entity actually FILING 10-Ks at that date -- with
+    base-first as the tie-break.  This tracks ticker reuse through mergers automatically: a reused
+    ticker resolves to whichever issuer was alive then (CZR -> Caesars pre-2021, Eldorado-Caesars
+    from 2021; WMGI -> Wright NV from 2016; ARRY -> Array Technologies once Array Biopharma is gone),
+    with no hand-coded overrides.  When base==the only candidate (the ~13k normal names) nothing
+    changes.  Survivorship-mapped file CIKs are harmless here -- a stale entity loses on freshness."""
+    cands = []
+    for c in (tmap.get(h["nt"]), h.get("cik")):       # base first, then the holdings-file CIK
+        if c:
+            cands.append(c)
+    if temporal is not None and skey:
+        td = temporal.get(skey) or temporal.get(f"{skey[:4]}-04-30") or {}   # year-April fallback
+        tc = td.get(h.get("ticker")) or td.get(str(h.get("ticker") or "").upper()) or td.get(h["nt"])
+        if tc:
+            cands.append(tc)
+    best = None
+    for i, cand in enumerate(cands):
+        cik = canon_cik(cand)
+        cf = fund_for(nfacts, cik)
+        if not cf:
+            continue
+        fy0 = pick_fy0(cf, snap_dt) if snap_dt is not None else None
+        if fy0 is None:
+            ys = [y for y in cf if isinstance(y, int)]
+            fy0 = max(ys) if ys else None
+        if fy0 is None:
+            continue
+        key = (fy0, -i)                                # freshest fy0 wins; ties -> lower i (base first)
+        if best is None or key > best[0]:
+            best = (key, cik, cf)
+    if best:
+        return best[1], best[2], "ok"
+    cik = canon_cik(cands[0]) if cands else None
+    return cik, None, ("no-cik-for-ticker" if not cik else "no-fundamentals")
 
 
 def is_biotech(h):
@@ -149,12 +174,13 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
 PANEL_COLS = ID_COLS + METRIC_COLS
 
 
-def _index_rows(index, hold, snaps, nfacts, tmap):
+def _index_rows(index, hold, snaps, nfacts, tmap, temporal=None):
     """All (snapshot x constituent) rows for one index over the given snapshot dates."""
     rows = []
     for snap in snaps:
+        skey = str(snap)[:10]
         for h in hold[snap]:
-            cik, cf, reason = resolve_identity(h, tmap, nfacts)
+            cik, cf, reason = resolve_identity(h, tmap, nfacts, snap_dt=snap, temporal=temporal, skey=skey)
             rec = {"index": index, "year": snap.year, "snapshot": str(snap)[:10],
                    "ticker": h.get("ticker", ""), "nt": h["nt"], "name": h.get("name", ""),
                    "cik": cik or "", "fy0": "", "weight": h.get("weight", 0.0) or 0.0,
@@ -188,7 +214,7 @@ def build_panel(verbose=True):
             continue
         hold = load_monthly_holdings(path, verbose=False)
         spine = annual_spine(hold)
-        rows += _index_rows(index, hold, sorted(spine.values()), nfacts, tmap)
+        rows += _index_rows(index, hold, sorted(spine.values()), nfacts, tmap, temporal)
     if verbose:
         _report_coverage(rows, "constituent-years")
         if not any(r["index"] == "SP600G" for r in rows):
@@ -218,7 +244,7 @@ def build_quarterly_panel(verbose=True):
             continue
         hold = load_monthly_holdings(path, verbose=False)
         snaps = sorted(d for d in hold if d.month in QUARTER_MONTHS)
-        rows += _index_rows(index, hold, snaps, nfacts, tmap)
+        rows += _index_rows(index, hold, snaps, nfacts, tmap, temporal)
     if verbose:
         if rows:
             nq = len({(r["index"], r["snapshot"]) for r in rows})
