@@ -142,7 +142,10 @@ def load_membership():
                 i = idx.get(col); return r[i] if (i is not None and i < len(r) and r[i] is not None) else None
             tk = g("Ticker")
             if tk is None: continue
+            cikv = g("CIK")   # the index provider's own point-in-time CIK -- authoritative when present
+            cik_file = str(int(to_f(cikv))).zfill(10) if (cikv is not None and to_f(cikv) is not None) else None
             rows.append({"nt": ntk(tk), "ticker": str(tk).strip(), "name": str(g("Name") or ""),
+                "cik_file": cik_file,
                 "weight": to_f(g("Portfolio Weighting %")) or 0.0, "gics": str(g("GICS Sector") or ""),
                 "ms_sector": str(g("Morningstar Sector") or ""), "ms_industry": str(g("Morningstar Industry") or "")})
         snaps[yr] = rows
@@ -157,12 +160,24 @@ def load_maps():
     temporal = json.load(open(TEMPORAL)) if TEMPORAL.exists() else {}
     return base, temporal
 
-def resolve_cik(facts, base, temporal, raw, nt, skey):
-    cand = (temporal.get(skey, {}).get(raw) or temporal.get(skey, {}).get(raw.upper()) or base.get(nt))
+def _cik_in_facts(facts, cand):
+    """Return whichever string form of a candidate CIK is a key in facts, else None."""
     if not cand: return None
-    for form in (str(cand), str(cand).zfill(10), str(int(cand)) if str(cand).isdigit() else str(cand)):
+    forms = (str(cand), str(cand).zfill(10))
+    if str(cand).isdigit():
+        forms = forms + (str(int(cand)),)
+    for form in forms:
         if form in facts: return form
     return None
+
+def resolve_cik(facts, base, temporal, raw, nt, skey, cik_file=None):
+    # The holdings file's own CIK column is the index provider's point-in-time designation --
+    # prefer it over re-deriving from the ticker maps (which mis-maps reused tickers, e.g. CZR/BBBY
+    # in 2016 resolved to the wrong Caesars/Bed-Bath entity and swung index NI by ~$6.7B).
+    hit = _cik_in_facts(facts, cik_file)
+    if hit: return hit
+    cand = (temporal.get(skey, {}).get(raw) or temporal.get(skey, {}).get(raw.upper()) or base.get(nt))
+    return _cik_in_facts(facts, cand)
 
 def pick_fy0(cf, snap_dt):
     cutoff = snap_dt - timedelta(days=FILING_LAG)
@@ -253,7 +268,7 @@ def build(facts, snaps, base, temporal):
         present_wt = {k: 0.0 for k in ("revenue","net_income","operating_income","gross_profit",
                        "stockholders_equity","total_assets","total_debt","operating_cash_flow")}
         for mem in snaps[yr]:
-            cik = resolve_cik(facts, base, temporal, mem["ticker"], mem["nt"], skey)
+            cik = resolve_cik(facts, base, temporal, mem["ticker"], mem["nt"], skey, mem.get("cik_file"))
             if not cik: continue
             fy0 = pick_fy0(facts[cik], snap_dt)
             if fy0 is None: continue

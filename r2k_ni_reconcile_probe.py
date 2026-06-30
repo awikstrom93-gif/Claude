@@ -40,7 +40,7 @@ def step3_view(year, facts, snaps, base, temporal):
     snap_dt = date(year, 4, 30)
     skey = f"{year:04d}-04-30"
     for mem in snaps.get(year, []):
-        cik = resolve_cik(facts, base, temporal, mem["ticker"], mem["nt"], skey)
+        cik = resolve_cik(facts, base, temporal, mem["ticker"], mem["nt"], skey, mem.get("cik_file"))
         if not cik:
             continue
         fy0 = pick_fy0(facts[cik], snap_dt)
