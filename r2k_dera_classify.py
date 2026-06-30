@@ -32,6 +32,9 @@ OUT = BASE / "fundamentals_dera.csv"
 TIEOUT = BASE / "tieout_report.csv"
 TOL_REL, TOL_ABS = 0.005, 5000.0                # identity tie tolerance (BS / IS -- should tie exactly)
 CF_TOL_REL, CF_TOL_ABS = 0.01, 2_000_000.0      # cash-flow legs -- materiality (reconciliation noise)
+CF_TOL_CASH = 0.02                              # cash-flow legs also tie within 2% of the CASH balance:
+# CF_FOOT compares the NET CHANGE in cash, so a small FX/M&A residual on a large cash position trips
+# the abs floor though it is immaterial to the cash statement. A 2%-of-cash floor clears that noise.
 # reported but NOT counted toward confidence: these break for legitimate, identifiable reasons
 # rather than data error -- CF_BS_CASH (restricted-cash tag coverage), RE_ROLL (cumulative-effect
 # accounting adoptions / declared-vs-paid dividend timing / treasury retirements). They are
@@ -871,13 +874,15 @@ def classify_filing(d, sector):
     tie("IS_NI(Pretax-Tax+Disc=Consol)", consol_rep, ni_rhs)
     tie("IS_NCI(Consol-Parent=NCI)",
         (None if consol is None or parent is None else consol - parent), nci_is)
-    # cash-flow articulation (within-year), judged on MATERIALITY (1% / $2M) -- cash-flow
+    # cash-flow articulation (within-year), judged on MATERIALITY (1% / $2M / 2% of cash) -- cash-flow
     # reconciliations carry small "other"/rounding noise that isn't a real break. The CF foots,
     # and its ending cash equals BS cash + restricted. The cross-year roll-forward is added in run().
+    _cashref = abs(r.get("cash_total") or r.get("cash") or 0.0)   # tolerate CF noise up to 2% of cash
+    _cf_ab = max(CF_TOL_ABS, CF_TOL_CASH * _cashref)
     tie("CF_FOOT(CFO+CFI+CFF+FX=dCash)",
         (None if (r.get("cfo") is None or r.get("cfi") is None or r.get("cff") is None)
-         else r["cfo"] + r["cfi"] + r["cff"] + (fx_c or 0)), dcash, rel=CF_TOL_REL, ab=CF_TOL_ABS)
-    tie("CF_BS_CASH(CFend=cash+restr)", cf_end, cash_total, rel=CF_TOL_REL, ab=CF_TOL_ABS)
+         else r["cfo"] + r["cfi"] + r["cff"] + (fx_c or 0)), dcash, rel=CF_TOL_REL, ab=_cf_ab)
+    tie("CF_BS_CASH(CFend=cash+restr)", cf_end, cash_total, rel=CF_TOL_REL, ab=_cf_ab)
     return r, prov, ident
 
 
@@ -1039,7 +1044,8 @@ def run(facts_rows, sic_of=None, name_of=None):
         if lhs is None or rhs is None:
             st["ident"].append(("CASH_ROLL(cash[t]=cash[t-1]+dCash)", "n/a", None))
         else:
-            ok = abs(lhs - rhs) <= max(CF_TOL_ABS, CF_TOL_REL * max(abs(lhs), abs(rhs)))
+            _cr = abs(rec.get("cash_total") or rec.get("cash") or 0.0)
+            ok = abs(lhs - rhs) <= max(CF_TOL_ABS, CF_TOL_CASH * _cr, CF_TOL_REL * max(abs(lhs), abs(rhs)))
             st["ident"].append(("CASH_ROLL(cash[t]=cash[t-1]+dCash)", "tie" if ok else "BREAK", lhs - rhs))
 
         # ---- retained-earnings roll-forward: RE[t] = RE[t-1] + NI(parent) - dividends ----
