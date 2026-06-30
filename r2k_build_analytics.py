@@ -10,7 +10,8 @@ RUN:  python r2k_build_analytics.py        # rebuilds Russell2000Growth_Analytic
 """
 import openpyxl
 
-from r2k_universe import build_panel, write_panel, PANEL_CSV, BASE
+from r2k_universe import (build_panel, write_panel, PANEL_CSV, BASE,
+                          build_quarterly_panel, PANEL_Q_CSV)
 import r2k_view_quality_trends as qt
 import r2k_view_cohorts as co
 import r2k_view_dupont as du
@@ -21,10 +22,15 @@ VIEWS = [qt, co, du, cc]   # each exposes write_sheet(wb, panel) with the step7 
 
 
 def main():
-    # always rebuild the panel so the workbook can never be stale vs the current engine
+    # always rebuild BOTH panels so no downstream tab can be stale vs the current engine: the annual
+    # panel (most tabs) AND the quarterly panel (the timing-sensitive factor-spread / valuation cuts).
     panel = build_panel(verbose=True)
     write_panel(panel)
     print(f"  -> {PANEL_CSV.name}")
+    qpanel = build_quarterly_panel(verbose=True)
+    if qpanel:
+        write_panel(qpanel, PANEL_Q_CSV)
+        print(f"  -> {PANEL_Q_CSV.name}")
     r2kg = [r for r in panel if r["index"] == "R2KG"]
 
     wb = openpyxl.Workbook()
