@@ -202,20 +202,31 @@ def build(by_quarter=False):
     return keys, per, summary, by_quarter
 
 
-def write_sheet(wb):
-    """Add the 'Quality Factor Spreads' tab to an openpyxl workbook (loads its own panel + returns)."""
+def write_sheet(wb, by_quarter=True):
+    """Add the 'Quality Factor Spreads' tab to an openpyxl workbook (loads its own panel + returns).
+    Defaults to the QUARTERLY (forward-3m, quarter-end) cut: it is robust to a single fiscal year's
+    melt-up, where the annual forward-12m cut throws a -100% outlier (the 2025->2026 GP/Assets row).
+    Pass by_quarter=False for the annual diagnostic cut."""
     from openpyxl.styles import Font, PatternFill, Alignment
-    yy, per_year, summary, bq = build()
+    yy, per_year, summary, bq = build(by_quarter=by_quarter)
+    if not yy and by_quarter:                      # no quarterly panel yet -> annual cut beats no tab
+        yy, per_year, summary, bq = build(by_quarter=False)
     if not yy:
         return None
     ws = wb.create_sheet("Quality Factor Spreads")
-    ws.cell(1, 1, "Did quality pay inside R2000G?  Forward-12m long-short quintile spreads (%)").font = Font(bold=True, size=12)
+    span = "Forward-3m, quarter-end" if bq else "Forward-12m, April-snapshot"
+    ws.cell(1, 1, f"Did quality pay inside R2000G?  {span} long-short quintile spreads (%)").font = Font(bold=True, size=12)
+    cadence_note = ("Quarter-end snapshots, return earned the next 3 months -- the ROBUST cut: a single "
+                    "fiscal year's melt-up can't dominate a 40+ observation series the way it does the "
+                    "annual one (see the median row)." if bq else
+                    "April snapshot, return earned the next 12 months -- the ANNUAL cut (quarterly holdings "
+                    "absent); with ~10 observations a single melt-up year (2026) swings the mean, so read "
+                    "the MEDIAN row.")
     ws.cell(2, 1, "Top-quality minus bottom-quality quintile, cap-weighted within quintile (each name "
-                  "capped at 5% of quintile weight), forward returns winsorized at 1/99 pct. No look-ahead: "
-                  "factor known at the April snapshot, return earned the next 12 months. Composite = mean of "
-                  "z-scored factors (most stable). Quality is defensive: positive in busts (2016, 2022), "
-                  "negative in melt-ups.").font = Font(size=9, italic=True, color="555555")
-    head = ["Forward year", "Index R%"] + LABELS
+                  "capped at 5% of quintile weight), forward returns winsorized at 1/99 pct. No look-ahead. "
+                  "Composite = mean of z-scored factors (most stable). Quality is defensive: positive in "
+                  "busts (2016, 2022), negative in melt-ups. " + cadence_note).font = Font(size=9, italic=True, color="555555")
+    head = [("Forward quarter" if bq else "Forward year"), "Index R%"] + LABELS
     HDR = PatternFill("solid", fgColor="1F4E5F")
     for c, h in enumerate(head, 1):
         x = ws.cell(4, c, h); x.fill = HDR; x.font = Font(bold=True, color="FFFFFF", size=10)
@@ -233,7 +244,8 @@ def write_sheet(wb):
                 cell.fill = pos if v > 0 else neg
         r += 1
     r += 1
-    for name, agg in (("mean / yr", 0), ("median / yr", 3), ("hit-rate %", 1), ("cumulative", 2)):
+    per = "qtr" if by_quarter else "yr"
+    for name, agg in ((f"mean / {per}", 0), (f"median / {per}", 3), ("hit-rate %", 1), ("cumulative", 2)):
         ws.cell(r, 1, name).font = Font(bold=True)
         for c, lab in enumerate(LABELS, 3):
             m = summary[lab][agg]

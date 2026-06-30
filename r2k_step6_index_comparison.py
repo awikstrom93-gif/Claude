@@ -172,8 +172,9 @@ def build():
     facts = norm_facts(load_fundamentals())
     base, temporal = load_maps()
     tmap = ticker_cik_map(base, temporal)
-    hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
-    hs = find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+    from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
+    hr = find_annual("R2KG")
+    hs = find_annual("SP600G")
     if not hr or not hs:
         raise SystemExit(f"!! need both holdings files. R2000G={hr}, SP600G={hs}")
     print(f"  R2000G holdings:  {hr.name}")

@@ -97,6 +97,21 @@ panel and asserts that BOTH the panel-sourced `R2KG Quality Trends` tab AND the 
 step6 `Qual R2000G` tab agree with it. This is the tripwire that makes the original step3-vs-step6
 divergence impossible to ship silently.
 
+**One holdings resolver + staleness tripwires.** Now that quarterly holdings files share the folder,
+the glob `*Russell*Growth*Holding*.xlsx` matches BOTH the annual and quarterly workbooks, so an
+unguarded `list(glob)[0]` could silently load the wrong file (or, for an index with no annual file,
+load nothing). To prevent that: `r2k_universe.find_annual(index)` is the **single** holdings resolver
+— it excludes `*quarterly*`, sorts for determinism, and falls back to the quarterly workbook when no
+annual file exists — and step6/8/9, `r2k_perf_io`, `r2k_plausibility`, and `r2k_benchmark_reconcile`
+all route through it (or its hardened equivalents) so every tab resolves the SAME file for an index.
+Two staleness tripwires back it up: `get_panel`/`get_quarterly_panel` warn if a cached
+`r2k_panel*.csv` is older than the holdings or `fundamentals_dera.csv`, and the **Data Reliability**
+tab prints a red STALE banner if `plausibility_flags.csv` predates `fundamentals_dera.csv` (the tiers
+wouldn't reflect the latest engine). The **Up-Down Capture** tab is self-reconciling: it shows the
+up-leg and down-leg growth-of-$1 for both indices and asserts `up-leg × down-leg` rebuilds each
+index's Summary-tab cumulative exactly, so a capture ratio can never be read against the wrong
+period's return.
+
 ### Point-in-time identity (`resolve_identity`)
 
 A reused ticker maps, in every vendor file, to its **current** issuer — so a base-first lookup gives

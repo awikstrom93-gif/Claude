@@ -150,14 +150,19 @@ def sp600g_holdings():
 
 def find_annual(index):
     """The ANNUAL holdings workbook (one April snapshot/yr), explicitly EXCLUDING the quarterly file
-    so the annual panel never accidentally reads it now that both live in the folder."""
+    so the annual panel never accidentally reads it now that both live in the folder. Deterministic
+    (sorted), so every caller that uses this resolves the SAME file. If no dedicated annual workbook
+    exists for the index, fall back to the quarterly file -- an index that ships only quarterly
+    holdings (e.g. SP600G here) is then still covered; annual_spine takes the snapshot nearest April
+    from whatever month-ends exist (March for a 3/6/9/12 file). This is the single holdings resolver;
+    step6/8/9 and the panel all call it so they can never diverge on which file 'the index' is."""
     pats = (["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"] if index == "R2KG"
             else ["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
     for p in pats:
         for c in sorted(BASE.glob(p)):
             if "quarterly" not in c.name.lower():
                 return c
-    return None
+    return find_quarterly(index)         # graceful fallback: only-quarterly index still resolves
 
 
 def find_quarterly(index):
@@ -222,6 +227,9 @@ def build_panel(verbose=True):
     for index, path in (("R2KG", find_annual("R2KG") or find_holdings()), ("SP600G", find_annual("SP600G"))):
         if not path:
             continue
+        if verbose and "quarterly" in path.name.lower():
+            print(f"  [{index}] no annual holdings file -- falling back to the QUARTERLY workbook "
+                  f"({path.name}); annual spine = snapshot nearest April (March for a 3/6/9/12 file)")
         hold = load_monthly_holdings(path, verbose=False)
         spine = annual_spine(hold)
         rows += _index_rows(index, hold, sorted(spine.values()), nfacts, tmap, temporal)
@@ -268,6 +276,7 @@ def build_quarterly_panel(verbose=True):
 def get_quarterly_panel(index="R2KG"):
     """Load the cached quarterly panel, building it if absent. index=None for all rows."""
     if PANEL_Q_CSV.exists():
+        _warn_if_stale(PANEL_Q_CSV, "R2KG")
         rows = load_panel(PANEL_Q_CSV)
     else:
         rows = build_quarterly_panel(); write_panel(rows, PANEL_Q_CSV)
@@ -400,11 +409,36 @@ def index_quality(members, tops=(10, 25, 50)):
 ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"
 
 
+def _warn_if_stale(panel_path, holdings_index):
+    """Warn (once) if a cached panel is older than its inputs (fundamentals or the holdings file),
+    so a standalone view never silently projects a stale panel. The full r2k_report.py run always
+    rebuilds, so this only bites ad-hoc single-tab runs -- exactly where staleness used to hide."""
+    try:
+        if not panel_path.exists():
+            return
+        pm = panel_path.stat().st_mtime
+        ins = []
+        fund = BASE / "fundamentals_dera.csv"
+        if fund.exists():
+            ins.append(fund)
+        hf = find_annual(holdings_index) if panel_path == PANEL_CSV else find_quarterly(holdings_index)
+        if hf:
+            ins.append(hf)
+        newer = [p.name for p in ins if p.stat().st_mtime > pm + 1]
+        if newer:
+            print(f"  !! {panel_path.name} is STALE (older than {', '.join(newer)}) -- "
+                  f"rebuild with `python r2k_universe.py{'' if panel_path == PANEL_CSV else ' --quarterly'}` "
+                  f"or run r2k_report.py before trusting this tab.")
+    except Exception:
+        pass
+
+
 def get_panel(index="R2KG"):
     """Load the cached panel, building+caching it if absent. The single entry point views use.
     Defaults to R2000G rows only (so existing R2KG views are unaffected by adding SP600G to the
     panel); pass index=None for ALL rows, or index="SP600G" for the comparison universe."""
     if PANEL_CSV.exists():
+        _warn_if_stale(PANEL_CSV, "R2KG")
         rows = load_panel()
     else:
         rows = build_panel(); write_panel(rows)

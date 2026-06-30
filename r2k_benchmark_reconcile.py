@@ -75,7 +75,8 @@ def main():
     facts = norm_facts(load_fundamentals())
     base, temporal = load_maps()
     tmap = ticker_cik_map(base, temporal)
-    hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
+    from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
+    hr = find_annual("R2KG")
     if not hr:
         raise SystemExit("!! R2000G holdings workbook not found.")
     hold = load_monthly_holdings(hr, verbose=False)

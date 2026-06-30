@@ -166,6 +166,7 @@ def load_weights():
     except ImportError:
         return {}
     c = (list(BASE.glob("*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx")) or list(BASE.glob("*[Hh]olding*.xlsx")))
+    c = sorted(x for x in c if "quarterly" not in x.name.lower())   # annual only, deterministic
     if not c:
         return {}
     wb = openpyxl.load_workbook(c[0], read_only=True, data_only=True)

@@ -79,8 +79,9 @@ def compound(rets):
 
 def build():
     series, idx, pdates = load_performance()
-    hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
-    hs = find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+    from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
+    hr = find_annual("R2KG")
+    hs = find_annual("SP600G")
     if not hr:
         raise SystemExit("!! R2000G holdings not found")
     hold_r = load_monthly_holdings(hr, verbose=False)

@@ -140,8 +140,9 @@ def build():
     if "R2KG" not in idx:
         raise SystemExit("!! R2000G index row not found in performance file")
     R = idx["R2KG"]
-    hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])
-    hs = find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+    from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
+    hr = find_annual("R2KG")
+    hs = find_annual("SP600G")
     if not hr: raise SystemExit("!! R2000G holdings not found")
     hold_r = load_monthly_holdings(hr, verbose=False)
     hold_s = load_monthly_holdings(hs, verbose=False) if hs else None

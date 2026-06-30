@@ -220,8 +220,11 @@ def load_performance(path=None, verbose=True):
 
 # ---------- monthly holdings (one sheet per month-end) ----------
 def find_holdings_file():
+    # ANNUAL R2000G holdings only: exclude the quarterly workbook (its name also matches the glob now
+    # that both live in the folder) and sort, so this is deterministic and never grabs quarterly.
     c = (list(BASE.glob("*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"))
          or list(BASE.glob("*[Hh]olding*.xlsx")))
+    c = sorted(x for x in c if "quarterly" not in x.name.lower())
     if not c: raise FileNotFoundError("holdings workbook not found in R2KG_BASE")
     return c[0]
 

@@ -81,16 +81,21 @@ def growth_levels(dates, rets):
 
 
 def capture(bench, port, dates):
-    """Up/down capture of `port` relative to benchmark `bench` (compounded, Morningstar-style)."""
-    up_b = up_p = dn_b = dn_p = 1.0; nu = nd = 0
+    """Up/down capture of `port` relative to benchmark `bench` (compounded, Morningstar-style).
+    Returns the ratios AND the underlying leg compounds so the exhibit can SHOW its work: a ratio
+    alone can't be reconciled against the cumulative return, but (up-leg x down-leg) reconstructs it
+    exactly. up_b/dn_b/up_p/dn_p are growth-of-$1 over the bench-up / bench-down months."""
+    up_b = up_p = dn_b = dn_p = fl_b = fl_p = 1.0; nu = nd = nf = 0
     for d in dates:
         rb, rp = bench["ret"].get(d), port["ret"].get(d)
         if rb is None or rp is None: continue
         if rb > 0: up_b *= (1 + rb); up_p *= (1 + rp); nu += 1
         elif rb < 0: dn_b *= (1 + rb); dn_p *= (1 + rp); nd += 1
+        else: fl_b *= (1 + rb); fl_p *= (1 + rp); nf += 1
     up = ((up_p - 1) / (up_b - 1)) if (up_b - 1) != 0 else None
     dn = ((dn_p - 1) / (dn_b - 1)) if (dn_b - 1) != 0 else None
-    return up, dn, nu, nd
+    return up, dn, nu, nd, {"up_b": up_b, "up_p": up_p, "dn_b": dn_b, "dn_p": dn_p,
+                            "fl_b": fl_b, "fl_p": fl_p, "nf": nf}
 
 
 # ---------- workbook styling ----------
@@ -209,18 +214,37 @@ def build():
         rw += 1
     wr.freeze_panes = "A2"
 
-    # ---- Capture ----
+    # ---- Capture ----  (self-reconciling: capture ratios AND the leg compounds that rebuild cumulative)
     wcap = wb.create_sheet("Up-Down Capture")
     wcap.cell(row=1, column=1, value="Capture of S&P 600 Growth vs R2000G (R2KG = benchmark)").font = TITLE
-    _hdr(wcap, 3, ["Window", "Up capture %", "Down capture %", "Up months", "Down months"])
+    _hdr(wcap, 3, ["Window", "Up capture %", "Down capture %", "Up months", "Down months",
+                   "R2KG up-leg %", "R2KG down-leg %", "SP6G up-leg %", "SP6G down-leg %",
+                   "R2KG cumul %", "SP6G cumul %"])
     full = capture(R, S, dts)
     win = capture(R, S, [dts[i] for i in win_idx])
     for k, (label, cap) in enumerate([("Full period", full), (wlabel, win)]):
-        up, dn, nu, nd = cap
-        for c, v in enumerate([label, _p(up, 1) if up is not None else None,
-                               _p(dn, 1) if dn is not None else None, nu, nd], 1):
+        up, dn, nu, nd, leg = cap
+        # cumulative rebuilt from the SAME up/down/flat legs the capture is measured on
+        cumR = leg["up_b"] * leg["dn_b"] * leg["fl_b"] - 1
+        cumS = leg["up_p"] * leg["dn_p"] * leg["fl_p"] - 1
+        vals = [label, _p(up, 1) if up is not None else None, _p(dn, 1) if dn is not None else None, nu, nd,
+                _p(leg["up_b"] - 1), _p(leg["dn_b"] - 1), _p(leg["up_p"] - 1), _p(leg["dn_p"] - 1),
+                _p(cumR), _p(cumS)]
+        for c, v in enumerate(vals, 1):
             wcap.cell(row=4 + k, column=c, value=v)
-    wcap.cell(row=8, column=1, value="Up/Down capture = compounded SP6G return / compounded R2KG return in months R2KG was up / down.")
+    # tripwire: the full-period legs must rebuild the Summary tab's cumulative exactly (same series).
+    fl = full[4]
+    recon_R = fl["up_b"] * fl["dn_b"] * fl["fl_b"] - 1
+    recon_S = fl["up_p"] * fl["dn_p"] * fl["fl_p"] - 1
+    assert abs(recon_R - full_R) < 1e-9 and abs(recon_S - full_S) < 1e-9, \
+        f"capture legs do not reconcile to cumulative: R {recon_R:.6f} vs {full_R:.6f}, S {recon_S:.6f} vs {full_S:.6f}"
+    wcap.cell(row=7, column=1, value="Up/Down capture = compounded SP6G return / compounded R2KG return in months R2KG was up / down.")
+    wcap.cell(row=8, column=1, value="HOW TO READ: a capture ratio cannot be reconciled against cumulative return on its own. "
+              "The leg columns show growth-of-$1 in the up-months and down-months for BOTH indices; (up-leg x down-leg) "
+              "rebuilds each index's cumulative (last two columns), which ties to the Summary tab EXACTLY. So compare "
+              "capture to the SAME row's cumulative -- never cross-wire full-period cumulative with the window's capture.")
+    wcap.cell(row=9, column=1, value="A higher-returning SP6G can still show sub-100% up-capture if its outperformance "
+              "comes from a large up-leg compound rather than per-month ratios -- the leg columns make that visible.")
 
     # ---- Drawdown ----
     wdd = wb.create_sheet("Drawdown")

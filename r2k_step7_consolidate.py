@@ -424,6 +424,13 @@ def data_reliability(wb):
     import csv as _csv, json as _json
     if not FLAGS.exists():
         return None
+    # staleness tripwire: the reliability tier comes from plausibility (FLAGS); if it predates the last
+    # accounting-engine run (FUND), the tiers don't reflect the current classify (e.g. the CF cash-relative
+    # tolerance) -- surface it instead of shipping a stale 85% silently.
+    stale_rel = FUND.exists() and FLAGS.stat().st_mtime < FUND.stat().st_mtime - 1
+    if stale_rel:
+        print(f"  !! Data Reliability is STALE: {FLAGS.name} is older than {FUND.name} -- "
+              f"re-run r2k_plausibility.py before r2k_report.py so the tiers reflect the latest engine.")
     flags = [r for r in _csv.DictReader(open(FLAGS, encoding="utf-8")) if r.get("fiscal_year", "").isdigit()]
     # latest snapshot row per cik (used only for the index-weight CLEAN headline)
     latest = {}
@@ -507,6 +514,10 @@ def data_reliability(wb):
                   "      clean = all three statements tie · watch = IS & BS tie; a cash-flow gap or a "
                   "growth-typical value (e.g. pre-revenue losses, M&A growth) · review = a real concern"
             ).font = Font(size=9, italic=True, color="555555")
+    if stale_rel:
+        ws.cell(4, 1, "⚠ STALE: these tiers were computed by an earlier plausibility run than the current "
+                      "fundamentals — re-run r2k_plausibility.py, then r2k_report.py, to refresh them."
+                ).font = Font(bold=True, color="C00000", size=10)
     headers = ["Ticker", "CIK", "Index Wt %", "Fiscal Year", "Core IS+BS", "Full (all 3)",
                "Tie-out conf", "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
     _hdr_row(ws, 5, headers)
