@@ -64,7 +64,7 @@ def quality_trends_rows(panel):
                     _x(ag("cash_conversion")["median"]), _x(ag("asset_turnover")["median"]),
                     _p(ag("rev_yoy")["wavg"]), _p(ag("rev_cagr3")["median"]), _p(ag("fcf_margin")["median"]),
                     _p(ag("rule_of_40")["median"]),
-                    _p(ag("d_to_equity")["wavg"]), _p(ag("d_to_capital")["wavg"]), _p(dcap_da)])
+                    _x(ag("d_to_equity")["wavg"]), _p(ag("d_to_capital")["wavg"]), _p(dcap_da)])
     return out
 
 
