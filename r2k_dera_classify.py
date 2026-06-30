@@ -93,8 +93,8 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
        "SalesRevenueGoodsNet", "SalesRevenueServicesNet", "RevenueFromContractsWithCustomers",
        "Revenue"]
-COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices",
-        "CostOfSales"]
+COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoods",
+        "CostOfServices", "CostOfSales"]
 # curated operating-revenue lines (a GROSS top line, positive). Used only to recover a real revenue
 # when the selected tag is net-NEGATIVE (an insurer/holdco "Revenues" swamped by investment losses).
 # Deliberately NOT a broad pattern -- must exclude gains (GainLossOnSalesOf...) that aren't top line.
@@ -109,11 +109,11 @@ REV_OPERATING = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTa
 # depreciation/amortization inside COGS, or restructuring/impairment charged to COGS. Summed onto the
 # base only when it reconciles revenue - GP (and the base alone does not), so a base line that already
 # aggregates them is never double-counted. The IS_GP gap the probe most often points at.
-COGS_EXTRA = ["CostOfServices", "CostOfServicesLicensesAndServices",
+COGS_EXTRA = ["CostOfServices", "CostOfServicesLicensesAndServices", "CostOfGoods",
               "CostOfGoodsSoldAmortization", "CostOfGoodsSoldDepreciation",
               "CostOfGoodsSoldDepreciationAndAmortization",
               "CostOfGoodsAndServicesSoldAmortization", "CostOfGoodsAndServicesSoldDepreciation",
-              "CostOfGoodsAndServicesSoldImpairmentCharges",
+              "CostOfGoodsAndServicesSoldImpairmentCharges", "CostOfImpairmentOfIntangibleAssets",
               "CostOfGoodsSoldRestructuringCharges", "CostofGoodsSoldRestructuringCharges",
               "RestructuringCostsCostOfGoodsSold"]
 OPEX = ["OperatingExpenses", "OperatingCostsAndExpenses", "CostsAndExpenses"]
@@ -1226,11 +1226,22 @@ def selftest():
         "NetIncomeLossAvailableToCommonStockholdersBasic": 145.8,
         "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 150}.items()}
+    # split COGS under non-standard tags: a "CostOfGoods" base (not CostOfGoodsSold) + CostOfServices,
+    # and an intangible-impairment folded into cost of revenue -- both must aggregate to true COGS=900.
+    cogsgoods = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfGoods": 600, "CostOfServices": 300, "GrossProfit": 100,
+        "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    cogsimpair = {k: v * _m for k, v in {
+        "Revenues": 1000, "CostOfGoodsAndServicesSold": 600, "CostOfImpairmentOfIntangibleAssets": 300,
+        "GrossProfit": 100, "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
+        "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
                    ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
-                   ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2)):
+                   ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2),
+                   ("17", cogsgoods), ("18", cogsimpair)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     # cik 16: a 3-year company whose MIDDLE year (2023) is uniformly 1000x too small (filer scale
@@ -1283,6 +1294,10 @@ def selftest():
     ok_pfx2 = (pfx2["net_income"] == 145.8 * _m and "IS_NCI" not in pfx2["breaks"])
     rsc = next(r for r in out if r["cik"] == "16" and r["fiscal_year"] == "2023")
     ok_rsc = (rsc["total_assets"] == 300 * _m and "RESCALED_1000x" in (rsc.get("debt_flag") or ""))
+    cg = next(r for r in out if r["cik"] == "17")
+    ok_cg = (cg["cost_of_revenue"] == 900 * _m and "IS_GP" not in cg["breaks"])
+    ci = next(r for r in out if r["cik"] == "18")
+    ok_ci = (ci["cost_of_revenue"] == 900 * _m and "IS_GP" not in ci["breaks"])
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
@@ -1312,6 +1327,10 @@ def selftest():
           f"{'PASS' if ok_pfx2 else 'FAIL'}")
     print(f"  SELFTEST 1000x scale correction (2023 total_assets={rsc['total_assets']}, expect 300M): "
           f"{'PASS' if ok_rsc else 'FAIL'}")
+    print(f"  SELFTEST CostOfGoods split-COGS (cost_of_revenue={cg['cost_of_revenue']}, expect 900M): "
+          f"{'PASS' if ok_cg else 'FAIL'}")
+    print(f"  SELFTEST impairment-in-COGS (cost_of_revenue={ci['cost_of_revenue']}, expect 900M): "
+          f"{'PASS' if ok_ci else 'FAIL'}")
 
 
 if __name__ == "__main__":
