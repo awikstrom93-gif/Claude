@@ -410,17 +410,20 @@ ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"
 
 
 def _warn_if_stale(panel_path, holdings_index):
-    """Warn (once) if a cached panel is older than its inputs (fundamentals or the holdings file),
-    so a standalone view never silently projects a stale panel. The full r2k_report.py run always
-    rebuilds, so this only bites ad-hoc single-tab runs -- exactly where staleness used to hide."""
+    """Warn (once) if a cached panel is older than its inputs, so a standalone view never silently
+    projects a stale panel. The full r2k_report.py run always rebuilds, so this only bites ad-hoc
+    single-tab runs -- exactly where staleness used to hide. Checks the ACTUAL panel input
+    (edgar_annual_fundamentals_ASFILED.csv, what load_fundamentals reads) and the holdings file; and
+    separately flags the as-filed export being older than the engine output (fundamentals_dera.csv),
+    which means r2k_dera_to_fundamentals.py wasn't re-run after the last classify."""
     try:
         if not panel_path.exists():
             return
         pm = panel_path.stat().st_mtime
         ins = []
-        fund = BASE / "fundamentals_dera.csv"
-        if fund.exists():
-            ins.append(fund)
+        asfiled = BASE / "edgar_annual_fundamentals_ASFILED.csv"   # the panel's actual fundamentals source
+        if asfiled.exists():
+            ins.append(asfiled)
         hf = find_annual(holdings_index) if panel_path == PANEL_CSV else find_quarterly(holdings_index)
         if hf:
             ins.append(hf)
@@ -429,6 +432,13 @@ def _warn_if_stale(panel_path, holdings_index):
             print(f"  !! {panel_path.name} is STALE (older than {', '.join(newer)}) -- "
                   f"rebuild with `python r2k_universe.py{'' if panel_path == PANEL_CSV else ' --quarterly'}` "
                   f"or run r2k_report.py before trusting this tab.")
+        # as-filed export not regenerated after the last engine run -> panel fundamentals lag the engine,
+        # and the solvency tab (which reads fundamentals_dera.csv directly) is on a newer vintage.
+        dera = BASE / "fundamentals_dera.csv"
+        if asfiled.exists() and dera.exists() and dera.stat().st_mtime > asfiled.stat().st_mtime + 1:
+            print(f"  !! edgar_annual_fundamentals_ASFILED.csv is OLDER than fundamentals_dera.csv -- "
+                  f"re-run r2k_dera_to_fundamentals.py so the panel matches the latest engine (and the "
+                  f"solvency tab's vintage).")
     except Exception:
         pass
 
