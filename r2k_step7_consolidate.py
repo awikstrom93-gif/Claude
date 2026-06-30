@@ -559,6 +559,15 @@ def main():
         if orig not in sw.sheetnames:
             print(f"  (skip: '{orig}' not in {src.name})"); continue
         copy_sheet(sw[orig], wb.create_sheet(new[:31])); copied.append(new[:31])
+    # panel-native exhibit: quality-factor return spreads (needs the performance file)
+    try:
+        import r2k_factor_spreads
+        fs = r2k_factor_spreads.write_sheet(wb)
+        if fs:
+            copied.append(fs)
+            print("  added Quality Factor Spreads tab")
+    except Exception as e:
+        print(f"  (Quality Factor Spreads tab skipped: {e})")
     wb.create_sheet("Key Charts")          # home for charts (always present)
     contents(wb, copied)
     # preserve hand-made charts from the existing file; only auto-generate on a true first run

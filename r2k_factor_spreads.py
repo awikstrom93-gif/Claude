@@ -26,6 +26,7 @@ FACTORS = [("ROIC", "roic", +1), ("GP/Assets", "gp_to_assets", +1),
            ("FCFMargin", "fcf_margin", +1)]
 MIN_N = 50          # need a reasonable cross-section to form quintiles
 WIN_LO, WIN_HI = 0.01, 0.99   # winsorize forward returns per year (tame micro-cap lottery tails)
+NAME_CAP = 0.05     # within a quintile, cap any one name at 5% of quintile weight (no single-name domination)
 
 
 def _ck(c):
@@ -76,7 +77,10 @@ def _wquintile_spread(triples, direction):
 
     def wavg(grp):
         tw = sum(w for _, w, _ in grp) or 1e-9
-        return sum(w * r for _, w, r in grp) / tw
+        cap = NAME_CAP * tw                       # no single name owns more than 5% of the quintile
+        cws = [min(w, cap) for _, w, _ in grp]
+        tcw = sum(cws) or 1e-9
+        return sum(cw * r for cw, (_, _, r) in zip(cws, grp)) / tcw
     return wavg(pts[-q:]) - wavg(pts[:q])
 
 
@@ -172,12 +176,65 @@ def _val(d, lab):
     return d["fac"].get(lab)
 
 
-def main():
+LABELS = [f[0] for f in FACTORS] + ["Composite", "Prof-Never"]
+
+
+def build():
+    """(yy, per_year, summary) -- the computed spreads + per-label (mean, hit%, cumulative)."""
     panel = get_panel(index="R2KG")
     series, index_rows, all_dates = load_performance(verbose=False)
     years, per_year = compute(panel, series, index_rows, all_dates)
     yy = [y for y in years if y in per_year]
-    labels = [f[0] for f in FACTORS] + ["Composite", "Prof-Never"]
+    summary = {lab: _summ([_val(per_year[y], lab) for y in yy]) for lab in LABELS}
+    return yy, per_year, summary
+
+
+def write_sheet(wb):
+    """Add the 'Quality Factor Spreads' tab to an openpyxl workbook (loads its own panel + returns)."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    yy, per_year, summary = build()
+    if not yy:
+        return None
+    ws = wb.create_sheet("Quality Factor Spreads")
+    ws.cell(1, 1, "Did quality pay inside R2000G?  Forward-12m long-short quintile spreads (%)").font = Font(bold=True, size=12)
+    ws.cell(2, 1, "Top-quality minus bottom-quality quintile, cap-weighted within quintile (each name "
+                  "capped at 5% of quintile weight), forward returns winsorized at 1/99 pct. No look-ahead: "
+                  "factor known at the April snapshot, return earned the next 12 months. Composite = mean of "
+                  "z-scored factors (most stable). Quality is defensive: positive in busts (2016, 2022), "
+                  "negative in melt-ups.").font = Font(size=9, italic=True, color="555555")
+    head = ["Forward year", "Index R%"] + LABELS
+    HDR = PatternFill("solid", fgColor="1F4E5F")
+    for c, h in enumerate(head, 1):
+        x = ws.cell(4, c, h); x.fill = HDR; x.font = Font(bold=True, color="FFFFFF", size=10)
+        x.alignment = Alignment(horizontal="center", wrap_text=True)
+    pos = PatternFill("solid", fgColor="E2EFDA"); neg = PatternFill("solid", fgColor="FCE4D6")
+    r = 5
+    for y in yy:
+        d = per_year[y]
+        ws.cell(r, 1, f"{y}->{y+1}")
+        ws.cell(r, 2, round(100 * d["idx"], 1) if d["idx"] is not None else None)
+        for c, lab in enumerate(LABELS, 3):
+            v = _val(d, lab)
+            cell = ws.cell(r, c, round(100 * v, 1) if v is not None else None)
+            if v is not None:
+                cell.fill = pos if v > 0 else neg
+        r += 1
+    r += 1
+    for name, agg in (("mean / yr", 0), ("hit-rate %", 1), ("cumulative", 2)):
+        ws.cell(r, 1, name).font = Font(bold=True)
+        for c, lab in enumerate(LABELS, 3):
+            m = summary[lab][agg]
+            ws.cell(r, c, round(m if agg == 1 else 100 * m, 1) if m is not None else None).font = Font(bold=True)
+        r += 1
+    ws.freeze_panes = "C5"
+    for col, w in enumerate([13, 9] + [13] * len(LABELS), 1):
+        ws.column_dimensions[chr(64 + col)].width = w
+    return "Quality Factor Spreads"
+
+
+def main():
+    yy, per_year, summary = build()
+    labels = LABELS
 
     def cell(v):
         return f"{100*v:>16.1f}" if v is not None else f"{'·':>16}"
