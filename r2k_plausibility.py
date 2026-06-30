@@ -145,7 +145,15 @@ def assess(rows, by_cik):
         # review = the P&L/BS values can't be trusted (critical plausibility OR a P&L/BS identity
         # break); watch = a softer signal (cash-flow-only break or a watch flag); else clean.
         tier = "review" if (crit or bk == "plbs") else ("watch" if (watch or bk == "cf") else "clean")
+        # CORE reliability = the income statement and balance sheet tie and pass sanity (no critical
+        # flag, no P&L/BS identity break). This is what the quality/growth/margin/leverage analytics
+        # consume; the cash-flow roll-forward and growth-typical values are a stricter, separate check.
+        core = tier != "review"
+        # why a core-reliable name still isn't "clean": a cash-flow articulation gap, or a value that's
+        # unusual but legitimate for a growth index (pre-revenue losses, M&A growth, valuation-allowance tax)
+        wreason = ("growth-typical flag" if watch else ("cash-flow articulation" if bk == "cf" else ""))
         out.append(dict(cik=r["cik"], fiscal_year=fy, sector=r["_sector"], tier=tier,
+                        core_reliable=("Y" if core else "N"), watch_reason=wreason,
                         break_kind=bk, critical=";".join(crit), watch=";".join(watch),
                         confidence=r["_conf"]))
     return out
@@ -209,7 +217,7 @@ def main():
          "", "CRITICAL flags (likely data error):"]
     for k, n in crit_types.most_common():
         L.append(f"   {k:<24}{n:,}")
-    L.append("\nWATCH flags (review, may be legitimate):")
+    L.append("\nWATCH flags (usually LEGITIMATE for a small-cap GROWTH index, not data errors):")
     for k, n in watch_types.most_common():
         L.append(f"   {k:<24}{n:,}")
 
@@ -226,14 +234,28 @@ def main():
                 latest[x["cik"]] = x
         tw = sum(cik2w.values()) or 1.0
         wt = defaultdict(float)
+        wreason_w = defaultdict(float)
         for c, w in cik2w.items():
-            t = latest.get(c, {}).get("tier", "unmapped")
-            wt[t] += w
+            x = latest.get(c, {})
+            wt[x.get("tier", "unmapped")] += w
+            if x.get("tier") == "watch":
+                wreason_w[x.get("watch_reason") or "other"] += w
+        core_w = wt["clean"] + wt["watch"]      # everything that is not 'review'
         L.append("\nINDEX-WEIGHT view (latest snapshot, most recent year per name):")
+        L.append("  CORE RELIABILITY -- income statement & balance sheet tie out AND are plausible")
+        L.append("  (the metric the quality / growth / margin / leverage analytics actually consume):")
+        L.append(f"     => {100*core_w/tw:.1f}% of index weight is CORE-RELIABLE.   "
+                 f"(only {100*wt['review']/tw:.1f}% is in review.)")
+        L.append("\n  FULL THREE-STATEMENT ARTICULATION -- adds the cash-flow roll-forward (a stricter bar):")
+        L.append(f"     => {100*wt['clean']/tw:.1f}% of index weight is fully CLEAN.")
+        L.append("\n  the gap between the two is NOT bad data -- it is cash-flow articulation noise and")
+        L.append("  growth-typical values on names whose income statement and balance sheet still tie:")
         for t in ("clean", "watch", "review", "unmapped"):
             if wt[t]:
-                L.append(f"   {t:<10}{wt[t]:>7.1f}% of index weight ({100*wt[t]/tw:.1f}%)")
-        L.append(f"   => {100*wt['clean']/tw:.1f}% of index weight is CLEAN (ties out AND plausible).")
+                L.append(f"     {t:<10}{100*wt[t]/tw:>6.1f}% of index weight")
+        for rk in ("cash-flow articulation", "growth-typical flag", "other"):
+            if wreason_w[rk]:
+                L.append(f"        of which watch is {rk:<22}{100*wreason_w[rk]/tw:>6.1f}%")
         # highest-weight review names
         revs = [(cik2w.get(x["cik"], 0), x) for x in latest.values() if x["tier"] == "review"]
         revs.sort(key=lambda z: -z[0])
@@ -246,7 +268,8 @@ def main():
         L.append("\n(no holdings/cik map found -> name-count view only; add them to weight by index)")
 
     REPORT.write_text("\n".join(L), encoding="utf-8")
-    fields = ["cik", "fiscal_year", "sector", "tier", "break_kind", "critical", "watch", "confidence"]
+    fields = ["cik", "fiscal_year", "sector", "tier", "core_reliable", "watch_reason", "break_kind",
+              "critical", "watch", "confidence"]
     with open(FLAGS, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader(); w.writerows(sorted(res, key=lambda x: (x["tier"] != "review", x["cik"])))

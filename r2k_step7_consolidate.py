@@ -473,53 +473,62 @@ def data_reliability(wb):
         if pr.get("entity_flag") == "PREDECESSOR":      # a different entity occupied this CIK pre-merger
             pred_excluded += 1
             continue
+        # core-reliable name (IS+BS tie + plausible) still in 'watch' -> say WHY (CF gap / growth value)
+        why = fr.get("watch_reason", "") if fr.get("tier") == "watch" else ""
+        flg = ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x)
         rows.append({
             "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0), "fy": fy,
-            "tier": fr.get("tier", ""), "conf": fr.get("confidence", "") or pr.get("confidence", ""),
+            "tier": fr.get("tier", ""), "core": fr.get("core_reliable", ""),
+            "conf": fr.get("confidence", "") or pr.get("confidence", ""),
             "breaks": pr.get("breaks", ""),
-            "flags": ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x),
+            "flags": (flg + (f" ({why})" if why and not flg else (f" — {why}" if why else ""))).strip(),
             "prov": _short(pr.get("provenance", "")),
         })
     rows.sort(key=lambda x: (-x["wt"], x["cik"], x["fy"]))
-    # index-weight CLEAN headline is measured on the CURRENT snapshot (latest year per name)
+    # headlines measured on the CURRENT snapshot (latest year per name)
     tw = sum(cik2w.values()) or 0.0
     clean_w = sum(cik2w.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") == "clean")
+    core_w = sum(cik2w.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") != "review")
     from collections import Counter as _Counter
     tc = _Counter(r["tier"] for r in rows)
 
     ws = wb.create_sheet("Data Reliability")
     ws.cell(1, 1, "Data Reliability — three-statement tie-out, sanity, and provenance").font = TITLE
     sub = (f"{len(rows):,} company-years across {len({r['cik'] for r in rows}):,} names (full historical "
-           f"ledger, 2015–present). Reliability = identities tie (three statements articulate) AND values "
-           f"are plausible. "
-           + (f"{100*clean_w/tw:.1f}% of CURRENT index weight is CLEAN." if tw else
-              "(index weights unavailable — name-count view.)"))
+           f"ledger, 2015–present). "
+           + (f"CORE reliability (income statement + balance sheet tie out AND are plausible — the basis "
+              f"of the quality/growth/leverage analytics): {100*core_w/tw:.1f}% of current index weight.  "
+              f"Full three-statement articulation (adds the cash-flow roll-forward): {100*clean_w/tw:.1f}%."
+              if tw else "(index weights unavailable — name-count view.)"))
     ws.cell(2, 1, sub).font = BODY
     if pred_excluded:
         ws.cell(2, 1).value = sub + f"  ({pred_excluded:,} predecessor-entity years excluded — reverse mergers.)"
     ws.cell(3, 1, f"company-years:  clean {tc['clean']:,}   |   watch {tc['watch']:,}   |   review {tc['review']:,}"
-                  "      clean = ties out and plausible · watch = a cash-flow leg or benign flag · "
-                  "review = a P&L/balance-sheet break or critical flag"
+                  "      clean = all three statements tie · watch = IS & BS tie; a cash-flow gap or a "
+                  "growth-typical value (e.g. pre-revenue losses, M&A growth) · review = a real concern"
             ).font = Font(size=9, italic=True, color="555555")
-    headers = ["Ticker", "CIK", "Index Wt %", "Fiscal Year", "Reliability", "Tie-out conf",
-               "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
+    headers = ["Ticker", "CIK", "Index Wt %", "Fiscal Year", "Core IS+BS", "Full (all 3)",
+               "Tie-out conf", "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
     _hdr_row(ws, 5, headers)
     tier_fill = {"clean": PatternFill("solid", fgColor="E2EFDA"),
                  "watch": PatternFill("solid", fgColor="FFF2CC"),
                  "review": PatternFill("solid", fgColor="FCE4D6")}
+    green = PatternFill("solid", fgColor="E2EFDA"); red = PatternFill("solid", fgColor="FCE4D6")
     for i, r in enumerate(rows, start=6):
         ws.cell(i, 1, r["tkr"]); ws.cell(i, 2, r["cik"])
         ws.cell(i, 3, round(r["wt"], 3) if r["wt"] else None)
         ws.cell(i, 4, r["fy"])
-        cell = ws.cell(i, 5, r["tier"]); cell.fill = tier_fill.get(r["tier"], PatternFill())
-        ws.cell(i, 6, r["conf"]); ws.cell(i, 7, r["breaks"])
-        ws.cell(i, 8, r["flags"]); ws.cell(i, 9, r["prov"])
-        for col in range(1, 10):
+        core_ok = (r.get("core") or ("Y" if r["tier"] != "review" else "N")) == "Y"
+        cc = ws.cell(i, 5, "reliable" if core_ok else "review"); cc.fill = green if core_ok else red
+        cell = ws.cell(i, 6, r["tier"]); cell.fill = tier_fill.get(r["tier"], PatternFill())
+        ws.cell(i, 7, r["conf"]); ws.cell(i, 8, r["breaks"])
+        ws.cell(i, 9, r["flags"]); ws.cell(i, 10, r["prov"])
+        for col in range(1, 11):
             ws.cell(i, col).font = BODY
-    widths = [10, 12, 11, 11, 12, 12, 24, 26, 60]
+    widths = [10, 12, 11, 11, 11, 12, 11, 22, 30, 56]
     for col, w in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + col)].width = w
-    ws.auto_filter.ref = f"A5:I{5 + len(rows)}"      # sortable/filterable by tier, year, name
+    ws.auto_filter.ref = f"A5:J{5 + len(rows)}"      # sortable/filterable by core/tier, year, name
     ws.freeze_panes = "A6"
     print(f"  Data Reliability tab: {len(rows):,} company-years / {len({r['cik'] for r in rows}):,} names"
           + (f", {100*clean_w/tw:.1f}% current weight clean" if tw else ""))
