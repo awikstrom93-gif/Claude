@@ -20,7 +20,7 @@ FLAGS = BASE / "plausibility_flags.csv"
 FUND = BASE / "fundamentals_dera.csv"
 CMAP = BASE / "security_cik_map.json"
 
-HEADERS = ["Ticker", "CIK", "Index Wt %", "Fiscal Year", "Core IS+BS", "Full (all 3)",
+HEADERS = ["Ticker", "CIK", "Index Wt % (that yr)", "Fiscal Year", "Core IS+BS", "Full (all 3)",
            "Tie-out conf", "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
 
 
@@ -28,16 +28,49 @@ def _short(s, n=180):
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
+def _ck(c):
+    """Canonical int-string CIK so panel / flags / fundamentals keys always match."""
+    s = str(c)
+    return str(int(s)) if s.isdigit() else s
+
+
+def _panel_weights():
+    """From the panel: per-year R2000G weight per (cik, fiscal_year), current weight per cik, and
+    a ticker per cik. Per-year weight is the index weight at the April snapshot that USED that 10-K
+    (earliest such snapshot when the data was fresh); 0 means the name was not an R2000G constituent
+    that year. Returns ({}, {}, {}) if the panel can't be built."""
+    wt_by_cikfy, current_wt, tkr = {}, {}, {}
+    try:
+        from r2k_universe import get_panel
+        panel = get_panel(index="R2KG")
+    except Exception:
+        return wt_by_cikfy, current_wt, tkr
+    if not panel:
+        return wt_by_cikfy, current_wt, tkr
+    max_year = max(int(r["year"]) for r in panel)
+    for r in sorted(panel, key=lambda x: int(x["year"])):   # ascending -> earliest snapshot wins
+        c = _ck(r["cik"]) if r["cik"] else None
+        if not c:
+            continue
+        tkr.setdefault(c, r.get("ticker") or "")
+        if int(r["year"]) == max_year:
+            current_wt[c] = r["weight"]
+        if r["covered"] and r.get("fy0") is not None:
+            wt_by_cikfy.setdefault((c, str(r["fy0"])), r["weight"])
+    return wt_by_cikfy, current_wt, tkr
+
+
 def reliability_data():
-    """Returns (rows, meta) or (None, None) if the flags file is absent. rows are sorted by current
-    index weight desc; meta carries the headline figures (core_w/clean_w/tw, tier counts, exclusions)."""
+    """Returns (rows, meta) or (None, None) if the flags file is absent. Each row carries the name's
+    ACTUAL R2000G index weight in that fiscal year (from the panel); the headline core/full figures
+    are measured on the CURRENT snapshot weight. rows are sorted by that-year weight desc."""
     if not FLAGS.exists():
         return None, None
     flags = [r for r in _csv.DictReader(open(FLAGS, encoding="utf-8")) if r.get("fiscal_year", "").isdigit()]
 
-    latest = {}                                   # latest-year flag row per cik (for the weight headline)
+    latest = {}                                   # latest-year flag row per cik (for the headline tier)
     for r in flags:
-        c = r.get("cik")
+        c = _ck(r.get("cik"))
         if c not in latest or r["fiscal_year"] > latest[c]["fiscal_year"]:
             latest[c] = r
 
@@ -45,30 +78,21 @@ def reliability_data():
     if FUND.exists():
         for r in _csv.DictReader(open(FUND, encoding="utf-8")):
             if r.get("fiscal_year", "").isdigit():
-                prov[(r.get("cik"), r["fiscal_year"])] = r
+                prov[(_ck(r.get("cik")), r["fiscal_year"])] = r
 
-    cik2w, cik2tkr = {}, {}
-    try:
-        from r2k_plausibility import load_weights, load_cikmap
-        weights, cm = load_weights(), load_cikmap()
-        for nt, w in (weights or {}).items():
-            c = cm.get(nt)
-            if c:
-                cik2w[c] = w
-    except Exception:
-        pass
-    if CMAP.exists():
+    wt_by_cikfy, current_wt, tkr = _panel_weights()
+    cik2tkr = dict(tkr)
+    if CMAP.exists():                             # ticker fallback for non-constituent names in the ledger
         try:
             for tk, v in _json.load(open(CMAP)).items():
                 c = v.get("cik") if isinstance(v, dict) else v
-                c = str(int(c)) if str(c).isdigit() else str(c)
-                cik2tkr.setdefault(c, tk)
+                cik2tkr.setdefault(_ck(c), tk)
         except Exception:
             pass
 
     rows, pred_excluded = [], 0
     for fr in flags:
-        c, fy = fr.get("cik"), fr["fiscal_year"]
+        c, fy = _ck(fr.get("cik")), fr["fiscal_year"]
         pr = prov.get((c, fy), {})
         if pr.get("entity_flag") == "PREDECESSOR":
             pred_excluded += 1
@@ -76,7 +100,7 @@ def reliability_data():
         why = fr.get("watch_reason", "") if fr.get("tier") == "watch" else ""
         flg = ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x)
         rows.append({
-            "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0), "fy": fy,
+            "tkr": cik2tkr.get(c, ""), "cik": fr.get("cik"), "wt": wt_by_cikfy.get((c, fy), 0.0), "fy": fy,
             "tier": fr.get("tier", ""), "core": fr.get("core_reliable", ""),
             "conf": fr.get("confidence", "") or pr.get("confidence", ""),
             "breaks": pr.get("breaks", ""),
@@ -85,9 +109,9 @@ def reliability_data():
         })
     rows.sort(key=lambda x: (-x["wt"], x["cik"], x["fy"]))
 
-    tw = sum(cik2w.values()) or 0.0
-    clean_w = sum(cik2w.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") == "clean")
-    core_w = sum(cik2w.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") != "review")
+    tw = sum(current_wt.values()) or 0.0
+    clean_w = sum(current_wt.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") == "clean")
+    core_w = sum(current_wt.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") != "review")
     meta = {"tw": tw, "clean_w": clean_w, "core_w": core_w, "pred_excluded": pred_excluded,
             "tiers": Counter(r["tier"] for r in rows), "n_names": len({r["cik"] for r in rows})}
     return rows, meta
@@ -117,7 +141,8 @@ def write_sheet(wb):
     ws.cell(2, 1, sub).font = BODY
     ws.cell(3, 1, f"company-years:  clean {tc['clean']:,}   |   watch {tc['watch']:,}   |   review {tc['review']:,}"
                   "      clean = all three statements tie · watch = IS & BS tie; a cash-flow gap or a "
-                  "growth-typical value · review = a real concern").font = Font(size=9, italic=True, color="555555")
+                  "growth-typical value · review = a real concern.   Index Wt % = the name's R2000G "
+                  "weight in that fiscal year (blank = not an R2000G constituent then).").font = Font(size=9, italic=True, color="555555")
     for c, h in enumerate(HEADERS, 1):
         x = ws.cell(5, c, h); x.fill = HDR; x.font = HF
         x.alignment = Alignment(horizontal="center", wrap_text=True)
