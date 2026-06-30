@@ -84,13 +84,15 @@ def annual_spine(holdings):
 
 
 # ---------- per-snapshot index quality ----------
-def snapshot_quality(rows, snap_dt, facts, tmap):
+def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
+    from r2k_universe import resolve_identity   # one identity resolver (point-in-time freshness)
     cov = []                              # (metrics, weight)
     sect = {}; wt_all = 0.0
+    skey = str(snap_dt)[:10]
     for h in rows:
         wt_all += h["weight"]
         sect[h["gics"] or "Unknown"] = sect.get(h["gics"] or "Unknown", 0.0) + h["weight"]
-        cf = fund_for(facts, h["cik"] or tmap.get(h["nt"]))
+        _cik, cf, _r = resolve_identity(h, tmap, facts, snap_dt=snap_dt, temporal=temporal, skey=skey)
         if not cf: continue
         fy0 = pick_fy0(cf, snap_dt)
         if fy0 is None: continue
@@ -182,8 +184,8 @@ def build():
     years = sorted(set(spine_r) & set(spine_s))
     print(f"  common years: {years[0]}..{years[-1]} ({len(years)})")
 
-    qr = {y: snapshot_quality(hold_r[spine_r[y]], spine_r[y], facts, tmap) for y in years}
-    qs = {y: snapshot_quality(hold_s[spine_s[y]], spine_s[y], facts, tmap) for y in years}
+    qr = {y: snapshot_quality(hold_r[spine_r[y]], spine_r[y], facts, tmap, temporal) for y in years}
+    qs = {y: snapshot_quality(hold_s[spine_s[y]], spine_s[y], facts, tmap, temporal) for y in years}
 
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
