@@ -913,9 +913,11 @@ def _flag_predecessors(out_rows, name_of):
             if not a0 or not a1 or len(n0) < 3 or len(n1) < 3:
                 continue
             step = max(a0, a1) / min(a0, a1)
-            # "substantially different" = neither normalized name contains the other (a rebrand that
-            # keeps the core name -- "Acme" -> "Acme Bio" -- is NOT a different entity).
-            diff = (n0 not in n1) and (n1 not in n0)
+            # "substantially different" = neither normalized name contains the other AND they don't share
+            # a name root. A rename/pivot of the SAME entity that keeps the root -- "Cipher Mining" ->
+            # "Cipher Digital", "Marathon Patent" -> "Marathon Digital", "Plymouth Opportunity REIT" ->
+            # "Plymouth Industrial REIT" -- is NOT a different entity, so it is not flagged.
+            diff = (n0 not in n1) and (n1 not in n0) and n0[:5] != n1[:5]
             if step >= 4 and diff:
                 boundary = i      # rows[:i] precede the current entity
         if boundary is not None:
@@ -1353,8 +1355,13 @@ def selftest():
     div = [{"cik": "Y", "fiscal_year": y, "total_assets": a * _m, "entity_flag": ""}
            for y, a in (("2014", 20000), ("2015", 3000))]
     _flag_predecessors(div, {("Y", "2014"): "Acme Corp", ("Y", "2015"): "Acme Corp"})
+    # a rename/pivot of the SAME entity (shared name root) + big step must NOT be flagged
+    ren = [{"cik": "Z", "fiscal_year": y, "total_assets": a * _m, "entity_flag": ""}
+           for y, a in (("2023", 800), ("2024", 4300))]
+    _flag_predecessors(ren, {("Z", "2023"): "Cipher Mining Inc", ("Z", "2024"): "Cipher Digital Inc"})
     ok_pred = ([r["entity_flag"] for r in pred] == ["PREDECESSOR", "PREDECESSOR", "", ""]
-               and all(r["entity_flag"] == "" for r in div))
+               and all(r["entity_flag"] == "" for r in div)
+               and all(r["entity_flag"] == "" for r in ren))
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
