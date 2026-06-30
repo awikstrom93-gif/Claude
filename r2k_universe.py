@@ -29,7 +29,7 @@ from pathlib import Path
 
 # --- reuse the proven heavy logic verbatim (no reimplementation of the accounting/metrics math) ---
 from r2k_step3_analytics import (load_fundamentals, load_maps, pick_fy0, company_metrics,
-                                  find_holdings)
+                                  find_holdings, aggregate, dollar_agg)
 from r2k_perf_io import load_monthly_holdings, ntk
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
@@ -236,6 +236,66 @@ def quality_trends_from_panel(rows):
         cls_ni = [r for r in cov if r["prof_ni"] is not None]
         unprof = 100 * sum(r["weight"] for r in cls_ni if not r["prof_ni"]) / (sum(r["weight"] for r in cls_ni) or 1.0)
         out.append((y, _dollar_b(cov, "revenue"), _dollar_b(cov, "net_income"), unprof, len(cov)))
+    return out
+
+
+# ============================ index-level quality reducer (one definition) ============================
+def by_index_year(rows):
+    """{(index, year): [member rows]} -- every constituent row (covered or not) for that snapshot."""
+    out = {}
+    for r in rows:
+        out.setdefault((r["index"], int(r["year"])), []).append(r)
+    return out
+
+
+def index_quality(members, tops=(10, 25, 50)):
+    """Reproduce step6's snapshot_quality() dict from panel rows: `members` is every constituent row
+    for one (index, year); the covered subset drives the quality metrics, all members drive
+    concentration/sector. Percent fields are already x100; margins/returns are FRACTIONS (as step6)."""
+    cov = [r for r in members if r["covered"]]
+    wt_all = sum(r["weight"] for r in members)
+    sect = {}
+    for r in members:
+        g = r["gics"] or "Unknown"
+        sect[g] = sect.get(g, 0.0) + r["weight"]
+    out = {"n_members": len(members), "n_cov": len(cov), "wt_all": wt_all,
+           "wt_cov": sum(r["weight"] for r in cov), "sectors": sect}
+    ws = sorted((r["weight"] for r in members), reverse=True)
+    tw = sum(ws) or 1e-9
+    shares = [w / tw for w in ws]
+    out["topn"] = {n: round(sum(ws[:n]) / tw * 100, 1) for n in tops}
+    out["hhi"] = round(sum((s * 100) ** 2 for s in shares), 1)
+    out["effn"] = round(1 / sum(s * s for s in shares), 1) if shares else None
+    if not cov:
+        return out
+    colk = lambda k: [(r[k], r["weight"]) for r in cov]
+    ag = lambda k: aggregate(colk(k), winsor=True)
+    wtot = sum(r["weight"] for r in cov) or 1.0
+
+    def upct(flag):
+        cls = [r for r in cov if r[flag] is not None]
+        if not cls:
+            return None
+        return 100 * sum(r["weight"] for r in cls if r[flag] is False) / (sum(r["weight"] for r in cls) or 1)
+
+    out.update(
+        unprof_ni=upct("prof_ni"), unprof_oi=upct("prof_oi"),
+        no_rev=100 * sum(r["weight"] for r in cov if not r["has_rev"]) / wtot,
+        w_prof=100 * sum(r["weight"] for r in cov if r["cohort"] == "profitable") / wtot,
+        w_fallen=100 * sum(r["weight"] for r in cov if r["cohort"] == "fallen") / wtot,
+        w_never=100 * sum(r["weight"] for r in cov if r["cohort"] == "never_profitable") / wtot,
+        gross_m=ag("gross_margin")["wavg"], op_m=ag("op_margin")["wavg"], net_m=ag("net_margin")["wavg"],
+        op_da=dollar_agg([(r["operating_income"], r["revenue"]) for r in cov]),
+        net_da=dollar_agg([(r["net_income"], r["revenue"]) for r in cov]),
+        gross_da=dollar_agg([(r["gross_profit"], r["revenue"]) for r in cov]),
+        roe_w=ag("roe")["wavg"], roe_da=dollar_agg([(r["net_income"], r["equity"]) for r in cov]),
+        roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(r["_nopat"], r["_ic"]) for r in cov]),
+        gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
+        cashconv=ag("cash_conversion")["median"],
+        rev_yoy=ag("rev_yoy")["wavg"], rev_cagr3=ag("rev_cagr3")["median"], rule40=ag("rule_of_40")["median"],
+        de_w=ag("d_to_equity")["wavg"], dcap_w=ag("d_to_capital")["wavg"],
+        tot_rev=sum(r["revenue"] for r in cov if r["revenue"]) / 1e9,
+    )
     return out
 
 
