@@ -77,6 +77,51 @@ def quality_rows(panel, index):
     return [full_row(y, snap[(index, y)], q[y]) for y in years]
 
 
+COHORT_HDR = ["Year", "R2KG Prof", "R2KG Fallen", "R2KG Never", "600G Prof", "600G Fallen",
+              "600G Never", "Never wt diff (R2KG-600G)"]
+
+
+def cohort_weights_rows(panel):
+    years, qr, qs, _ = _quality_by_year(panel)
+    out = []
+    for y in years:
+        a, b = qr[y], qs[y]
+        nd = (a.get("w_never") or 0) - (b.get("w_never") or 0)
+        out.append([y, _p(a.get("w_prof")), _p(a.get("w_fallen")), _p(a.get("w_never")),
+                    _p(b.get("w_prof")), _p(b.get("w_fallen")), _p(b.get("w_never")), round(nd, 1)])
+    return out
+
+
+SECTOR_HDR = ["GICS Sector", "R2000G wt%", "S&P 600 Growth wt%", "Diff"]
+
+
+def sector_mix_rows(panel):
+    years, qr, qs, _ = _quality_by_year(panel)
+    ly = years[-1]
+    sa, sb = qr[ly]["sectors"], qs[ly]["sectors"]
+    ta, tb = sum(sa.values()) or 1, sum(sb.values()) or 1
+    out = []
+    for sec in sorted(set(sa) | set(sb), key=lambda s: -(sa.get(s, 0) / ta)):
+        wa, wb_ = 100 * sa.get(sec, 0) / ta, 100 * sb.get(sec, 0) / tb
+        out.append([sec, round(wa, 1), round(wb_, 1), round(wa - wb_, 1)])
+    return out
+
+
+TOP_NS = [10, 25, 50]
+CONC_HDR = ["Year"] + [f"R2KG Top{n}" for n in TOP_NS] + ["R2KG HHI", "R2KG EffN"] + \
+           [f"600G Top{n}" for n in TOP_NS] + ["600G HHI", "600G EffN"]
+
+
+def concentration_rows(panel):
+    years, qr, qs, _ = _quality_by_year(panel)
+    out = []
+    for y in years:
+        a, b = qr[y], qs[y]
+        out.append([y] + [a["topn"][n] for n in TOP_NS] + [a["hhi"], a["effn"]] +
+                   [b["topn"][n] for n in TOP_NS] + [b["hhi"], b["effn"]])
+    return out
+
+
 def main():
     panel = get_panel(index=None)
     comp = comparison_rows(panel)
@@ -85,6 +130,9 @@ def main():
     diff_sheet("Comparison", COMP_HDR, comp, src=QUAL)
     diff_sheet("R2000G Quality", FULL_COLS, quality_rows(panel, "R2KG"), src=QUAL)
     diff_sheet("SP600G Quality", FULL_COLS, quality_rows(panel, "SP600G"), src=QUAL)
+    diff_sheet("Cohort Weights", COHORT_HDR, cohort_weights_rows(panel), src=QUAL)
+    diff_sheet("Sector Mix", SECTOR_HDR, sector_mix_rows(panel), src=QUAL)
+    diff_sheet("Concentration", CONC_HDR, concentration_rows(panel), src=QUAL)
 
 
 if __name__ == "__main__":
