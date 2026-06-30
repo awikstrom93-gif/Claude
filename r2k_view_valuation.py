@@ -14,7 +14,7 @@ revenue & book are as-filed fiscal-year matched to the April snapshot.
 
 Pure panel projection.  RUN:  python r2k_view_valuation.py
 """
-from r2k_universe import get_panel, by_index_year, BASE
+from r2k_universe import get_panel, get_quarterly_panel, by_index_year, BASE
 
 OUT = BASE / "r2k_valuation.txt"
 HDR = ["Year", "%NoRev wt", "Prof P/S xIdx", "Unprof P/S xIdx", "Never P/S xIdx",
@@ -40,12 +40,15 @@ def _ratio(rows_a, rows_b, vf):
     return (ua / ub) if (ua and ub) else None
 
 
-def valuation_rows(panel):
-    grp = by_index_year(panel)
-    years = sorted(y for (ix, y) in grp if ix == "R2KG")
+def valuation_rows(panel, by_quarter=False):
+    keyf = (lambda r: r["snapshot"]) if by_quarter else (lambda r: r["year"])
+    grp = {}
+    for r in panel:
+        if r["index"] == "R2KG" and r["covered"]:
+            grp.setdefault(keyf(r), []).append(r)
     out = []
-    for y in years:
-        allr = [r for r in grp[("R2KG", y)] if r["covered"]]
+    for y in sorted(grp):
+        allr = grp[y]
         prof = [r for r in allr if r["cohort"] == "profitable"]
         unp = [r for r in allr if r["prof_ni"] is False]
         nev = [r for r in allr if r["cohort"] == "never_profitable"]
@@ -84,11 +87,16 @@ def write_sheet(wb, panel=None):
 
 
 def main():
-    panel = get_panel(index="R2KG")
-    rows = valuation_rows(panel)
-    L = ["VALUATION OF THE TAIL  --  cohort P/S & P/B as a MULTIPLE of the R2000G index (weight=float-cap proxy)", ""]
-    L.append("  " + "".join(str(h)[:15].rjust(17) for h in HDR))
-    L.append("  " + "-" * (17 * len(HDR)))
+    import sys
+    q = "--quarterly" in sys.argv
+    panel = get_quarterly_panel(index="R2KG") if q else get_panel(index="R2KG")
+    rows = valuation_rows(panel, by_quarter=q)
+    hdr = (["Quarter"] + HDR[1:]) if q else HDR
+    out = (BASE / "r2k_valuation_q.txt") if q else OUT
+    cad = "quarterly" if q else "annual"
+    L = [f"VALUATION OF THE TAIL ({cad})  --  cohort P/S & P/B as a MULTIPLE of the R2000G index (weight=float-cap proxy)", ""]
+    L.append("  " + "".join(str(h)[:15].rjust(17) for h in hdr))
+    L.append("  " + "-" * (17 * len(hdr)))
     for row in rows:
         L.append("  " + "".join(("" if v is None else str(v)).rjust(17) for v in row))
     L.append("")
@@ -97,9 +105,9 @@ def main():
     L.append("  spike (the growth bubble paid up for sales-without-earnings) and the 2022 de-rate. P/E is")
     L.append("  omitted -- the unprofitable tail has no earnings to price. Multiples are RELATIVE to this")
     L.append("  index (float-cap proxy), not absolute levels.")
-    OUT.write_text("\n".join(L), encoding="utf-8")
+    out.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
-    print(f"\n  -> {OUT.name}")
+    print(f"\n  -> {out.name}")
 
 
 if __name__ == "__main__":

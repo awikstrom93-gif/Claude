@@ -15,7 +15,7 @@ RUN:    python r2k_factor_spreads.py
 import statistics
 from datetime import date
 
-from r2k_universe import get_panel, BASE
+from r2k_universe import get_panel, get_quarterly_panel, BASE
 from r2k_perf_io import load_performance, ntk
 
 OUT = BASE / "r2k_factor_spreads.txt"
@@ -45,7 +45,7 @@ def _fwd_return(rec, window):
     """Compound a constituent's periodic returns over the forward window; None if too sparse."""
     rs = [rec["ret"].get(d) for d in window]
     present = [r for r in rs if r is not None]
-    if len(present) < max(6, len(window) - 3):
+    if len(present) < min(len(window), max(6, len(window) - 3)):   # 9-of-12 annual, 3-of-3 quarterly
         return None
     g = 1.0
     for r in present:
@@ -102,7 +102,7 @@ def _composite_z(rows):
     return {c: acc[c] / cnt[c] for c in acc if cnt[c] >= 3}
 
 
-def compute(panel, series, index_rows, all_dates):
+def compute(panel, series, index_rows, all_dates, fwd_months=12, by_quarter=False):
     by_cik, by_nt = {}, {}
     for rec in series:
         m = rec["meta"]
@@ -112,15 +112,21 @@ def compute(panel, series, index_rows, all_dates):
             by_nt.setdefault(m["nt"], rec)
     ridx = index_rows.get("R2KG") or index_rows.get("R2000G")
 
-    years = sorted({int(r["year"]) for r in panel})
+    if by_quarter:                                 # group by quarter-end snapshot date
+        keys = sorted({r["snapshot"] for r in panel if r["covered"]})
+        rows_of = lambda k: [r for r in panel if r["snapshot"] == k and r["covered"]]
+    else:                                          # group by snapshot YEAR (annual; one snap/yr)
+        keys = sorted({int(r["year"]) for r in panel})
+        rows_of = lambda k: [r for r in panel if int(r["year"]) == k and r["covered"]]
+    min_window = max(2, fwd_months - 2)
     per_year = {}
-    for y in years:
-        rows = [r for r in panel if int(r["year"]) == y and r["covered"]]
+    for y in keys:
+        rows = rows_of(y)
         d0 = _parse_snap(rows[0]["snapshot"]) if rows else None
         if d0 is None:
             continue
-        window = [d for d in all_dates if d > d0][:12]
-        if len(window) < 10:        # incomplete forward year (e.g. the final snapshot) -> skip
+        window = [d for d in all_dates if d > d0][:fwd_months]
+        if len(window) < min_window:               # incomplete forward window (e.g. final snapshot)
             continue
         idx_fwd = _fwd_return(ridx, window) if ridx else None
         wt = {r["cik"]: r["weight"] for r in rows}
@@ -152,7 +158,7 @@ def compute(panel, series, index_rows, all_dates):
         nev = [r["cik"] for r in rows if r["cik"] in fwd and r["cohort"] == "never_profitable"]
         coh = (_wavg(prof) - _wavg(nev)) if (len(prof) >= 10 and len(nev) >= 10) else None
         per_year[y] = {"idx": idx_fwd, "fac": fac, "comp": comp, "coh": coh, "n": len(fwd)}
-    return years, per_year
+    return [k for k in keys if k in per_year], per_year
 
 
 def _summ(vals):
@@ -180,20 +186,26 @@ def _val(d, lab):
 LABELS = [f[0] for f in FACTORS] + ["Composite", "Prof-Never"]
 
 
-def build():
-    """(yy, per_year, summary) -- the computed spreads + per-label (mean, hit%, cumulative)."""
-    panel = get_panel(index="R2KG")
+def _plabel(k, by_quarter):
+    return str(k) if by_quarter else f"{k}->{k+1}"
+
+
+def build(by_quarter=False):
+    """(keys, per, summary, by_quarter). Annual: years, forward-12m. Quarterly: quarter-end
+    snapshots, forward-3m (non-overlapping, so the cumulative compounds correctly) -- 4x the
+    observations, which robustifies the median/cumulative against any single extreme window."""
+    panel = get_quarterly_panel(index="R2KG") if by_quarter else get_panel(index="R2KG")
+    fwd = 3 if by_quarter else 12
     series, index_rows, all_dates = load_performance(verbose=False)
-    years, per_year = compute(panel, series, index_rows, all_dates)
-    yy = [y for y in years if y in per_year]
-    summary = {lab: _summ([_val(per_year[y], lab) for y in yy]) for lab in LABELS}
-    return yy, per_year, summary
+    keys, per = compute(panel, series, index_rows, all_dates, fwd_months=fwd, by_quarter=by_quarter)
+    summary = {lab: _summ([_val(per[k], lab) for k in keys]) for lab in LABELS}
+    return keys, per, summary, by_quarter
 
 
 def write_sheet(wb):
     """Add the 'Quality Factor Spreads' tab to an openpyxl workbook (loads its own panel + returns)."""
     from openpyxl.styles import Font, PatternFill, Alignment
-    yy, per_year, summary = build()
+    yy, per_year, summary, bq = build()
     if not yy:
         return None
     ws = wb.create_sheet("Quality Factor Spreads")
@@ -212,7 +224,7 @@ def write_sheet(wb):
     r = 5
     for y in yy:
         d = per_year[y]
-        ws.cell(r, 1, f"{y}->{y+1}")
+        ws.cell(r, 1, _plabel(y, bq))
         ws.cell(r, 2, round(100 * d["idx"], 1) if d["idx"] is not None else None)
         for c, lab in enumerate(LABELS, 3):
             v = _val(d, lab)
@@ -234,22 +246,26 @@ def write_sheet(wb):
 
 
 def main():
-    yy, per_year, summary = build()
+    import sys
+    bq = "--quarterly" in sys.argv
+    yy, per_year, summary, _ = build(by_quarter=bq)
     labels = LABELS
+    fwdtxt = "forward 3m, quarterly rebalance" if bq else "forward 12m, May->Apr"
+    plw = 12 if bq else 9
 
     def cell(v):
         return f"{100*v:>16.1f}" if v is not None else f"{'·':>16}"
 
-    L = ["QUALITY-FACTOR RETURN SPREADS  --  did quality pay inside R2000G? (forward 12m, May->Apr)",
+    L = [f"QUALITY-FACTOR RETURN SPREADS  --  did quality pay inside R2000G? ({fwdtxt})",
          "  long-short = top-quality minus bottom-quality quintile, CAP-WEIGHTED within quintile,",
          "  forward returns winsorized at 1/99 pct (index-representative; tames micro-cap lottery tails). %", ""]
-    L.append("  " + f"{'fwd yr':<9}{'IndexR%':>9}" + "".join(f"{lab:>16}" for lab in labels) + f"{'n':>7}")
-    L.append("  " + "-" * (18 + 16 * len(labels) + 7))
+    L.append("  " + f"{'period':<{plw}}{'IndexR%':>9}" + "".join(f"{lab:>16}" for lab in labels) + f"{'n':>7}")
+    L.append("  " + "-" * (9 + plw + 16 * len(labels) + 7))
     for y in yy:
         d = per_year[y]
         idx = f"{100*d['idx']:>9.1f}" if d["idx"] is not None else f"{'·':>9}"
-        L.append(f"  {f'{y}->{y+1}':<9}{idx}" + "".join(cell(_val(d, lab)) for lab in labels) + f"{d['n']:>7}")
-    L.append("  " + "-" * (18 + 16 * len(labels) + 7))
+        L.append(f"  {_plabel(y, bq):<{plw}}{idx}" + "".join(cell(_val(d, lab)) for lab in labels) + f"{d['n']:>7}")
+    L.append("  " + "-" * (9 + plw + 16 * len(labels) + 7))
     for name, agg in (("mean/yr", 0), ("median/yr", 3), ("hit-rate%", 1), ("cumulative", 2)):
         cells = []
         for lab in labels:
@@ -257,15 +273,16 @@ def main():
             cells.append((f"{m:>16.1f}" if agg == 1 else cell(m)) if m is not None else f"{'·':>16}")
         L.append(f"  {name:<18}" + "".join(cells))
     L.append("")
-    L.append("  READ: positive spread = HIGH-quality names outperformed LOW-quality over the next year.")
-    L.append("  Quality here is DEFENSIVE/anti-bubble: it protects hard in busts (2022 strongly positive,")
-    L.append("  2016) and lags in melt-ups (2018, 2021, 2026). 'Composite' = mean of z-scored factors")
-    L.append("  (the most stable signal); 'Prof-Never' = profitable minus never-profitable cohort.")
-    L.append("  Cap-weighted quintiles + winsorized returns = what the INDEX experienced; no look-ahead.")
-
-    OUT.write_text("\n".join(L), encoding="utf-8")
+    L.append("  READ: positive spread = HIGH-quality names outperformed LOW-quality over the next window.")
+    L.append("  Quality here is DEFENSIVE/anti-bubble: it protects hard in busts (2022, 2016) and lags in")
+    L.append("  melt-ups (2018, 2021, 2026). 'Composite' = mean of z-scored factors (the most stable");
+    L.append("  signal); 'Prof-Never' = profitable minus never-profitable cohort. Cap-weighted quintiles +")
+    L.append("  winsorized returns = what the INDEX experienced; no look-ahead." +
+             ("  Quarterly: 4x the observations -> a more robust median/cumulative." if bq else ""))
+    out = (BASE / "r2k_factor_spreads_q.txt") if bq else OUT
+    out.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
-    print(f"\n  -> {OUT.name}")
+    print(f"\n  -> {out.name}")
 
 
 if __name__ == "__main__":
