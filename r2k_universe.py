@@ -82,9 +82,11 @@ def canon_cik(raw):
 
 
 def resolve_identity(h, tmap, nfacts):
-    """(cik, cf, reason).  Prefer the holdings row's own CIK if present (forward-compatible),
-    else base-first ticker resolution.  cf is the per-company fundamentals dict, or None."""
-    raw = h.get("cik") or tmap.get(h["nt"])
+    """(cik, cf, reason).  BASE-FIRST: the security map (point-in-time-ish) wins; the holdings row's
+    own CIK is only a fallback for tickers the map lacks.  Vendor holdings files SURVIVORSHIP-map a
+    reused ticker to its CURRENT issuer (e.g. a 2016 'CZR' row carries Eldorado's CIK, '2016 BBBY'
+    carries Overstock's), which is wrong point-in-time -- so we must NOT prefer the file's CIK."""
+    raw = tmap.get(h["nt"]) or h.get("cik")
     cik = canon_cik(raw)
     cf = fund_for(nfacts, cik)
     if not raw:   reason = "no-cik-for-ticker"
@@ -108,7 +110,30 @@ def find(pats):
 
 
 def sp600g_holdings():
-    return find(["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+    return find_annual("SP600G")
+
+
+def find_annual(index):
+    """The ANNUAL holdings workbook (one April snapshot/yr), explicitly EXCLUDING the quarterly file
+    so the annual panel never accidentally reads it now that both live in the folder."""
+    pats = (["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"] if index == "R2KG"
+            else ["*[Ss][Pp]*600*[Gg]rowth*[Hh]olding*.xlsx", "*600*[Gg]rowth*[Hh]olding*.xlsx"])
+    for p in pats:
+        for c in sorted(BASE.glob(p)):
+            if "quarterly" not in c.name.lower():
+                return c
+    return None
+
+
+def find_quarterly(index):
+    """The QUARTERLY holdings workbook (Mar/Jun/Sep/Dec quarter-ends + recent months)."""
+    if index == "R2KG":
+        return find(["*[Rr]ussell*[Qq]uarterly*[Hh]olding*.xlsx", "*[Rr]ussell*[Gg]rowth*[Qq]uarterly*.xlsx"])
+    return find(["*600*[Qq]uarterly*[Hh]olding*.xlsx", "*[Ss][Pp]*600*[Qq]uarterly*.xlsx"])
+
+
+QUARTER_MONTHS = (3, 6, 9, 12)          # the consistent quarter-end spine across both indices
+PANEL_Q_CSV = BASE / "r2k_panel_q.csv"
 
 
 # ============================ the panel (one row per snapshot x constituent) ============================
@@ -124,16 +149,13 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
 PANEL_COLS = ID_COLS + METRIC_COLS
 
 
-def _index_rows(index, holdings_path, nfacts, tmap):
-    """All (snapshot x constituent) rows for one index from its holdings workbook."""
-    hold = load_monthly_holdings(holdings_path, verbose=False)
-    spine = annual_spine(hold)
+def _index_rows(index, hold, snaps, nfacts, tmap):
+    """All (snapshot x constituent) rows for one index over the given snapshot dates."""
     rows = []
-    for year in sorted(spine):
-        snap = spine[year]
+    for snap in snaps:
         for h in hold[snap]:
             cik, cf, reason = resolve_identity(h, tmap, nfacts)
-            rec = {"index": index, "year": year, "snapshot": str(snap)[:10],
+            rec = {"index": index, "year": snap.year, "snapshot": str(snap)[:10],
                    "ticker": h.get("ticker", ""), "nt": h["nt"], "name": h.get("name", ""),
                    "cik": cik or "", "fy0": "", "weight": h.get("weight", 0.0) or 0.0,
                    "gics": h.get("gics", ""), "ms_industry": h.get("ms_industry", ""),
@@ -150,7 +172,7 @@ def _index_rows(index, holdings_path, nfacts, tmap):
                     for k in METRIC_COLS:
                         rec[k] = cm.get(k)
             rows.append(rec)
-    return rows, len(spine)
+    return rows
 
 
 def build_panel(verbose=True):
@@ -160,21 +182,60 @@ def build_panel(verbose=True):
     nfacts = norm_facts(load_fundamentals())
     base, temporal = load_maps()
     tmap = ticker_cik_map(base, temporal)
-    rows, nyr = _index_rows("R2KG", find_holdings(), nfacts, tmap)
-    sp = sp600g_holdings()
-    if sp:
-        sp_rows, _ = _index_rows("SP600G", sp, nfacts, tmap)
-        rows += sp_rows
+    rows = []
+    for index, path in (("R2KG", find_annual("R2KG") or find_holdings()), ("SP600G", find_annual("SP600G"))):
+        if not path:
+            continue
+        hold = load_monthly_holdings(path, verbose=False)
+        spine = annual_spine(hold)
+        rows += _index_rows(index, hold, sorted(spine.values()), nfacts, tmap)
     if verbose:
-        for idx in ("R2KG", "SP600G"):
-            ir = [r for r in rows if r["index"] == idx]
-            if ir:
-                nc = sum(r["covered"] for r in ir)
-                print(f"  panel[{idx}]: {len(ir)} constituent-years, {nc} covered "
-                      f"({100*nc/len(ir):.1f}%)")
-        if not sp:
+        _report_coverage(rows, "constituent-years")
+        if not any(r["index"] == "SP600G" for r in rows):
             print("  (no S&P 600 Growth holdings file found -- panel is R2000G-only)")
     return rows
+
+
+def _report_coverage(rows, unit):
+    for idx in ("R2KG", "SP600G"):
+        ir = [r for r in rows if r["index"] == idx]
+        if ir:
+            nc = sum(r["covered"] for r in ir)
+            print(f"  panel[{idx}]: {len(ir)} {unit}, {nc} covered ({100*nc/len(ir):.1f}%)")
+
+
+def build_quarterly_panel(verbose=True):
+    """Quarter-end panel (Mar/Jun/Sep/Dec) from the QUARTERLY holdings files, for the timing-sensitive
+    exhibits (valuation, factor spreads). Same base-first identity -- the files' survivorship-mapped
+    CIK column is ignored. Cached separately so it never disturbs the annual panel."""
+    nfacts = norm_facts(load_fundamentals())
+    base, temporal = load_maps()
+    tmap = ticker_cik_map(base, temporal)
+    rows = []
+    for index in ("R2KG", "SP600G"):
+        path = find_quarterly(index)
+        if not path:
+            continue
+        hold = load_monthly_holdings(path, verbose=False)
+        snaps = sorted(d for d in hold if d.month in QUARTER_MONTHS)
+        rows += _index_rows(index, hold, snaps, nfacts, tmap)
+    if verbose:
+        if rows:
+            nq = len({(r["index"], r["snapshot"]) for r in rows})
+            print(f"  quarterly panel: {len(rows)} rows over {nq} index-quarters")
+            _report_coverage(rows, "constituent-quarters")
+        else:
+            print("  (no quarterly holdings files found -- run needs *Quarterly*Holdings*.xlsx)")
+    return rows
+
+
+def get_quarterly_panel(index="R2KG"):
+    """Load the cached quarterly panel, building it if absent. index=None for all rows."""
+    if PANEL_Q_CSV.exists():
+        rows = load_panel(PANEL_Q_CSV)
+    else:
+        rows = build_quarterly_panel(); write_panel(rows, PANEL_Q_CSV)
+    return rows if index is None else [r for r in rows if r["index"] == index]
 
 
 def write_panel(rows, path=PANEL_CSV):
@@ -362,6 +423,12 @@ def print_sheet(hdr, rows, ncols=5):
 
 
 def main():
+    import sys
+    if "--quarterly" in sys.argv:
+        rows = build_quarterly_panel(verbose=True)
+        write_panel(rows, PANEL_Q_CSV)
+        print(f"  -> {PANEL_Q_CSV.name}")
+        return
     rows = build_panel(verbose=True)
     write_panel(rows)
     print(f"  -> {PANEL_CSV.name}")
