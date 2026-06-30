@@ -102,7 +102,7 @@ def main():
     L.append(f"  {'snapshot':<11}{'source':<8}{'TotRev$B':>10}{'TotNI$B':>10}{'%Unprof':>9}"
              f"{'GrossDA%':>9}{'NetDA%':>8}{'MScov%':>8}")
     L.append("  " + "-" * 71)
-    deltas = []
+    deltas, stale_years = [], []
     for y in years:
         snap = spine[y]
         rows = hold[snap]
@@ -128,15 +128,17 @@ def main():
         ms_nda = agg([s for _, s in msc], ni_of, "revenue")
         cov = 100 * len(msc) / len(cons) if cons else 0
         sd = str(snap)[:10]
+        # dollar_agg returns a FRACTION -> x100 for display as a margin %
         L.append(f"  {sd:<11}{'DERA':<8}{q['tot_rev']:>10.1f}{dera_ni:>10.1f}{q['unprof_ni']:>9.1f}"
-                 f"{q['gross_da']:>9.1f}{q['net_da']:>8.1f}{'':>8}")
+                 f"{100*(q['gross_da'] or 0):>9.1f}{100*(q['net_da'] or 0):>8.1f}{'':>8}")
         L.append(f"  {'':<11}{'MSTAR':<8}{ms_rev:>10.1f}{ms_ni:>10.1f}{ms_unprof:>9.1f}"
-                 f"{(ms_gda or 0):>9.1f}{(ms_nda or 0):>8.1f}{cov:>8.0f}")
+                 f"{100*(ms_gda or 0):>9.1f}{100*(ms_nda or 0):>8.1f}{cov:>8.0f}")
         if wbq.get(sd):
             w = wbq[sd]
-            tag = "OK" if (w["rev"] and abs(w["rev"] - q["tot_rev"]) < 0.5) else "** workbook != recompute"
+            fresh = w["rev"] and abs(w["rev"] - q["tot_rev"]) < max(0.5, 0.005 * q["tot_rev"])
+            stale_years.append(sd) if not fresh else None
             L.append(f"  {'':<11}{'WORKBK':<8}{(w['rev'] or 0):>10.1f}{(w['ni'] or 0):>10.1f}"
-                     f"{(w['unprof'] or 0):>9.1f}{'':>17}  <- {tag}")
+                     f"{(w['unprof'] or 0):>9.1f}{'':>17}  <- {'OK' if fresh else '** STALE vs current engine'}")
         # relative deltas (DERA vs MSTAR) on the two most-cited figures
         if ms_rev and q["tot_rev"]:
             deltas.append(abs(ms_rev - q["tot_rev"]) / q["tot_rev"])
@@ -144,8 +146,13 @@ def main():
     if deltas:
         md = 100 * sum(deltas) / len(deltas)
         L.append(f"  MEAN |DERA-MSTAR| revenue gap: {md:.1f}%   "
-                 + ("(sources agree -- the workbook is consistent with Morningstar)" if md < 3 else
-                    "(material gap -- inspect the per-name dual reconstruction: r2k_dual_reconstruct_pilot.py)"))
+                 + ("(sources AGREE -- current fundamentals are consistent with Morningstar)" if md < 3 else
+                    "(material gap -- inspect per-name: r2k_dual_reconstruct_pilot.py)"))
+    if stale_years:
+        L.append(f"\n  ** WORKBOOK IS STALE in {len(stale_years)} snapshots: its Quality tabs were built before"
+                 f" recent engine fixes.\n     The DATA is sound (DERA==Morningstar); the WORKBOOK just needs"
+                 f" regenerating. Re-run the FULL analytics chain:\n       r2k_step3_analytics -> step4 ->"
+                 f" step5 -> step6 -> step8 -> step9 -> step7_consolidate  (step 7 only COPIES the tabs).")
     L.append("\n  FactSet: provide its R2000G aggregate export to add the third column. FactSet reports TTM,")
     L.append("  so expect a few-percent level difference vs our fiscal-year snapshot -- methodology, not error.")
     OUT.write_text("\n".join(L), encoding="utf-8")
