@@ -222,26 +222,32 @@ def get_panel():
     return rows
 
 
-def diff_sheet(sheet, hdr, rows, src=ANALYTICS, tol=0.05):
-    """Cell-by-cell diff of panel-derived rows vs the current workbook sheet, keyed on column 0
-    (the snapshot label). Numeric cells within `tol` are treated as equal. Returns the change count."""
+def diff_sheet(sheet, hdr, rows, src=ANALYTICS, tol=0.05, keycols=1):
+    """Cell-by-cell diff of panel-derived rows vs the current workbook sheet. The row key is the
+    first `keycols` columns joined (use keycols=2 for sheets with two rows per period, e.g.
+    Composition Change). Numeric cells within `tol` are equal. Returns the change count."""
     if not src.exists():
         print(f"  (no {src.name} to diff against -- skipping)")
         return None
     import openpyxl
     ws = openpyxl.load_workbook(src, data_only=True)[sheet]
+
+    def mk(vals):
+        return "|".join(str(v)[:14] for v in vals[:keycols])
+
     old = {}
     for r in range(4, ws.max_row + 1):
-        key = ws.cell(r, 1).value
-        if key:
-            old[str(key)[:10]] = [ws.cell(r, c).value for c in range(1, len(hdr) + 1)]
+        cells = [ws.cell(r, c).value for c in range(1, len(hdr) + 1)]
+        if cells[0]:
+            old[mk(cells)] = cells
     print(f"\n  DIFF vs current {src.name} :: {sheet}")
     nd = 0
     for row in rows:
-        o = old.get(str(row[0])[:10])
+        key = mk(row)
+        o = old.get(key)
         if not o:
-            print(f"    {str(row[0])[:10]}  (not in current sheet)"); continue
-        for c in range(1, len(hdr)):
+            print(f"    {key}  (not in current sheet)"); continue
+        for c in range(keycols, len(hdr)):
             nv, ov = row[c], o[c]
             if nv is None and ov is None:
                 continue
@@ -251,7 +257,7 @@ def diff_sheet(sheet, hdr, rows, src=ANALYTICS, tol=0.05):
             except (TypeError, ValueError):
                 if nv == ov:
                     continue
-            print(f"    {str(row[0])[:10]:<11} {hdr[c]:<22} current={ov!s:<10} -> panel={nv!s:<10}")
+            print(f"    {key:<22} {hdr[c]:<22} current={ov!s:<10} -> panel={nv!s:<10}")
             nd += 1
     print(f"  {nd} cell(s) changed." if nd else "  identical.")
     return nd
