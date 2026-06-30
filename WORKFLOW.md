@@ -66,27 +66,45 @@ and a **`provenance`** column recording how every engineered value was built. Se
 
 ---
 
-## PHASE 4 — Analytics (the `step` scripts) and the IC workbook
+## PHASE 4 — Analytics and the IC workbook (panel-first, ONE command)
 
-Run 9–14 in any order, then **7-consolidate last** (it reads all of them + the reliability flags).
+```
+python r2k_report.py
+```
 
-| # | Command | Produces |
-|---|---------|----------|
-| 9  | `python r2k_step3_analytics.py` | `Russell2000Growth_Analytics.xlsx` |
-| 10 | `python r2k_step4_performance.py` | `R2000G_vs_SP600G_Performance.xlsx` |
-| 11 | `python r2k_step5_cohort_attribution.py` | `R2000G_Cohort_Attribution.xlsx` |
-| 12 | `python r2k_step6_index_comparison.py` | `R2000G_vs_SP600G_Quality.xlsx` |
-| 13 | `python r2k_step8_concentration.py` | `R2000G_Concentration.xlsx` |
-| 14 | `python r2k_step9_biotech.py` | `R2000G_Biotech.xlsx` |
-| 15 | `python r2k_step7_consolidate.py` | **`R2000G_SmallCapGrowth_Benchmark_Review.xlsx`** (the IC workbook) |
-| 16 | `python r2k_refresh_charts_data.py` | `R2000G_Benchmark_Review_charted.xlsx` (preserves hand-made charts) |
+`r2k_report.py` builds the whole IC workbook from the **canonical panel** and runs a consistency
+guard at the end. It orchestrates, in order: panel + analytics → performance → attribution →
+comparison → concentration → biotech → consolidate → guard. Flags: `--guard` re-runs only the
+consistency check on the existing workbook; `--skip step4_performance,…` omits named steps.
+
+### The panel architecture (why there is now one command)
+
+Every fundamental figure in the workbook is a projection of **one** table, the *panel*, so the tabs
+can never disagree on who is in the index, which CIK a ticker maps to, which fiscal year is used, or
+what a name's metrics are. (This replaced a structure where each `stepN` re-derived the universe
+independently — the source of the 2016 CZR identity bug.)
+
+| Layer | Module | Role |
+|---|---|---|
+| Universe / identity / quality | **`r2k_universe.py`** | one holdings loader, one **base-first** CIK resolver, one `annual_spine`, one `pick_fy0`, one `company_metrics`, the `index_quality` reducer, and `build_panel()` → **`r2k_panel.csv`** (one row per index×snapshot×constituent, both R2000G and S&P 600 Growth). The single source of truth. |
+| Views (`panel → sheet`) | `r2k_view_quality_trends/cohorts/dupont/composition` (step3 tabs), `r2k_view_comparison` (step6 tabs), `r2k_view_biotech` (step9 fundamentals tabs), `r2k_view_concentration` (step8 weight tab), `r2k_view_reliability` (Data Reliability) | thin, pure projections of the panel; each has a `write_sheet(wb, panel)` and a `diff_sheet` self-check vs the current workbook. |
+| Analytics assembler | **`r2k_build_analytics.py`** | rebuilds the panel + writes `Russell2000Growth_Analytics.xlsx` from the views. **Run this instead of the retired `r2k_step3_analytics.py`.** |
+| Returns / performance | `r2k_step4/5/8/9` + the returns parts of step6 | unchanged math, now importing the shared helpers from `r2k_universe` (no duplicated `norm_facts`/`fund_for`/`ticker_cik_map`/`annual_spine`). |
+| Assembly + guard | `r2k_step7_consolidate.py`, **`r2k_report.py`** | step7 assembles the IC workbook (incl. the Data Reliability tab via `r2k_view_reliability`); `r2k_report.py` runs the whole chain + the guard. |
+
+**Consistency guard** (`r2k_report.py --guard`): recomputes the R2000G headline straight off the
+panel and asserts that BOTH the panel-sourced `R2KG Quality Trends` tab AND the independently-built
+step6 `Qual R2000G` tab agree with it. This is the tripwire that makes the original step3-vs-step6
+divergence impossible to ship silently.
 
 **`r2k_step7_consolidate.py`** assembles the IC workbook and adds the **Data Reliability** tab
 (front of the book): per constituent, its reliability tier (clean/watch/review, color-coded),
 three-statement tie-out confidence, which identities break, the plausibility flags, and the
 provenance of engineered values — sorted by index weight, headed by the % of index weight that is
-CLEAN. It reads `plausibility_flags.csv` (phase 3) and `fundamentals_dera.csv`; if the flags file
-is absent the tab is skipped with a notice.
+CORE-reliable / fully clean. It reads `plausibility_flags.csv` (phase 3) and `fundamentals_dera.csv`.
+
+After the build, `python r2k_refresh_charts_data.py` produces `R2000G_Benchmark_Review_charted.xlsx`
+(preserves hand-made charts).
 
 Knobs that affect the analysis: `WINDOW_MONTHS` / `WINDOW_START` (manager window, default trailing
 36m to 4/30/2026), `SNAP_MONTH=4`, `BIOTECH_KEYWORDS`, `RET_MODE=auto`.
@@ -99,20 +117,22 @@ Knobs that affect the analysis: `WINDOW_MONTHS` / `WINDOW_START` (manager window
 python r2k_dera_classify.py            # back up edgar_annual_fundamentals_ASFILED.csv first
 python r2k_dera_to_fundamentals.py
 python r2k_plausibility.py
-python r2k_step3_analytics.py
-python r2k_step4_performance.py
-python r2k_step5_cohort_attribution.py
-python r2k_step6_index_comparison.py
-python r2k_step8_concentration.py
-python r2k_step9_biotech.py
-python r2k_step7_consolidate.py
+python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
 python r2k_refresh_charts_data.py
 ```
 
 ---
 
-## Never run directly — shared library
-`r2k_perf_io.py` — Morningstar Direct performance parser, imported by steps 4 / 5 / 6.
+## Never run directly — shared libraries
+- `r2k_universe.py` — the panel / identity / quality single source of truth, imported by every view
+  and by step5/8/9. (Running it directly rebuilds `r2k_panel.csv` and prints the headline — useful
+  as a check, but the report build does this for you.)
+- `r2k_perf_io.py` — Morningstar Direct performance parser, imported by steps 4 / 5 / 6 / 8 / 9.
+
+## Validate a single tab vs the current workbook (on demand)
+Each view runs standalone and prints a cell-by-cell diff vs the current workbook tab, e.g.
+`python r2k_view_quality_trends.py`, `python r2k_view_comparison.py`, `python r2k_view_biotech.py`.
+Use these to see exactly what a change moved before assembling the full report.
 
 ---
 
@@ -168,7 +188,9 @@ focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run 
 
 ## Deprecated / superseded — do **NOT** run
 The DERA pipeline above replaces the earlier project phase. Do not run:
-`r2k_step2_asfiled.py`, `r2k_step2b_asfiled_pilot.py`, `r2k_build_sp600g_universe.py`, and the
+`r2k_step3_analytics.py` (**superseded by `r2k_build_analytics.py`** — the panel-based analytics
+workbook; `r2k_report.py` calls it), `r2k_step2_asfiled.py`, `r2k_step2b_asfiled_pilot.py`,
+`r2k_build_sp600g_universe.py`, and the
 earlier-phase QA one-offs now superseded: `r2k_recover_missing.py`, `r2k_unknown_diagnostic.py`,
 `r2k_reconcile_sources.py`, `r2k_override_reconcile.py`, `r2k_identity_backstop.py`,
 `r2k_calibrate_tags.py`, `r2k_completeness_check.py`, `r2k_biotech_check.py`. They remain in the
