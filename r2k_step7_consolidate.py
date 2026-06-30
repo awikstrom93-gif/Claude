@@ -424,20 +424,20 @@ def data_reliability(wb):
     import csv as _csv, json as _json
     if not FLAGS.exists():
         return None
-    flags = list(_csv.DictReader(open(FLAGS, encoding="utf-8")))
-    # latest snapshot row per cik
+    flags = [r for r in _csv.DictReader(open(FLAGS, encoding="utf-8")) if r.get("fiscal_year", "").isdigit()]
+    # latest snapshot row per cik (used only for the index-weight CLEAN headline)
     latest = {}
     for r in flags:
-        c, fy = r.get("cik"), r.get("fiscal_year", "")
-        if fy.isdigit() and (c not in latest or fy > latest[c]["fiscal_year"]):
+        c = r.get("cik")
+        if c not in latest or r["fiscal_year"] > latest[c]["fiscal_year"]:
             latest[c] = r
-    # provenance + breaks from fundamentals (latest year per cik)
+    # provenance + breaks from fundamentals, per (cik, fiscal_year) -- one entry for EVERY year so the
+    # ledger shows historical reliability, not just the current snapshot.
     prov = {}
     if FUND.exists():
         for r in _csv.DictReader(open(FUND, encoding="utf-8")):
-            c, fy = r.get("cik"), r.get("fiscal_year", "")
-            if fy.isdigit() and (c not in prov or fy > prov[c]["fiscal_year"]):
-                prov[c] = r
+            if r.get("fiscal_year", "").isdigit():
+                prov[(r.get("cik"), r["fiscal_year"])] = r
     # index weight + ticker (optional, via r2k_plausibility loaders + the cik map)
     cik2w, cik2tkr = {}, {}
     try:
@@ -462,39 +462,40 @@ def data_reliability(wb):
     def _short(s, n=180):
         return s if len(s) <= n else s[:n - 1] + "…"
 
+    # one row per COMPANY-YEAR (full historical ledger) -- a name held only in earlier years still has
+    # its historical values verified here. The full universe (R2000G constituents across the review
+    # period, plus the S&P 600 Growth comparison names) is included; filter by ticker/year/tier.
     rows = []
-    for c, fr in latest.items():
-        pr = prov.get(c, {})
+    for fr in flags:
+        c, fy = fr.get("cik"), fr["fiscal_year"]
+        pr = prov.get((c, fy), {})
         rows.append({
-            "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0),
-            "fy": fr.get("fiscal_year", ""), "tier": fr.get("tier", ""),
-            "conf": fr.get("confidence", "") or pr.get("confidence", ""),
+            "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0), "fy": fy,
+            "tier": fr.get("tier", ""), "conf": fr.get("confidence", "") or pr.get("confidence", ""),
             "breaks": pr.get("breaks", ""),
             "flags": ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x),
             "prov": _short(pr.get("provenance", "")),
         })
-    # focus on the CURRENT index constituents (those carrying weight); the full universe -- S&P 600
-    # Growth comparison names and former holdings -- is in fundamentals_dera.csv / plausibility_flags.csv.
-    if any(r["wt"] for r in rows):
-        rows = [r for r in rows if r["wt"] > 0]
-    rows.sort(key=lambda x: (-x["wt"], x["cik"]))
-    tw = sum(r["wt"] for r in rows) or 0.0
-    clean_w = sum(r["wt"] for r in rows if r["tier"] == "clean")
+    rows.sort(key=lambda x: (-x["wt"], x["cik"], x["fy"]))
+    # index-weight CLEAN headline is measured on the CURRENT snapshot (latest year per name)
+    tw = sum(cik2w.values()) or 0.0
+    clean_w = sum(cik2w.get(c, 0.0) for c, fr in latest.items() if fr.get("tier") == "clean")
     from collections import Counter as _Counter
     tc = _Counter(r["tier"] for r in rows)
 
     ws = wb.create_sheet("Data Reliability")
     ws.cell(1, 1, "Data Reliability — three-statement tie-out, sanity, and provenance").font = TITLE
-    sub = (f"{len(rows):,} index constituents (latest fiscal year). Reliability = identities tie (three "
-           f"statements articulate) AND values are plausible. "
-           + (f"{100*clean_w/tw:.1f}% of index weight is CLEAN." if tw else
+    sub = (f"{len(rows):,} company-years across {len({r['cik'] for r in rows}):,} names (full historical "
+           f"ledger, 2015–present). Reliability = identities tie (three statements articulate) AND values "
+           f"are plausible. "
+           + (f"{100*clean_w/tw:.1f}% of CURRENT index weight is CLEAN." if tw else
               "(index weights unavailable — name-count view.)"))
     ws.cell(2, 1, sub).font = BODY
-    ws.cell(3, 1, f"by name:  clean {tc['clean']}   |   watch {tc['watch']}   |   review {tc['review']}"
-                  "        clean = ties out and plausible · watch = a cash-flow leg or benign flag · "
-                  "review = a P&L/balance-sheet break or critical flag (resolve before relying on it)"
+    ws.cell(3, 1, f"company-years:  clean {tc['clean']:,}   |   watch {tc['watch']:,}   |   review {tc['review']:,}"
+                  "      clean = ties out and plausible · watch = a cash-flow leg or benign flag · "
+                  "review = a P&L/balance-sheet break or critical flag"
             ).font = Font(size=9, italic=True, color="555555")
-    headers = ["Ticker", "CIK", "Index Wt %", "Latest FY", "Reliability", "Tie-out conf",
+    headers = ["Ticker", "CIK", "Index Wt %", "Fiscal Year", "Reliability", "Tie-out conf",
                "Identity breaks", "Plausibility flags", "Provenance (engineered values)"]
     _hdr_row(ws, 5, headers)
     tier_fill = {"clean": PatternFill("solid", fgColor="E2EFDA"),
@@ -504,17 +505,18 @@ def data_reliability(wb):
         ws.cell(i, 1, r["tkr"]); ws.cell(i, 2, r["cik"])
         ws.cell(i, 3, round(r["wt"], 3) if r["wt"] else None)
         ws.cell(i, 4, r["fy"])
-        tc = ws.cell(i, 5, r["tier"]); tc.fill = tier_fill.get(r["tier"], PatternFill())
+        cell = ws.cell(i, 5, r["tier"]); cell.fill = tier_fill.get(r["tier"], PatternFill())
         ws.cell(i, 6, r["conf"]); ws.cell(i, 7, r["breaks"])
         ws.cell(i, 8, r["flags"]); ws.cell(i, 9, r["prov"])
         for col in range(1, 10):
             ws.cell(i, col).font = BODY
-    widths = [10, 12, 11, 10, 12, 12, 24, 26, 60]
+    widths = [10, 12, 11, 11, 12, 12, 24, 26, 60]
     for col, w in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + col)].width = w
+    ws.auto_filter.ref = f"A5:I{5 + len(rows)}"      # sortable/filterable by tier, year, name
     ws.freeze_panes = "A6"
-    print(f"  Data Reliability tab: {len(rows)} names"
-          + (f", {100*clean_w/tw:.1f}% weight clean" if tw else ""))
+    print(f"  Data Reliability tab: {len(rows):,} company-years / {len({r['cik'] for r in rows}):,} names"
+          + (f", {100*clean_w/tw:.1f}% current weight clean" if tw else ""))
     return "Data Reliability"
 
 
