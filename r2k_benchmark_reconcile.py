@@ -135,10 +135,17 @@ def main():
                  f"{100*(ms_gda or 0):>9.1f}{100*(ms_nda or 0):>8.1f}{cov:>8.0f}")
         if wbq.get(sd):
             w = wbq[sd]
-            fresh = w["rev"] and abs(w["rev"] - q["tot_rev"]) < max(0.5, 0.005 * q["tot_rev"])
-            stale_years.append(sd) if not fresh else None
+            # the tab is fresh only if BOTH revenue AND net income match the current recompute.
+            # NI is where the engine fixes landed (e.g. 2016 6.5->13.2), so a revenue-only test
+            # under-counts staleness on years whose revenue happens to match but NI does not.
+            rev_ok = w["rev"] and abs(w["rev"] - q["tot_rev"]) < max(0.5, 0.005 * q["tot_rev"])
+            ni_ok = w["ni"] is not None and abs(w["ni"] - dera_ni) < max(0.5, 0.03 * abs(dera_ni))
+            fresh = rev_ok and ni_ok
+            if not fresh:
+                stale_years.append(sd)
+            why = "" if fresh else (" (NI)" if rev_ok else " (rev)" if ni_ok else " (rev+NI)")
             L.append(f"  {'':<11}{'WORKBK':<8}{(w['rev'] or 0):>10.1f}{(w['ni'] or 0):>10.1f}"
-                     f"{(w['unprof'] or 0):>9.1f}{'':>17}  <- {'OK' if fresh else '** STALE vs current engine'}")
+                     f"{(w['unprof'] or 0):>9.1f}{'':>17}  <- {'OK' if fresh else '** STALE vs current engine'+why}")
         # relative deltas (DERA vs MSTAR) on the two most-cited figures
         if ms_rev and q["tot_rev"]:
             deltas.append(abs(ms_rev - q["tot_rev"]) / q["tot_rev"])
@@ -149,10 +156,14 @@ def main():
                  + ("(sources AGREE -- current fundamentals are consistent with Morningstar)" if md < 3 else
                     "(material gap -- inspect per-name: r2k_dual_reconstruct_pilot.py)"))
     if stale_years:
-        L.append(f"\n  ** WORKBOOK IS STALE in {len(stale_years)} snapshots: its Quality tabs were built before"
-                 f" recent engine fixes.\n     The DATA is sound (DERA==Morningstar); the WORKBOOK just needs"
-                 f" regenerating. Re-run the FULL analytics chain:\n       r2k_step3_analytics -> step4 ->"
-                 f" step5 -> step6 -> step8 -> step9 -> step7_consolidate  (step 7 only COPIES the tabs).")
+        L.append(f"\n  ** WORKBOOK STALE in {len(stale_years)} snapshots: the 'R2KG Quality Trends' tab still holds"
+                 f" pre-fix values.\n     The DATA is sound (DERA==Morningstar, NI matches the recompute); only the"
+                 f" tab on disk is old.\n     ROOT CAUSE: step7 COPIES that tab from  Russell2000Growth_Analytics.xlsx"
+                 f"  (step 3's output),\n     and that file was not rebuilt. Re-run step 3 FIRST, then step 7:"
+                 f"\n       python r2k_step3_analytics.py     # rewrites Russell2000Growth_Analytics.xlsx"
+                 f"\n       python r2k_step7_consolidate.py    # re-copies the now-fresh tab into the workbook"
+                 f"\n     VERIFY the source actually moved before re-consolidating:"
+                 f"\n       ls -l Russell2000Growth_Analytics.xlsx   # timestamp must be newer than the last engine fix")
     L.append("\n  FactSet: provide its R2000G aggregate export to add the third column. FactSet reports TTM,")
     L.append("  so expect a few-percent level difference vs our fiscal-year snapshot -- methodology, not error.")
     OUT.write_text("\n".join(L), encoding="utf-8")
