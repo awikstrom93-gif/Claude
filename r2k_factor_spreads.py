@@ -12,6 +12,7 @@ Factors (quintiles, equal-weighted; top-quality minus bottom-quality):
 INPUTS  r2k_panel.csv (quality) + the Morningstar performance workbook (returns).
 RUN:    python r2k_factor_spreads.py
 """
+import statistics
 from datetime import date
 
 from r2k_universe import get_panel, BASE
@@ -24,6 +25,7 @@ FACTORS = [("ROIC", "roic", +1), ("GP/Assets", "gp_to_assets", +1),
            ("Accruals(low=Q)", "accruals", -1), ("NetMargin", "net_margin", +1),
            ("FCFMargin", "fcf_margin", +1)]
 MIN_N = 50          # need a reasonable cross-section to form quintiles
+WIN_LO, WIN_HI = 0.01, 0.99   # winsorize forward returns per year (tame micro-cap lottery tails)
 
 
 def _ck(c):
@@ -50,18 +52,50 @@ def _fwd_return(rec, window):
     return g - 1.0
 
 
-def _quintile_spread(pairs, direction):
-    """pairs: [(factor_value, fwd_return)]. Returns (top-quality minus bottom-quality, n) equal-weighted."""
-    pts = [(v * direction, r) for v, r in pairs if v is not None and r is not None]
+def _winsorizer(vals):
+    """Return f(v) clamping to the [WIN_LO, WIN_HI] cross-sectional percentiles of vals."""
+    xs = sorted(v for v in vals if v is not None)
+    if len(xs) < 20:
+        return lambda v: v
+    n = len(xs)
+    plo = xs[max(0, int(round(WIN_LO * (n - 1))))]
+    phi = xs[min(n - 1, int(round(WIN_HI * (n - 1))))]
+    return lambda v: None if v is None else max(plo, min(phi, v))
+
+
+def _wquintile_spread(triples, direction):
+    """triples: [(factor_value, index_weight, fwd_return)]. Top-quality minus bottom-quality quintile,
+    quintiles split by name COUNT, returns CAP-WEIGHTED within each quintile (index-representative)."""
+    pts = [(v * direction, w or 0.0, r) for v, w, r in triples if v is not None and r is not None]
     if len(pts) < MIN_N:
-        return None, 0
+        return None
     pts.sort(key=lambda x: x[0])
     q = len(pts) // 5
     if q < 5:
-        return None, 0
-    bot = [r for _, r in pts[:q]]
-    top = [r for _, r in pts[-q:]]
-    return (sum(top) / len(top) - sum(bot) / len(bot)), len(pts)
+        return None
+
+    def wavg(grp):
+        tw = sum(w for _, w, _ in grp) or 1e-9
+        return sum(w * r for _, w, r in grp) / tw
+    return wavg(pts[-q:]) - wavg(pts[:q])
+
+
+def _composite_z(rows):
+    """{cik: composite quality z-score} -- mean of per-factor cross-sectional z (clipped ±3, signed by
+    direction). Needs >=3 of the factors present for a name."""
+    acc, cnt = {}, {}
+    for _label, field, direction in FACTORS:
+        vals = [(r["cik"], r.get(field)) for r in rows if r.get(field) is not None]
+        xs = [v for _, v in vals]
+        if len(xs) < 20:
+            continue
+        m = statistics.mean(xs)
+        sd = statistics.pstdev(xs) or 1e-9
+        for cik, v in vals:
+            z = max(-3.0, min(3.0, (v - m) / sd)) * direction
+            acc[cik] = acc.get(cik, 0.0) + z
+            cnt[cik] = cnt.get(cik, 0) + 1
+    return {c: acc[c] / cnt[c] for c in acc if cnt[c] >= 3}
 
 
 def compute(panel, series, index_rows, all_dates):
@@ -74,39 +108,46 @@ def compute(panel, series, index_rows, all_dates):
             by_nt.setdefault(m["nt"], rec)
     ridx = index_rows.get("R2KG") or index_rows.get("R2000G")
 
-    # panel grouped by snapshot year (covered R2000G constituents)
     years = sorted({int(r["year"]) for r in panel})
     per_year = {}
     for y in years:
-        d0 = None
         rows = [r for r in panel if int(r["year"]) == y and r["covered"]]
-        if rows:
-            d0 = _parse_snap(rows[0]["snapshot"])
+        d0 = _parse_snap(rows[0]["snapshot"]) if rows else None
         if d0 is None:
             continue
         window = [d for d in all_dates if d > d0][:12]
         if len(window) < 10:        # incomplete forward year (e.g. the final snapshot) -> skip
             continue
         idx_fwd = _fwd_return(ridx, window) if ridx else None
-        # forward return per constituent
-        fwd = {}
+        wt = {r["cik"]: r["weight"] for r in rows}
+        # forward returns, then winsorize cross-sectionally for the year
+        raw = {}
         for r in rows:
             rec = by_cik.get(_ck(r["cik"])) or by_nt.get(r["nt"])
             if rec:
                 fr = _fwd_return(rec, window)
                 if fr is not None:
-                    fwd[r["cik"]] = fr
-        # factor spreads
+                    raw[r["cik"]] = fr
+        wz = _winsorizer(list(raw.values()))
+        fwd = {c: wz(v) for c, v in raw.items()}
+        # single-factor spreads (cap-weighted quintiles)
         fac = {}
         for label, field, direction in FACTORS:
-            pairs = [(r.get(field), fwd.get(r["cik"])) for r in rows if r["cik"] in fwd]
-            sp, n = _quintile_spread(pairs, direction)
-            fac[label] = sp
-        # cohort spread: profitable minus never-profitable (equal-weight)
-        prof = [fwd[r["cik"]] for r in rows if r["cik"] in fwd and r["cohort"] == "profitable"]
-        nev = [fwd[r["cik"]] for r in rows if r["cik"] in fwd and r["cohort"] == "never_profitable"]
-        coh = (sum(prof) / len(prof) - sum(nev) / len(nev)) if (len(prof) >= 10 and len(nev) >= 10) else None
-        per_year[y] = {"idx": idx_fwd, "fac": fac, "coh": coh, "n": len(fwd)}
+            triples = [(r.get(field), wt.get(r["cik"]), fwd.get(r["cik"])) for r in rows if r["cik"] in fwd]
+            fac[label] = _wquintile_spread(triples, direction)
+        # composite quality score spread
+        comp_z = _composite_z(rows)
+        ctrip = [(comp_z.get(r["cik"]), wt.get(r["cik"]), fwd.get(r["cik"]))
+                 for r in rows if r["cik"] in fwd and r["cik"] in comp_z]
+        comp = _wquintile_spread(ctrip, +1)
+        # cohort spread: profitable minus never (cap-weighted)
+        def _wavg(names):
+            tw = sum(wt.get(c, 0.0) for c in names) or 1e-9
+            return sum(wt.get(c, 0.0) * fwd[c] for c in names) / tw
+        prof = [r["cik"] for r in rows if r["cik"] in fwd and r["cohort"] == "profitable"]
+        nev = [r["cik"] for r in rows if r["cik"] in fwd and r["cohort"] == "never_profitable"]
+        coh = (_wavg(prof) - _wavg(nev)) if (len(prof) >= 10 and len(nev) >= 10) else None
+        per_year[y] = {"idx": idx_fwd, "fac": fac, "comp": comp, "coh": coh, "n": len(fwd)}
     return years, per_year
 
 
@@ -123,41 +164,46 @@ def _summ(vals):
     return mean, hit, cum - 1.0
 
 
+def _val(d, lab):
+    if lab == "Composite":
+        return d["comp"]
+    if lab == "Prof-Never":
+        return d["coh"]
+    return d["fac"].get(lab)
+
+
 def main():
     panel = get_panel(index="R2KG")
     series, index_rows, all_dates = load_performance(verbose=False)
     years, per_year = compute(panel, series, index_rows, all_dates)
     yy = [y for y in years if y in per_year]
-    labels = [f[0] for f in FACTORS] + ["Prof-Never"]
+    labels = [f[0] for f in FACTORS] + ["Composite", "Prof-Never"]
+
+    def cell(v):
+        return f"{100*v:>16.1f}" if v is not None else f"{'·':>16}"
 
     L = ["QUALITY-FACTOR RETURN SPREADS  --  did quality pay inside R2000G? (forward 12m, May->Apr)",
-         "  long-short = top-quality quintile minus bottom-quality quintile, equal-weighted, % per year", ""]
+         "  long-short = top-quality minus bottom-quality quintile, CAP-WEIGHTED within quintile,",
+         "  forward returns winsorized at 1/99 pct (index-representative; tames micro-cap lottery tails). %", ""]
     L.append("  " + f"{'fwd yr':<9}{'IndexR%':>9}" + "".join(f"{lab:>16}" for lab in labels) + f"{'n':>7}")
     L.append("  " + "-" * (18 + 16 * len(labels) + 7))
     for y in yy:
         d = per_year[y]
-        cells = "".join(f"{(100*d['fac'][lab]):>16.1f}" if d["fac"].get(lab) is not None else f"{'·':>16}"
-                        for lab in labels[:-1])
-        coh = f"{100*d['coh']:>16.1f}" if d["coh"] is not None else f"{'·':>16}"
         idx = f"{100*d['idx']:>9.1f}" if d["idx"] is not None else f"{'·':>9}"
-        L.append(f"  {f'{y}->{y+1}':<9}{idx}{cells}{coh}{d['n']:>7}")
+        L.append(f"  {f'{y}->{y+1}':<9}{idx}" + "".join(cell(_val(d, lab)) for lab in labels) + f"{d['n']:>7}")
     L.append("  " + "-" * (18 + 16 * len(labels) + 7))
-    # summary rows
     for name, agg in (("mean/yr", 0), ("hit-rate%", 1), ("cumulative", 2)):
         cells = []
         for lab in labels:
-            series_l = [per_year[y]["fac"].get(lab) if lab != "Prof-Never" else per_year[y]["coh"] for y in yy]
-            m = _summ(series_l)[agg]
-            scale = 1 if agg == 1 else 100
-            cells.append(f"{(scale*m):>16.1f}" if m is not None else f"{'·':>16}")
+            m = _summ([_val(per_year[y], lab) for y in yy])[agg]
+            cells.append((f"{m:>16.1f}" if agg == 1 else cell(m)) if m is not None else f"{'·':>16}")
         L.append(f"  {name:<18}" + "".join(cells))
     L.append("")
-    L.append("  READ: a positive spread means HIGH-quality names outperformed LOW-quality over the next")
-    L.append("  year. Persistently NEGATIVE spreads (esp. 2019-2021) are the quantitative proof that")
-    L.append("  quality was PUNISHED in R2000G's growth regime -- the structural headwind a quality-")
-    L.append("  disciplined manager faced. 'Prof-Never' = profitable minus never-profitable cohort.")
-    L.append("  Equal-weighted quintiles (standard factor construction); no look-ahead (factor known at")
-    L.append("  the April snapshot, return earned the following 12 months).")
+    L.append("  READ: positive spread = HIGH-quality names outperformed LOW-quality over the next year.")
+    L.append("  Quality here is DEFENSIVE/anti-bubble: it protects hard in busts (2022 strongly positive,")
+    L.append("  2016) and lags in melt-ups (2018, 2021, 2026). 'Composite' = mean of z-scored factors")
+    L.append("  (the most stable signal); 'Prof-Never' = profitable minus never-profitable cohort.")
+    L.append("  Cap-weighted quintiles + winsorized returns = what the INDEX experienced; no look-ahead.")
 
     OUT.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
