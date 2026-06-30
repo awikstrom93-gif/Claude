@@ -11,14 +11,9 @@ the existing Russell2000Growth_Analytics.xlsx so you can confirm nothing else mo
 
 RUN:  python r2k_view_quality_trends.py        # builds the sheet from the panel + diffs vs current
 """
-import os
-from pathlib import Path
-
-from r2k_universe import load_panel, PANEL_CSV, build_panel, write_panel
+from r2k_universe import get_panel, diff_sheet, print_sheet
 from r2k_step3_analytics import aggregate, dollar_agg, _p, _x
 
-BASE = Path(os.environ.get("R2KG_BASE", "."))
-ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"
 SHEET = "Index Quality Trends"
 TITLE_TEXT = "Russell 2000 Growth -- Index Quality Trends (weight-weighted / median / dollar-aggregate)"
 HDR = ["Snapshot", "Total Rev $B", "Total NI $B", "% with Revenue", "% Unprofitable (NI) wt",
@@ -81,53 +76,12 @@ def write_sheet(wb, panel):
     return ws
 
 
-def _diff_vs_current(rows):
-    """Cell-by-cell diff of the new (panel-derived) sheet vs the existing workbook tab."""
-    if not ANALYTICS.exists():
-        print(f"  (no {ANALYTICS.name} to diff against -- skipping)")
-        return
-    import openpyxl
-    ws = openpyxl.load_workbook(ANALYTICS, data_only=True)[SHEET]
-    old = {}
-    for r in range(4, ws.max_row + 1):
-        snap = ws.cell(r, 1).value
-        if snap:
-            old[str(snap)[:10]] = [ws.cell(r, c).value for c in range(1, len(HDR) + 1)]
-    print(f"\n  DIFF vs current {ANALYTICS.name} :: {SHEET}  (only intended CIK-fix cells should move)")
-    nd = 0
-    for row in rows:
-        snap = str(row[0])[:10]
-        o = old.get(snap)
-        if not o:
-            print(f"    {snap}  (not in current sheet)"); continue
-        for c in range(1, len(HDR)):
-            nv, ov = row[c], o[c]
-            if nv is None and ov is None:
-                continue
-            try:
-                if ov is not None and nv is not None and abs(float(nv) - float(ov)) < 0.05:
-                    continue
-            except (TypeError, ValueError):
-                if nv == ov:
-                    continue
-            print(f"    {snap:<11} {HDR[c]:<16} current={ov!s:<10} -> panel={nv!s:<10}")
-            nd += 1
-    print(f"  {nd} cell(s) changed." + ("  (expected: 2016 NI + temporal-bug names)" if nd else "  identical."))
-
-
 def main():
-    if PANEL_CSV.exists():
-        panel = load_panel()
-        print(f"  loaded panel: {len(panel)} rows from {PANEL_CSV.name}")
-    else:
-        print("  no r2k_panel.csv -- building it now")
-        panel = build_panel(); write_panel(panel)
+    panel = get_panel()
     rows = quality_trends_rows(panel)
     print(f"\n  {SHEET} (panel-derived):")
-    print("    " + "".join(h[:8].rjust(9) for h in HDR[:5]))
-    for row in rows:
-        print("    " + "".join(str(v).rjust(9) for v in row[:5]))
-    _diff_vs_current(rows)
+    print_sheet(HDR, rows)
+    diff_sheet(SHEET, HDR, rows)
 
 
 if __name__ == "__main__":

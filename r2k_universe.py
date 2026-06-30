@@ -210,6 +210,59 @@ def quality_trends_from_panel(rows):
     return out
 
 
+# ============================ shared view helpers (one copy, used by every view module) ============================
+ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"
+
+
+def get_panel():
+    """Load the cached panel, building+caching it if absent. The single entry point views use."""
+    if PANEL_CSV.exists():
+        return load_panel()
+    rows = build_panel(); write_panel(rows)
+    return rows
+
+
+def diff_sheet(sheet, hdr, rows, src=ANALYTICS, tol=0.05):
+    """Cell-by-cell diff of panel-derived rows vs the current workbook sheet, keyed on column 0
+    (the snapshot label). Numeric cells within `tol` are treated as equal. Returns the change count."""
+    if not src.exists():
+        print(f"  (no {src.name} to diff against -- skipping)")
+        return None
+    import openpyxl
+    ws = openpyxl.load_workbook(src, data_only=True)[sheet]
+    old = {}
+    for r in range(4, ws.max_row + 1):
+        key = ws.cell(r, 1).value
+        if key:
+            old[str(key)[:10]] = [ws.cell(r, c).value for c in range(1, len(hdr) + 1)]
+    print(f"\n  DIFF vs current {src.name} :: {sheet}")
+    nd = 0
+    for row in rows:
+        o = old.get(str(row[0])[:10])
+        if not o:
+            print(f"    {str(row[0])[:10]}  (not in current sheet)"); continue
+        for c in range(1, len(hdr)):
+            nv, ov = row[c], o[c]
+            if nv is None and ov is None:
+                continue
+            try:
+                if ov is not None and nv is not None and abs(float(nv) - float(ov)) < tol:
+                    continue
+            except (TypeError, ValueError):
+                if nv == ov:
+                    continue
+            print(f"    {str(row[0])[:10]:<11} {hdr[c]:<22} current={ov!s:<10} -> panel={nv!s:<10}")
+            nd += 1
+    print(f"  {nd} cell(s) changed." if nd else "  identical.")
+    return nd
+
+
+def print_sheet(hdr, rows, ncols=5):
+    print("    " + "".join(str(h)[:8].rjust(9) for h in hdr[:ncols]))
+    for row in rows:
+        print("    " + "".join(str(v).rjust(9) for v in row[:ncols]))
+
+
 def main():
     rows = build_panel(verbose=True)
     write_panel(rows)
