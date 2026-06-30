@@ -156,16 +156,17 @@ def compute(panel, series, index_rows, all_dates):
 
 
 def _summ(vals):
-    """(mean, hit-rate %, cumulative compounded) over the non-None annual spreads."""
+    """(mean, hit-rate %, cumulative compounded, median) over the non-None annual spreads.
+    The median is the outlier-immune 'typical year' (mean/cumulative are hostage to extreme years)."""
     xs = [v for v in vals if v is not None]
     if not xs:
-        return None, None, None
+        return None, None, None, None
     mean = sum(xs) / len(xs)
     hit = 100 * sum(1 for v in xs if v > 0) / len(xs)
     cum = 1.0
     for v in xs:
         cum *= (1 + v)
-    return mean, hit, cum - 1.0
+    return mean, hit, cum - 1.0, statistics.median(xs)
 
 
 def _val(d, lab):
@@ -220,7 +221,7 @@ def write_sheet(wb):
                 cell.fill = pos if v > 0 else neg
         r += 1
     r += 1
-    for name, agg in (("mean / yr", 0), ("hit-rate %", 1), ("cumulative", 2)):
+    for name, agg in (("mean / yr", 0), ("median / yr", 3), ("hit-rate %", 1), ("cumulative", 2)):
         ws.cell(r, 1, name).font = Font(bold=True)
         for c, lab in enumerate(LABELS, 3):
             m = summary[lab][agg]
@@ -249,7 +250,7 @@ def main():
         idx = f"{100*d['idx']:>9.1f}" if d["idx"] is not None else f"{'·':>9}"
         L.append(f"  {f'{y}->{y+1}':<9}{idx}" + "".join(cell(_val(d, lab)) for lab in labels) + f"{d['n']:>7}")
     L.append("  " + "-" * (18 + 16 * len(labels) + 7))
-    for name, agg in (("mean/yr", 0), ("hit-rate%", 1), ("cumulative", 2)):
+    for name, agg in (("mean/yr", 0), ("median/yr", 3), ("hit-rate%", 1), ("cumulative", 2)):
         cells = []
         for lab in labels:
             m = _summ([_val(per_year[y], lab) for y in yy])[agg]
