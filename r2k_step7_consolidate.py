@@ -562,7 +562,8 @@ def main():
     # panel-native exhibits (quality-factor spreads needs the performance file; the others are panel-only)
     for mod_name, label in (("r2k_factor_spreads", "Quality Factor Spreads"),
                             ("r2k_view_solvency", "Solvency Tail"),
-                            ("r2k_view_persistence", "Cohort Persistence")):
+                            ("r2k_view_persistence", "Cohort Persistence"),
+                            ("r2k_view_valuation", "Valuation of the Tail")):
         try:
             mod = __import__(mod_name)
             nm = mod.write_sheet(wb)
