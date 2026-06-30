@@ -178,10 +178,13 @@ def load_panel(path=PANEL_CSV):
     rows = []
     with open(path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            for k in METRIC_COLS + ["weight", "year"]:
+            for k in METRIC_COLS + ["weight"]:
                 if k in STR_COLS:                       # keep these as strings
                     continue
                 r[k] = _to_bool(r.get(k)) if k in BOOL_COLS else _to_num(r.get(k))
+            yr = _to_num(r.get("year"))
+            r["year"] = int(yr) if yr is not None else None
+            r["fy0"] = int(_to_num(r["fy0"])) if r.get("fy0") not in (None, "") else None
             r["covered"] = int(_to_num(r.get("covered")) or 0)
             r["is_biotech"] = int(_to_num(r.get("is_biotech")) or 0)
             rows.append(r)

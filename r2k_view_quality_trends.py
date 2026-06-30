@@ -31,10 +31,10 @@ HDR = ["Snapshot", "Total Rev $B", "Total NI $B", "% with Revenue", "% Unprofita
 
 def quality_trends_rows(panel):
     """The projection: panel -> one row per snapshot, columns == HDR. Mirrors step3 exactly."""
-    years = sorted({r["year"] for r in panel})
+    years = sorted({int(r["year"]) for r in panel})
     out = []
     for yr in years:
-        cov = [r for r in panel if r["year"] == yr and r["covered"]]
+        cov = [r for r in panel if int(r["year"]) == yr and r["covered"]]
         def col(k): return [(r[k], r["weight"]) for r in cov]
         ag = lambda k: aggregate(col(k), winsor=True)
         tot_rev = sum(r["revenue"] for r in cov if r["revenue"]) / 1e9
