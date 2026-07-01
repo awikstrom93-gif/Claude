@@ -53,6 +53,12 @@ TOL = 0.08
 # Morningstar last-resort plug is OFF by default (diagnose, don't plug). Set R2KG_MS_FALLBACK=1 only for
 # a deliberate, fully-flagged vendor backfill -- otherwise unfilled metrics stay blank (as-filed truth).
 MS_FALLBACK = os.environ.get("R2KG_MS_FALLBACK", "0") == "1"
+# STATEMENT FILTER: a role's as-filed tag must come from the RIGHT financial statement. Without this a
+# balance-sheet "AvailableForSale-SALES-ecurities" or a cash-flow "Proceeds-FROM-SALES" line matched the
+# revenue 'sales' substring and, reconciling to the vendor target by chance, was adopted as REVENUE.
+# (The classifier and revenue_recover both filter by statement -- this brings metric_recover in line.)
+STMT_OF = {"revenue": {"IS"}, "cost_of_revenue": {"IS"}, "gross_profit": {"IS"}, "operating_income": {"IS"},
+           "total_equity": {"BS"}, "cash": {"BS"}, "capex": {"CF"}, "free_cash_flow": {"CF"}}
 _EXCL_REV = ("cost", "gain", "loss", "deferred", "unearned", "receivable", "expense", "pershare",
              "growth", "percent")
 
@@ -185,18 +191,18 @@ def load_facts(need):
             if v is None or not fy.isdigit():
                 continue
             acc = r.get("version", "")
-            kept.append((c, fy, acc, r.get("tag", ""), v))
+            kept.append((c, fy, acc, r.get("tag", ""), v, r.get("stmt", "")))   # keep statement
             if acc not in acc_year or int(fy) > acc_year[acc]:
                 acc_year[acc] = int(fy)
     best = {}
-    for c, fy, acc, tag, v in kept:
+    for c, fy, acc, tag, v, st in kept:
         pr = 0 if acc_year.get(acc) == int(fy) else 1
         key = (c, fy, tag)
         if key not in best or pr < best[key][0]:
-            best[key] = (pr, v)
+            best[key] = (pr, v, st)
     out = defaultdict(dict)
-    for (c, fy, tag), (_pr, v) in best.items():
-        out[(c, fy)][tag] = v
+    for (c, fy, tag), (_pr, v, st) in best.items():
+        out[(c, fy)][tag] = (v, st)                        # (value, statement) per tag
     return out
 
 
@@ -211,8 +217,16 @@ def recover(spec, r, facts_row, target):
         if val is not None:
             return val, "identity", "identity"
     if spec["tag_pat"]:                                    # TIER 2
-        cands = [(t, v) for t, v in facts_row.items()
-                 if _match(t, spec["tag_pat"], spec["tag_excl"]) and v is not None]
+        allowed_stmt = STMT_OF.get(spec["field"], set())
+        cands = []
+        for t, (v, st) in facts_row.items():
+            if v is None or not _match(t, spec["tag_pat"], spec["tag_excl"]):
+                continue
+            if not vt.is_allowed(spec["field"], t):        # cross-statement / component look-alike
+                continue
+            if allowed_stmt and st and st not in allowed_stmt:   # tag from the wrong statement
+                continue
+            cands.append((t, v))
         if target:
             ok = [(t, v) for t, v in cands if abs(v - target) / max(abs(target), 1) <= TOL]
             if ok:
@@ -239,24 +253,34 @@ def main():
         for m in METRICS:
             r.setdefault(m["field"] + "_src", "")
 
-    # SELF-HEAL: when the vendor plug is OFF, purge any Morningstar-traceable recovery a PRIOR run left,
-    # so a re-run can't inherit stale plugs (recovery is otherwise fill-only). In METRIC order so a
-    # purged component orphans its dependent identity in the same sweep: a direct plug and a laundered
-    # identity(from-ms) are dropped outright; a plain `identity` is dropped only if it no longer holds
-    # (a required component is now blank). Genuine as-filed tags and real-component identities survive.
-    if not MS_FALLBACK:
-        purged = 0
-        for r in rows:
-            for m in METRICS:
-                fld = m["field"]; src = r.get(fld + "_src", "")
-                drop = src.startswith("morningstar") or src == "identity(from-ms)"
-                if not drop and src == "identity" and m["identity"] is not None:
-                    drop = m["identity"](r) is None      # required component was purged -> stale
-                if drop:
-                    r[fld] = ""; r[fld + "_src"] = ""; purged += 1
-        if purged:
-            print(f"  self-heal: purged {purged:,} stale Morningstar-traceable value(s) from a prior "
-                  f"plugged run -> re-deriving as-filed only.")
+    # SELF-HEAL: purge stale recoveries a PRIOR run left, so a re-run reflects the CURRENT rules
+    # (recovery is otherwise fill-only). In METRIC order so a purged component orphans its dependent
+    # identity in the SAME sweep. Three cases:
+    #   (a) DISALLOWED as-filed look-alike (e.g. an AvailableForSale/Proceeds tag adopted as revenue by
+    #       a coincidental target match) -> purged ALWAYS; it's a wrong tag, not a plug;
+    #   (b) Morningstar plug / laundered identity(from-ms) -> purged when the vendor plug is OFF;
+    #   (c) a plain `identity` that no longer holds because a required component was purged in (a)/(b).
+    # Genuine as-filed tags (right statement, allowed family) and real-component identities survive.
+    healed = 0
+    for r in rows:
+        for m in METRICS:
+            fld = m["field"]; src = r.get(fld + "_src", "")
+            drop = False
+            if src.startswith("asfiled:"):                 # (a)
+                tag = src[len("asfiled:"):]
+                if tag.endswith("(no-target)"):
+                    tag = tag[:-len("(no-target)")]
+                drop = not vt.is_allowed(fld, tag)
+            if not drop and not MS_FALLBACK and (src.startswith("morningstar")   # (b)
+                                                 or src == "identity(from-ms)"):
+                drop = True
+            if not drop and src == "identity" and m["identity"] is not None:      # (c)
+                drop = m["identity"](r) is None
+            if drop:
+                r[fld] = ""; r[fld + "_src"] = ""; healed += 1
+    if healed:
+        print(f"  self-heal: purged {healed:,} stale value(s) from a prior run (vendor plugs and/or "
+              f"disallowed look-alike tags) -> re-deriving under current rules.")
 
     need = set()
     for r in rows:

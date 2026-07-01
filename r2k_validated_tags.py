@@ -34,6 +34,7 @@ API   record_run(runcounts)              -- called by the recovery scripts (merg
 """
 import csv
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -44,6 +45,31 @@ FIELDS = ["field", "tag", "target_years", "notarget_years"]
 # recovery `field` -> the classifier role list it should extend. Fields not here (gross_profit,
 # free_cash_flow) are identity-derived in the classifier and have no promotable candidate list.
 PROMOTABLE = {"revenue", "cost_of_revenue", "operating_income", "total_equity", "cash", "capex"}
+
+# DISALLOW: tag families that must NEVER be adopted for / promoted into a role, even if they happen to
+# reconcile to the vendor target for a company-year (a coincidence, not a real match). This is the guard
+# that keeps a false as-filed match from poisoning the classifier. Discovered from a real run where the
+# greedy 'sales' substring matched balance-sheet "AvailableForSale-SALES-ecurities" and cash-flow
+# "Proceeds-FROM-SALES" investment lines as REVENUE (an AFS securities balance ~= a small-cap's revenue
+# by chance). Also blocks operating-income COMPONENT lines (OtherOperatingIncome, SegmentOperatingIncome)
+# and equity ROLL-FORWARD / carve-out artifacts (...AdjustedBalance1, ...BeforeTreasuryStock) from being
+# generalized as the total. Note: bare 'investment' is deliberately NOT here -- InvestmentBankingRevenue
+# is a real broker-dealer revenue line; the investment-SECURITIES cash-flow lines are caught by the
+# securit/proceedsfrom/paymentsto/purchaseof tokens instead.
+DISALLOW = {
+    "revenue": re.compile(r"securit|availableforsale|proceedsfrom|paymentsto|paymentsfor|"
+                          r"purchaseof|maturityof|heldtomaturity", re.I),
+    "operating_income": re.compile(r"otheroperating|segmentoperating|interestandother|totalother", re.I),
+    "total_equity": re.compile(r"adjustedbalance|balance1|beforetreasury|excludingnet|rollforward", re.I),
+    "cash": re.compile(r"effectofexchangerate", re.I),
+}
+
+
+def is_allowed(field, tag):
+    """False if `tag` is a DISALLOW family for `field` -- a cross-statement / component / roll-forward
+    look-alike that must not be adopted or promoted for that role even when it reconciles by chance."""
+    pat = DISALLOW.get(field)
+    return not (pat and pat.search(tag or ""))
 
 
 def _int(x):
@@ -73,9 +99,11 @@ def record_run(runcounts):
     in this full recovery pass. MAX (not sum) so repeatedly rebuilding the same data never inflates a
     count, while a genuinely larger sample can raise it. Returns (n_rows, n_new_pairs)."""
     merged = _load_raw()
+    # scrub any DISALLOW look-alikes a prior run may have written (self-cleaning file)
+    merged = {k: v for k, v in merged.items() if is_allowed(k[0], k[1])}
     n_new = 0
     for (fld, tag), (tgt, notgt) in runcounts.items():
-        if not fld or not tag:
+        if not fld or not tag or not is_allowed(fld, tag):   # never record a disallowed look-alike
             continue
         key = (fld, tag)
         if key not in merged:
@@ -101,7 +129,7 @@ def load_promotions(min_target=None, min_notarget=None):
                                       min_notarget if min_notarget is not None else 2))
     promo = defaultdict(list)
     for (fld, tag), (tgt, notgt) in sorted(_load_raw().items(), key=lambda kv: (-kv[1][0], -kv[1][1])):
-        if fld not in PROMOTABLE:
+        if fld not in PROMOTABLE or not is_allowed(fld, tag):   # backstop: never promote a look-alike
             continue
         if tgt >= min_target or notgt >= min_notarget:
             promo[fld].append(tag)
