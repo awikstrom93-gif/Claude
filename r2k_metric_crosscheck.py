@@ -41,6 +41,11 @@ BASELINE = BASE / "metric_crosscheck_baseline.csv"     # last run's per-metric m
 ABS_TOL = float(os.environ.get("R2KG_XCHECK_ABS_TOL", "0.05"))
 DELTA_TOL = float(os.environ.get("R2KG_XCHECK_DELTA_TOL", "0.02"))
 OFF25_DELTA = float(os.environ.get("R2KG_XCHECK_OFF25_DELTA", "1.0"))
+# CONCENTRATED-ERROR guard: index weight alone misses a cluster of SEVERE individual errors that are
+# each low-weight (e.g. 41 bank-cash names 60-98% wrong = only 0.5pp of a growth index, so the >25%-wt
+# check passed them). Count names >50% off and warn if that count JUMPS vs the prior run.
+SEVERE_REL = float(os.environ.get("R2KG_XCHECK_SEVERE_REL", "0.50"))     # "severe" = >50% off Morningstar
+SEVERE_DELTA = int(os.environ.get("R2KG_XCHECK_SEVERE_DELTA", "10"))     # warn if severe count rises > this
 
 # panel field -> (fundamentals_dera column, Morningstar metric name(s)) for the VALUE comparison
 MMAP = {
@@ -88,13 +93,16 @@ def load_ms_values():
 
 
 def _load_baseline():
-    """{fld: (median, off10_pct, off25_pct, tested_pct)} from the prior run, or {} on first run."""
+    """{fld: (median, off10_pct, off25_pct, tested_pct, severe_ct)} from the prior run, {} on first run.
+    severe_ct may be absent in an older baseline -> None (that check is skipped until the next run)."""
     out = {}
     if not BASELINE.exists():
         return out
     for r in csv.DictReader(open(BASELINE, encoding="utf-8")):
+        sc = r.get("severe_ct")
         out[r.get("metric", "")] = (_num(r.get("median")), _num(r.get("off10_pct")),
-                                    _num(r.get("off25_pct")), _num(r.get("tested_pct")))
+                                    _num(r.get("off25_pct")), _num(r.get("tested_pct")),
+                                    (int(float(sc)) if sc not in (None, "") else None))
     return out
 
 
@@ -108,16 +116,17 @@ def regression_gate(stats):
     catch what a specific change introduced. Returns report lines."""
     prior = _load_baseline()
     L = ["",
-         "REGRESSION GATE  --  median ratio & >25% dispersion vs the prior run (metric_crosscheck_baseline.csv)",
+         "REGRESSION GATE  --  median / >25% dispersion / severe(>50%) count vs the prior run (metric_crosscheck_baseline.csv)",
          f"  guards: |median-1| <= {ABS_TOL:.2f} (persistent) ; median may not worsen > {DELTA_TOL:.2f} vs prior ; "
-         f">25% wt may not rise > {OFF25_DELTA:.1f}pp",
+         f">25% wt may not rise > {OFF25_DELTA:.1f}pp ; severe(>{int(SEVERE_REL*100)}%) count may not rise > {SEVERE_DELTA}",
          "",
-         f"  {'metric':>16} {'prior med':>9} {'now med':>8} {'d|med-1|':>9} {'prior>25':>9} {'now>25':>8}   verdict"]
+         f"  {'metric':>16} {'prior med':>9} {'now med':>8} {'d|med-1|':>9} {'prior>25':>9} {'now>25':>8} {'psevere':>8} {'nsevere':>8}   verdict"]
     warns = 0
-    for fld, (med, _o10, o25, _tw) in stats.items():
+    for fld, (med, _o10, o25, _tw, sev) in stats.items():
         pm = prior.get(fld)
         pmed = pm[0] if pm else None
         po25 = pm[2] if pm else None
+        psev = pm[4] if pm else None
         issues = []
         if med == med and abs(med - 1) > ABS_TOL:                       # persistent absolute bias
             issues.append("BIAS")
@@ -126,23 +135,26 @@ def regression_gate(stats):
                 issues.append("MEDIAN-REGRESSED")
         if pm and po25 is not None and (o25 - po25) > OFF25_DELTA:       # dispersion rose vs prior
             issues.append("DISPERSION-UP")
+        if pm and psev is not None and (sev - psev) > SEVERE_DELTA:      # cluster of severe individual errors
+            issues.append("SEVERE-ERRORS-UP")
         verdict = "  ".join(issues) if issues else ("new" if not pm else "ok")
         if issues:
             warns += 1
         dmed = (abs(med - 1) - abs(pmed - 1)) if (pm and med == med and pmed is not None) else float("nan")
         pms = f"{pmed:>9.3f}" if pmed is not None else f"{'--':>9}"
         p25 = f"{po25:>9.1f}" if po25 is not None else f"{'--':>9}"
+        psv = f"{psev:>8d}" if psev is not None else f"{'--':>8}"
         dms = f"{dmed:>+9.3f}" if dmed == dmed else f"{'--':>9}"
-        L.append(f"  {fld:>16} {pms} {med:>8.3f} {dms} {p25} {o25:>8.1f}   {verdict}")
+        L.append(f"  {fld:>16} {pms} {med:>8.3f} {dms} {p25} {o25:>8.1f} {psv} {sev:>8d}   {verdict}")
     L.append("")
-    L.append(f"  OVERALL: {'PASS -- no metric moved off Morningstar' if warns == 0 else str(warns) + ' WARNING(S) -- a tag change may be over/understating a metric; inspect the worklist'}")
+    L.append(f"  OVERALL: {'PASS -- no metric moved off Morningstar' if warns == 0 else str(warns) + ' WARNING(S) -- a tag change may be over/understating a metric; inspect metric_crosscheck.csv'}")
     # rewrite the baseline for next run's comparison
     with open(BASELINE, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["metric", "median", "off10_pct", "off25_pct", "tested_pct"])
+        w = csv.DictWriter(f, fieldnames=["metric", "median", "off10_pct", "off25_pct", "tested_pct", "severe_ct"])
         w.writeheader()
-        for fld, (med, o10, o25, tw) in stats.items():
+        for fld, (med, o10, o25, tw, sev) in stats.items():
             w.writerow({"metric": fld, "median": f"{med:.4f}", "off10_pct": f"{o10:.2f}",
-                        "off25_pct": f"{o25:.2f}", "tested_pct": f"{tw:.2f}"})
+                        "off25_pct": f"{o25:.2f}", "tested_pct": f"{tw:.2f}", "severe_ct": sev})
     return L
 
 
@@ -168,9 +180,10 @@ def main():
          "",
          f"  {'metric':>16} {'tested%':>8} {'median ratio':>13} {'off>10% wt':>11} {'off>25% wt':>11}   flag"]
     work = []
-    stats = {}                                          # fld -> (median, off10_pct, off25_pct, tested_pct)
+    stats = {}                                # fld -> (median, off10_pct, off25_pct, tested_pct, severe_ct)
     for fld, (col, _names) in MMAP.items():
         tw = o10 = o25 = 0.0
+        severe = 0
         ratios = []
         for k, w in mem.items():
             ours = _num((fund.get(k) or {}).get(col))
@@ -183,13 +196,15 @@ def main():
                 ratios.append(ours / ms)
             if rel > 0.10:
                 o10 += w
+            if rel > SEVERE_REL:
+                severe += 1
             if rel > 0.25:
                 o25 += w
                 work.append({"metric": fld, "cik": k[0], "fy0": k[1], "ticker": tick.get(k, ""),
                              "ours": f"{ours:.0f}", "morningstar": f"{ms:.0f}",
                              "pct_off": f"{100*(ours-ms)/ms:+.0f}", "index_wt": round(w, 4)})
         med = statistics.median(ratios) if ratios else float("nan")
-        stats[fld] = (med, 100 * o10 / totw, 100 * o25 / totw, 100 * tw / totw)
+        stats[fld] = (med, 100 * o10 / totw, 100 * o25 / totw, 100 * tw / totw, severe)
         flag = ("SYSTEMATIC BIAS -- investigate mapping/selection" if (med == med and abs(med - 1) > 0.05)
                 else "high dispersion -- eyeball worklist" if 100 * o10 / totw > 10
                 else "clean")

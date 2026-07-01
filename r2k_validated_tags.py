@@ -64,7 +64,12 @@ DISALLOW = {
     # not clean GAAP total equity -- it reconciled within tolerance but is systematically 3-7% understated.
     "total_equity": re.compile(r"adjustedbalance|balance1|beforetreasury|excludingnet|rollforward|"
                                r"netcapital|notallowable", re.I),
-    "cash": re.compile(r"effectofexchangerate", re.I),
+    # duefrombanks / federalfundssold = NARROW bank-cash lines (physical cash / fed funds only). They
+    # exclude interest-bearing deposits (Fed reserves), so for a large bank they understate total cash
+    # catastrophically (TCBI: CashAndDueFromBanks $181M vs true $7.9B). They reconcile for small banks
+    # but MUST NOT be promoted/adopted blanket -- proper bank cash is the standard total or a component
+    # SUM incl. interest-bearing deposits. Until that reconstruction exists, leave bank cash blank (honest).
+    "cash": re.compile(r"effectofexchangerate|duefrombanks|federalfundssold", re.I),
 }
 
 
