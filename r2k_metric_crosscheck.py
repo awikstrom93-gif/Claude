@@ -21,6 +21,7 @@ OUTPUTS  metric_crosscheck_report.txt ; metric_crosscheck.csv (per-name material
 RUN      python r2k_metric_crosscheck.py
 """
 import csv
+import os
 import statistics
 from collections import defaultdict
 
@@ -31,6 +32,15 @@ FUND = (BASE / "fundamentals_dera_resolved.csv") if (BASE / "fundamentals_dera_r
     else (BASE / "fundamentals_dera.csv")
 OUT = BASE / "metric_crosscheck_report.txt"
 OUT_CSV = BASE / "metric_crosscheck.csv"
+BASELINE = BASE / "metric_crosscheck_baseline.csv"     # last run's per-metric median / dispersion
+
+# REGRESSION GATE thresholds (a widened tag list can never SILENTLY overvalue a metric):
+#  ABS_TOL     -- the median ratio must stay within +/- this of 1.00 every run (persistent bias guard);
+#  DELTA_TOL   -- the median's distance from 1.00 must not WORSEN by more than this vs the prior run;
+#  OFF25_DELTA -- the >25%-disagreement index weight (pp) must not rise by more than this vs the prior run.
+ABS_TOL = float(os.environ.get("R2KG_XCHECK_ABS_TOL", "0.05"))
+DELTA_TOL = float(os.environ.get("R2KG_XCHECK_DELTA_TOL", "0.02"))
+OFF25_DELTA = float(os.environ.get("R2KG_XCHECK_OFF25_DELTA", "1.0"))
 
 # panel field -> (fundamentals_dera column, Morningstar metric name(s)) for the VALUE comparison
 MMAP = {
@@ -77,6 +87,65 @@ def load_ms_values():
     return out
 
 
+def _load_baseline():
+    """{fld: (median, off10_pct, off25_pct, tested_pct)} from the prior run, or {} on first run."""
+    out = {}
+    if not BASELINE.exists():
+        return out
+    for r in csv.DictReader(open(BASELINE, encoding="utf-8")):
+        out[r.get("metric", "")] = (_num(r.get("median")), _num(r.get("off10_pct")),
+                                    _num(r.get("off25_pct")), _num(r.get("tested_pct")))
+    return out
+
+
+def regression_gate(stats):
+    """Compare this run's per-metric median / >25% dispersion to the prior run and WARN if a tag-list
+    change moved a metric off Morningstar. Two persistent + one delta check (see thresholds up top):
+      * ABS  -- |median-1| must stay <= ABS_TOL every run (systematic bias, regardless of history),
+      * MEDIAN DELTA -- the median's distance from 1.00 must not worsen > DELTA_TOL vs the prior run,
+      * OFF25 DELTA  -- the >25%-disagreement weight must not rise > OFF25_DELTA (pp) vs the prior run.
+    Then it rewrites the baseline. The ABS check is the persistent gate (fires until fixed); the deltas
+    catch what a specific change introduced. Returns report lines."""
+    prior = _load_baseline()
+    L = ["",
+         "REGRESSION GATE  --  median ratio & >25% dispersion vs the prior run (metric_crosscheck_baseline.csv)",
+         f"  guards: |median-1| <= {ABS_TOL:.2f} (persistent) ; median may not worsen > {DELTA_TOL:.2f} vs prior ; "
+         f">25% wt may not rise > {OFF25_DELTA:.1f}pp",
+         "",
+         f"  {'metric':>16} {'prior med':>9} {'now med':>8} {'d|med-1|':>9} {'prior>25':>9} {'now>25':>8}   verdict"]
+    warns = 0
+    for fld, (med, _o10, o25, _tw) in stats.items():
+        pm = prior.get(fld)
+        pmed = pm[0] if pm else None
+        po25 = pm[2] if pm else None
+        issues = []
+        if med == med and abs(med - 1) > ABS_TOL:                       # persistent absolute bias
+            issues.append("BIAS")
+        if pm and med == med and pmed == pmed and pmed is not None:      # median moved off 1.00 vs prior
+            if (abs(med - 1) - abs(pmed - 1)) > DELTA_TOL:
+                issues.append("MEDIAN-REGRESSED")
+        if pm and po25 is not None and (o25 - po25) > OFF25_DELTA:       # dispersion rose vs prior
+            issues.append("DISPERSION-UP")
+        verdict = "  ".join(issues) if issues else ("new" if not pm else "ok")
+        if issues:
+            warns += 1
+        dmed = (abs(med - 1) - abs(pmed - 1)) if (pm and med == med and pmed is not None) else float("nan")
+        pms = f"{pmed:>9.3f}" if pmed is not None else f"{'--':>9}"
+        p25 = f"{po25:>9.1f}" if po25 is not None else f"{'--':>9}"
+        dms = f"{dmed:>+9.3f}" if dmed == dmed else f"{'--':>9}"
+        L.append(f"  {fld:>16} {pms} {med:>8.3f} {dms} {p25} {o25:>8.1f}   {verdict}")
+    L.append("")
+    L.append(f"  OVERALL: {'PASS -- no metric moved off Morningstar' if warns == 0 else str(warns) + ' WARNING(S) -- a tag change may be over/understating a metric; inspect the worklist'}")
+    # rewrite the baseline for next run's comparison
+    with open(BASELINE, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["metric", "median", "off10_pct", "off25_pct", "tested_pct"])
+        w.writeheader()
+        for fld, (med, o10, o25, tw) in stats.items():
+            w.writerow({"metric": fld, "median": f"{med:.4f}", "off10_pct": f"{o10:.2f}",
+                        "off25_pct": f"{o25:.2f}", "tested_pct": f"{tw:.2f}"})
+    return L
+
+
 def main():
     # our present values by (cik, fy)
     fund = {}
@@ -99,6 +168,7 @@ def main():
          "",
          f"  {'metric':>16} {'tested%':>8} {'median ratio':>13} {'off>10% wt':>11} {'off>25% wt':>11}   flag"]
     work = []
+    stats = {}                                          # fld -> (median, off10_pct, off25_pct, tested_pct)
     for fld, (col, _names) in MMAP.items():
         tw = o10 = o25 = 0.0
         ratios = []
@@ -119,10 +189,15 @@ def main():
                              "ours": f"{ours:.0f}", "morningstar": f"{ms:.0f}",
                              "pct_off": f"{100*(ours-ms)/ms:+.0f}", "index_wt": round(w, 4)})
         med = statistics.median(ratios) if ratios else float("nan")
+        stats[fld] = (med, 100 * o10 / totw, 100 * o25 / totw, 100 * tw / totw)
         flag = ("SYSTEMATIC BIAS -- investigate mapping/selection" if (med == med and abs(med - 1) > 0.05)
                 else "high dispersion -- eyeball worklist" if 100 * o10 / totw > 10
                 else "clean")
         L.append(f"  {fld:>16} {100*tw/totw:>8.1f} {med:>13.3f} {100*o10/totw:>11.1f} {100*o25/totw:>11.1f}   {flag}")
+
+    # ---- REGRESSION GATE: did widening the tag lists move any metric off Morningstar? ----
+    L += regression_gate(stats)
+
     OUT.write_text("\n".join(L), encoding="utf-8")
     with open(OUT_CSV, "w", newline="", encoding="utf-8") as f:
         if work:

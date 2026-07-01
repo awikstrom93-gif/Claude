@@ -263,6 +263,15 @@ focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run 
   current data all metrics are clean (median 1.000) except operating_income (median 1.000 but ~19% of
   weight >10% apart — mostly definitional: what counts as "operating"). A gap is a candidate, not proof
   of error (restatements / adjusted / gross-vs-net). Diagnostic only.
+  **Regression gate (guards tag-widening):** because adding tags to the classifier/recovery can only
+  ever *fill blanks* (low-priority, fill-only) but a bad tag could still put a wrong value in a
+  previously-empty cell, this now records each metric's median ratio and >25% dispersion to
+  `metric_crosscheck_baseline.csv` and, on the next run, prints prior→now and **WARNS** if any metric
+  (a) drifts past `|median−1|>0.05` (persistent bias), (b) has its median worsen >0.02 vs the prior run,
+  or (c) has its >25%-disagreement weight rise >1.0pp. So a widened tag list can never *silently*
+  over/understate a metric — the number that would move is the number being watched. Run it after every
+  classifier/recovery change; OVERALL prints PASS or the warning count. Thresholds via
+  `R2KG_XCHECK_ABS_TOL` / `R2KG_XCHECK_DELTA_TOL` / `R2KG_XCHECK_OFF25_DELTA`.
 - `python r2k_validated_tags.py` — inspect the recovery→classifier feedback set: the as-filed tags
   recovery has validated (`validated_tags.csv`) and which would be promoted into the classifier's role
   lists on the next build. Read-only. This is the loop that shrinks the step-5b recovery residual over
