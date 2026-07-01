@@ -33,7 +33,7 @@ ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv`. `r2k_dera_index.py`
 | # | Command | Produces |
 |---|---------|----------|
 | 5 | `python r2k_dera_classify.py` | **`fundamentals_dera.csv`** + **`tieout_report.csv`** |
-| 5b | `python r2k_revenue_recover.py` | **`fundamentals_dera_resolved.csv`** (recovers blank revenue from the AS-FILED DERA tag, located via a Morningstar target) + `revenue_recovery_audit.csv` |
+| 5b | `python r2k_metric_recover.py` | **`fundamentals_dera_resolved.csv`** (recovers blank revenue/op-income/equity/cash/gross-profit/FCF, IDENTITY-first then as-filed tag) + `metric_recovery_audit.csv` |
 | 6 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** (back up the old one first) |
 
 **`r2k_dera_classify.py` is the accounting brain.** It reconstructs all three statements with
@@ -61,8 +61,18 @@ adoption records the tag(s) used and how far as-filed sits from Morningstar (= r
 On the R2000G panel it cuts the 2015 no-revenue weight from ~7.7% to ~2.2% and flattens the trend.
 Requires `dera_facts.csv` (phase 1) in addition to `fundamentals_dera.csv` and `morningstar_long.csv`.
 
+**`r2k_metric_recover.py`** generalizes the revenue recovery (which it supersedes) to every metric
+`r2k_metric_gaps.py` flags as a real hole. It is IDENTITY-FIRST: (1) reconstruct the blank from
+as-filed COMPONENT tags via an accounting identity (`total_equity = assets − liabilities − NCI`,
+`gross_profit = revenue − COGS`, `free_cash_flow = CFO − capex`) — no vendor, self-checking, adopted
+even when Morningstar lacks the value; (2) else locate the metric's own as-filed tag verified against
+the Morningstar target (the revenue approach); (3) else Morningstar fallback, stamped. Each field gets
+a `<field>_src` provenance column, and the audit records the method per recovery. NOTE: the "present
+but inconsistent" class of hole is already caught upstream by the classifier's identity tie-outs
+(`tieout_report.csv`, the ~98% gating), so this focuses on BLANKS.
+
 `r2k_dera_to_fundamentals.py` auto-prefers `fundamentals_dera_resolved.csv` if present
-(from `r2k_revenue_recover.py` and/or `r2k_resolve.py`), else `fundamentals_dera.csv`.
+(from `r2k_metric_recover.py` and/or `r2k_resolve.py`), else `fundamentals_dera.csv`.
 
 ---
 
@@ -192,7 +202,7 @@ exposed to a single fiscal year's outlier than the annual forward-12m cut.
 
 ```
 python r2k_dera_classify.py            # back up edgar_annual_fundamentals_ASFILED.csv first
-python r2k_revenue_recover.py          # fill blank revenues from Morningstar -> fundamentals_dera_resolved.csv
+python r2k_metric_recover.py           # recover blank revenue/op-inc/equity/cash/GP/FCF (identity-first) -> fundamentals_dera_resolved.csv
 python r2k_dera_to_fundamentals.py
 python r2k_plausibility.py
 python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
