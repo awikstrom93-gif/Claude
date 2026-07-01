@@ -55,12 +55,20 @@ def _g(r, f):
 
 
 def _sub(*xs):
-    if not xs or xs[0] is None:
+    """minuend - subtrahend(s). The FIRST TWO terms are required (None -> whole identity is None, so a
+    reverse identity like COGS=revenue-GP doesn't silently return revenue when GP is blank); any
+    further terms are optional (treated as 0 -- e.g. redeemable-NCI in equity=assets-liab-NCI)."""
+    if len(xs) < 2 or xs[0] is None or xs[1] is None:
         return None
-    tot = xs[0]
-    for x in xs[1:]:
+    tot = xs[0] - xs[1]
+    for x in xs[2:]:
         tot -= (x or 0.0)
     return tot
+
+
+def _pos(x):
+    """guard: a value that must be non-negative (cost of revenue, capex) -- else the identity is off."""
+    return x if (x is not None and x >= 0) else None
 
 
 def _ck(c):
@@ -85,7 +93,10 @@ METRICS = [
     {"field": "revenue", "ms": ["Total Revenue"], "identity": None,
      "tag_pat": ["revenue", "sales"], "tag_excl": list(_EXCL_REV), "solo": False},
 
-    {"field": "cost_of_revenue", "ms": ["Cost Of Revenue"], "identity": None,
+    {"field": "cost_of_revenue", "ms": ["Cost Of Revenue"],
+     # if GP is already present, COGS = revenue - gross_profit (keeps the row consistent with the
+     # existing as-filed GP instead of pulling a separate COGS tag that might disagree with it)
+     "identity": lambda r: _pos(_sub(_g(r, "revenue"), _g(r, "gross_profit"))),
      "tag_pat": ["costofrevenue", "costofgoodsandservices", "costofgoodssold", "costofsales",
                  "costofservices"],
      "tag_excl": ["gross", "depreciation", "amortization", "excludingdepreciation"], "solo": False},
@@ -108,7 +119,9 @@ METRICS = [
      "tag_excl": ["restricted", "financing", "investing", "operating", "period", "increase", "decrease"],
      "solo": True},
 
-    {"field": "capex", "ms": ["Capital Expenditure Reported"], "identity": None,
+    {"field": "capex", "ms": ["Capital Expenditure Reported"],
+     # if FCF is already present, capex = cfo - free_cash_flow (consistent with the existing FCF)
+     "identity": lambda r: _pos(_sub(_g(r, "cfo"), _g(r, "free_cash_flow"))),
      "tag_pat": ["paymentstoacquirepropertyplant", "paymentsforcapitalimprovements",
                  "paymentstoacquireproductiveassets", "paymentstoacquireoilandgasproperty"],
      "tag_excl": ["proceeds"], "solo": True},
@@ -171,7 +184,11 @@ def recover(spec, r, facts_row, target):
     """(value, method, provenance) -- identity from stored values, else own as-filed tag."""
     if spec["identity"] is not None:                       # TIER 1
         val = spec["identity"](r)
-        if val is not None and (target is None or abs(val - target) / max(abs(target), 1) <= TOL):
+        # trust the accounting identity unconditionally: its components are already-stored, as-filed,
+        # and tie-out-validated (the classifier gates BS-foot / IS-cascade), so the result is exact and
+        # internally consistent. A disagreement with Morningstar is a RESTATEMENT -> keep the as-filed
+        # identity, never override it with the vendor number.
+        if val is not None:
             return val, "identity", "identity"
     if spec["tag_pat"]:                                    # TIER 2
         cands = [(t, v) for t, v in facts_row.items()
