@@ -97,7 +97,12 @@ def select_articulating(role, current_val, current_tag, candidates, foots):
 REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
        "SalesRevenueGoodsNet", "SalesRevenueServicesNet", "RevenueFromContractsWithCustomers",
-       "Revenue"]
+       "Revenue", "RevenueLossFromContractWithCustomerIncludingAssessedTax",
+       # sector top-line tags verified as-filed vs the target (r2k_gap_tags.py), LOW priority so the
+       # canonical tags above always win: lessor lease income, insurance-broker commissions, asset-
+       # manager advisory fees, financial interest+dividend income -- fill names the standard list missed.
+       "OperatingLeaseLeaseIncome", "InsuranceCommissionsAndFees",
+       "InvestmentAdvisoryManagementAndAdministrativeFees", "InterestAndDividendIncomeOperating"]
 COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoods",
         "CostOfServices", "CostOfSales"]
 # curated operating-revenue lines (a GROSS top line, positive). Used only to recover a real revenue
@@ -122,7 +127,10 @@ COGS_EXTRA = ["CostOfServices", "CostOfServicesLicensesAndServices", "CostOfGood
               "CostOfGoodsSoldRestructuringCharges", "CostofGoodsSoldRestructuringCharges",
               "RestructuringCostsCostOfGoodsSold"]
 OPEX = ["OperatingExpenses", "OperatingCostsAndExpenses", "CostsAndExpenses"]
-OINC = ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities"]
+OINC = ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities",
+        # EBIT = income before INTEREST and taxes == operating income (verified via r2k_gap_tags.py).
+        # NOT the plain "...BeforeIncomeTaxes" pretax line (that includes non-operating items).
+        "IncomeLossFromContinuingOperationsBeforeInterestExpenseInterestIncomeIncomeTaxesExtraordinaryItemsNoncontrollingInterestsNet"]
 PRETAX = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
           "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
           "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic", "ProfitLossBeforeTax"]
@@ -180,7 +188,12 @@ INT_EXP = ["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperatin
            "InterestAndDebtExpense", "InterestExpenseOperating"]
 # balance sheet
 CASH = ["CashAndCashEquivalentsAtCarryingValue", "Cash", "CashAndCashEquivalents",
-        "CashCashEquivalentsAndShortTermInvestments"]
+        "CashCashEquivalentsAndShortTermInvestments", "CashEquivalentsAtCarryingValue",
+        # ASU 2016-18 combined line (cash + restricted), used ONLY when no pure-cash tag is present.
+        # For these filers restricted cash is immaterial (verified ~0% vs target, r2k_gap_tags.py);
+        # cash_total below is guarded so restricted is not double-counted when cash came from this tag.
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations"]
 STI = ["ShortTermInvestments", "OtherShortTermInvestments", "AvailableForSaleSecuritiesCurrent"]
 ASSETS = ["Assets"]
 ASSETS_CUR = ["AssetsCurrent"]
@@ -734,8 +747,12 @@ def classify_filing(d, sector):
         rcash = sum(parts) if parts else None
         trc = "RestrictedCash(cur+nc)" if parts else None
     put("restricted_cash", rcash, trc)
-    cash_total = (cash + (rcash or 0)) if cash is not None else None   # cash + restricted
-    put("cash_total", cash_total, "cash+restricted" if cash_total is not None else None)
+    # if `cash` itself came from a restricted-INCLUSIVE tag (the ASU 2016-18 combined line), it already
+    # contains restricted -> don't add it again, or cash_total double-counts.
+    cash_incl_restr = bool(tcash and "restricted" in tcash.lower())
+    cash_total = (cash if cash_incl_restr else cash + (rcash or 0)) if cash is not None else None
+    put("cash_total", cash_total, ("cash(incl restricted)" if cash_incl_restr else "cash+restricted")
+        if cash_total is not None else None)
     # ending-cash basis the CF reconciles to: restricted-inclusive post-2018, cash-only before
     cf_basis = cf_end if cf_end is not None else cash_total
     r["_cf_end"] = cf_end if restr_basis else None      # CF_BS_CASH only when restricted-inclusive
