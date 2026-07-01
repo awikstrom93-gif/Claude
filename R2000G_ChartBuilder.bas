@@ -1,0 +1,479 @@
+Attribute VB_Name = "R2000G_ChartBuilder"
+'==============================================================================
+' R2000G IC Workbook -- Chart Builder  (native Excel charts from LIVE data)
+'
+' One click rebuilds EVERY chart in the workbook from the current data, so charts
+' can never go stale or lose their references again. It:
+'   * puts the best 3-5 charts on each DATA tab (to the right of that tab's data),
+'   * builds a curated "Key Charts" dashboard of the single best chart per area.
+'
+' STYLE (as requested):
+'   * Workbook THEME colours in order of preference: Accent 1,2,3,4,5,6 (then wrap).
+'     Uses ObjectThemeColor, so the charts follow whatever palette you set under
+'     Page Layout > Colors -- change the theme, the charts change with it.
+'   * Arial throughout.
+'   * Chart title, axis titles and legend sit OUTSIDE the plot area (no overlap);
+'     dense month axes are thinned to ~12 labels so they don't collide.
+'
+' INSTALL
+'   1. Alt+F11 > File > Import File... > pick this .bas  (or Insert>Module, paste).
+'   2. Give it a button:
+'        - In the file:  Developer > Insert > Button (Form Control) > draw >
+'          Assign Macro > RefreshAllCharts.  Save as .xlsm.
+'        - Better (survives the Python rebuild): put this module in PERSONAL.XLSB
+'          and add RefreshAllCharts to the Quick Access Toolbar
+'          (File > Options > Quick Access Toolbar > Macros). Then it is a toolbar
+'          button that works on ANY open workbook, including each fresh .xlsx.
+'   3. (Optional) Page Layout > Colors > Customize: set Accent 1..6 to your palette.
+'==============================================================================
+Option Explicit
+
+Private Const FONT_NAME As String = "Arial"
+Private Const CH_W As Double = 430          ' chart width  (points)
+Private Const CH_H As Double = 235          ' chart height (points)
+Private Const GAP  As Double = 14
+Private Const DATE_FMT As String = "mmm-yyyy"   ' date axis labels: Month-Year (change to "m/yyyy" for 4/2015)
+
+Private mSpecs As Collection
+Private mTop   As Object                    ' Scripting.Dictionary: target -> next Top
+Private mLeft  As Object                    ' Scripting.Dictionary: target -> Left
+Private mKey   As Long                      ' Key Charts grid slot counter
+Private WB     As Workbook                  ' the workbook we chart (the ACTIVE one, not this macro's)
+
+'================================================================ entry point
+Public Sub RefreshAllCharts()
+    Dim built As Long, failed As Long, sp As Variant, p As Variant, firstErr As String
+
+    ' chart the ACTIVE workbook, so this macro works from PERSONAL.XLSB / a toolbar button
+    ' on whatever benchmark file is open -- not the workbook the macro itself lives in.
+    Set WB = ActiveWorkbook
+    If WB Is Nothing Then Exit Sub
+    If SheetOrNothing("Perf Monthly") Is Nothing And SheetOrNothing("Qual R2000G") Is Nothing Then
+        MsgBox "This doesn't look like the benchmark workbook (no 'Perf Monthly' / 'Qual R2000G' tab)." & _
+               vbCrLf & "Open the benchmark file, make it the active window, then run this again.", _
+               vbExclamation, "Wrong workbook"
+        Exit Sub
+    End If
+
+    LoadSpecs
+    Set mTop = CreateObject("Scripting.Dictionary")
+    Set mLeft = CreateObject("Scripting.Dictionary")
+    mKey = 0
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    ClearTargets                            ' wipe existing charts on every target tab
+
+    For Each sp In mSpecs
+        p = Split(CStr(sp), "|")
+        If UBound(p) >= 7 Then
+            On Error Resume Next
+            Err.Clear
+            BuildSpec p
+            If Err.Number = 0 Then
+                built = built + 1
+            Else
+                failed = failed + 1
+                If Len(firstErr) = 0 Then _
+                    firstErr = "Error " & Err.Number & " (" & Err.Description & ")" & vbCrLf & _
+                               "on spec: " & CStr(sp)
+            End If
+            On Error GoTo 0
+        End If
+    Next sp
+
+    On Error Resume Next
+    WB.Worksheets("Key Charts").Activate
+    WB.Worksheets("Key Charts").Range("A1").Select
+    On Error GoTo 0
+
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Charts rebuilt: " & built & IIf(failed > 0, "   (skipped " & failed & ")", "") & _
+           "  from the current data." & IIf(failed > 0, vbCrLf & vbCrLf & "First problem:" & vbCrLf & firstErr, ""), _
+           vbInformation, "Charts refreshed"
+End Sub
+
+'============================================================ build one chart
+' p = target | type | src | hdrRow | catCol | seriesCSV | title | yTitle | [xTitle]
+'   type: L line, C column, B bar, A stacked area, S scatter
+Private Sub BuildSpec(p As Variant)
+    Dim target As String, typ As String, srcN As String
+    Dim hdr As Long, catCol As Long
+    Dim ttl As String, yT As String, xT As String, cols As Variant
+    target = p(0): typ = UCase$(p(1)): srcN = p(2)
+    hdr = CLng(p(3)): catCol = CLng(p(4))
+    cols = Split(p(5), ",")
+    ttl = p(6): yT = p(7)
+    xT = ""                                 ' NOT IIf(): VBA's IIf evaluates BOTH args, so p(8) would
+    If UBound(p) >= 8 Then xT = p(8)        ' throw "subscript out of range" on the 8-field specs
+
+    Dim sws As Worksheet: Set sws = SheetOrNothing(srcN)
+    If sws Is Nothing Then Exit Sub
+    Dim tws As Worksheet: Set tws = EnsureSheet(target)
+    Dim lr As Long: lr = LastContig(sws, hdr, catCol)
+    If lr <= hdr Then Exit Sub
+
+    Dim L As Double, T As Double
+    NextPos target, hdr, tws, L, T
+
+    Dim cht As Chart
+    Set cht = tws.ChartObjects.Add(L, T, CH_W, CH_H).Chart
+    Select Case typ
+        Case "L", "D": cht.ChartType = xlLine        ' D = dual-axis line (secondary axis for small series)
+        Case "C":      cht.ChartType = xlColumnClustered
+        Case "B", "BR": cht.ChartType = xlBarClustered   ' BR = bar, largest at top (reversed)
+        Case "A":      cht.ChartType = xlAreaStacked
+        Case "S":      cht.ChartType = xlXYScatter
+    End Select
+
+    Dim s As Series, i As Long
+    If typ = "S" Then
+        Set s = cht.SeriesCollection.NewSeries
+        s.XValues = sws.Range(sws.Cells(hdr + 1, catCol), sws.Cells(lr, catCol))
+        s.Values = sws.Range(sws.Cells(hdr + 1, CLng(cols(0))), sws.Cells(lr, CLng(cols(0))))
+        s.Name = "Monthly"
+        ColorSeries s, 0, typ
+        Dim tl As Trendline
+        Set tl = s.Trendlines.Add(Type:=xlLinear)
+        tl.DisplayEquation = True: tl.DisplayRSquared = True
+        On Error Resume Next: tl.Border.Color = RGB(90, 90, 90): On Error GoTo 0
+        StyleChart cht, ttl, xT, yT, False
+    ElseIf typ = "D" Then
+        ' cols encoded "primary;secondary"; secondary series go on a second value axis so a small
+        ' series (e.g. net income vs revenue) is readable against a much larger one.
+        Dim pp() As String: pp = Split(p(5), ";")
+        Dim pc() As String, sc2() As String, k As Long, idx As Long
+        Dim catA As Variant: catA = CatLabels(sws.Range(sws.Cells(hdr + 1, catCol), sws.Cells(lr, catCol)))
+        pc = Split(pp(0), ","): idx = 0
+        For k = 0 To UBound(pc)
+            AddOneSeries cht, sws, hdr, lr, CLng(pc(k)), catA, idx, "L", False: idx = idx + 1
+        Next k
+        If UBound(pp) >= 1 Then
+            sc2 = Split(pp(1), ",")
+            For k = 0 To UBound(sc2)
+                AddOneSeries cht, sws, hdr, lr, CLng(sc2(k)), catA, idx, "L", True: idx = idx + 1
+            Next k
+        End If
+        StyleChart cht, ttl, "", yT, True
+        On Error Resume Next                                    ' secondary axis title = the p(8) field
+        cht.Axes(xlValue, xlSecondary).HasTitle = (Len(xT) > 0)
+        If Len(xT) > 0 Then cht.Axes(xlValue, xlSecondary).AxisTitle.Text = xT
+        cht.Axes(xlValue, xlSecondary).TickLabels.Font.Size = 9
+        On Error GoTo 0
+        ThinCategoryLabels cht, lr - hdr
+    Else
+        Dim catB As Variant: catB = CatLabels(sws.Range(sws.Cells(hdr + 1, catCol), sws.Cells(lr, catCol)))
+        For i = 0 To UBound(cols)
+            AddOneSeries cht, sws, hdr, lr, CLng(cols(i)), catB, i, typ, False
+        Next i
+        StyleChart cht, ttl, xT, yT, (UBound(cols) > 0)
+        If typ = "L" Then ThinCategoryLabels cht, lr - hdr
+        If typ = "BR" Then                                     ' largest value at the TOP, value axis stays at bottom
+            On Error Resume Next
+            cht.Axes(xlCategory).ReversePlotOrder = True
+            cht.Axes(xlCategory).Crosses = xlMaximum
+            On Error GoTo 0
+        End If
+    End If
+End Sub
+
+' add one series (value column) to a chart; catArr is the pre-formatted category-label array
+Private Function AddOneSeries(cht As Chart, sws As Worksheet, hdr As Long, lr As Long, _
+                              col As Long, catArr As Variant, idx As Long, typ As String, _
+                              secondary As Boolean) As Series
+    Dim s As Series: Set s = cht.SeriesCollection.NewSeries
+    s.XValues = catArr
+    s.Values = sws.Range(sws.Cells(hdr + 1, col), sws.Cells(lr, col))
+    On Error Resume Next                                       ' series name is cosmetic
+    s.Name = CStr(sws.Cells(hdr, col).Value)
+    On Error GoTo 0
+    ColorSeries s, idx, typ
+    If secondary Then s.AxisGroup = xlSecondary
+    Set AddOneSeries = s
+End Function
+
+' category labels: reformat date-like strings ("2015-04-30") to Month-Year; leave everything else
+' (years, sector names, tickers, "Full period") untouched. Rebuilt each run, so it stays live.
+Private Function CatLabels(rng As Range) As Variant
+    Dim a() As String, c As Range, i As Long
+    ReDim a(1 To rng.Cells.Count)
+    i = 0
+    For Each c In rng.Cells
+        i = i + 1
+        Dim t As String: t = CStr(c.Value)
+        If InStr(t, "-") > 0 And IsDate(t) Then
+            a(i) = Format$(CDate(t), DATE_FMT)
+        Else
+            a(i) = t
+        End If
+    Next c
+    CatLabels = a
+End Function
+
+'=================================================================== styling
+Private Sub ColorSeries(s As Series, idx As Long, typ As String)
+    Dim ac As MsoThemeColorIndex: ac = ThemeAccent(idx)
+    Select Case typ
+        Case "L"
+            s.Format.Line.ForeColor.ObjectThemeColor = ac
+            s.Format.Line.Weight = 2.25
+            s.MarkerStyle = xlMarkerStyleNone
+            s.Smooth = False
+        Case "S"
+            s.MarkerStyle = xlMarkerStyleCircle: s.MarkerSize = 5
+            s.Format.Fill.ForeColor.ObjectThemeColor = ac
+            s.Format.Line.Visible = msoFalse
+        Case Else                                   ' C / B / A -> fill
+            s.Format.Fill.ForeColor.ObjectThemeColor = ac
+            s.Format.Line.Visible = msoFalse
+    End Select
+End Sub
+
+Private Sub StyleChart(cht As Chart, ttl As String, xTitle As String, _
+                       yTitle As String, showLegend As Boolean)
+    cht.HasTitle = True
+    cht.ChartTitle.Text = ttl
+
+    On Error Resume Next                             ' axis titles sit OUTSIDE the plot area
+    cht.Axes(xlCategory).HasTitle = (Len(xTitle) > 0)
+    If Len(xTitle) > 0 Then cht.Axes(xlCategory).AxisTitle.Text = xTitle
+    cht.Axes(xlValue).HasTitle = (Len(yTitle) > 0)
+    If Len(yTitle) > 0 Then cht.Axes(xlValue).AxisTitle.Text = yTitle
+    On Error GoTo 0
+
+    cht.HasLegend = showLegend                       ' legend outside, at the bottom
+    If showLegend Then cht.Legend.Position = xlLegendPositionBottom
+
+    cht.ChartArea.AutoScaleFont = False              ' Arial, black, cascades to all text
+    With cht.ChartArea.Font
+        .Name = FONT_NAME: .Size = 10: .Color = RGB(0, 0, 0)
+    End With
+    cht.ChartTitle.Font.Name = FONT_NAME
+    cht.ChartTitle.Font.Size = 11
+    cht.ChartTitle.Font.Bold = True
+
+    On Error Resume Next
+    cht.ChartArea.Format.Line.Visible = msoFalse
+    cht.PlotArea.Format.Line.Visible = msoFalse
+    cht.Axes(xlValue).MajorGridlines.Border.Color = RGB(232, 232, 232)
+    cht.Axes(xlValue).TickLabels.Font.Size = 9
+    cht.Axes(xlCategory).TickLabels.Font.Size = 9
+    ' keep the category labels OUT of the plot: park them at the low end of the value axis, so on charts
+    ' with negative values they sit at the bottom (not across the middle at zero), and on the sector
+    ' bar chart the names sit to the far left (not over the bars).
+    cht.Axes(xlCategory).TickLabelPosition = xlTickLabelPositionLow
+    On Error GoTo 0
+End Sub
+
+Private Sub ThinCategoryLabels(cht As Chart, nPts As Long)
+    On Error Resume Next
+    If nPts > 16 Then
+        Dim every As Long: every = Int(nPts / 12) + 1
+        cht.Axes(xlCategory).TickLabelSpacing = every
+        cht.Axes(xlCategory).TickMarkSpacing = every
+        cht.Axes(xlCategory).TickLabels.Orientation = 0
+    End If
+    On Error GoTo 0
+End Sub
+
+'=================================================================== helpers
+Private Function ThemeAccent(idx As Long) As MsoThemeColorIndex
+    Select Case (idx Mod 6)
+        Case 0: ThemeAccent = msoThemeColorAccent1
+        Case 1: ThemeAccent = msoThemeColorAccent2
+        Case 2: ThemeAccent = msoThemeColorAccent3
+        Case 3: ThemeAccent = msoThemeColorAccent4
+        Case 4: ThemeAccent = msoThemeColorAccent5
+        Case 5: ThemeAccent = msoThemeColorAccent6
+    End Select
+End Function
+
+' last row of the CONTIGUOUS data block below the header (stops at the first blank
+' in the category column, so trailing summary rows -- e.g. on Factor Spreads -- are excluded)
+Private Function LastContig(ws As Worksheet, hdr As Long, catCol As Long) As Long
+    Dim r As Long: r = hdr
+    Do While Trim$(CStr(ws.Cells(r + 1, catCol).Value)) <> ""
+        r = r + 1
+        If r >= ws.Rows.Count Then Exit Do
+    Loop
+    LastContig = r
+End Function
+
+' next chart position for a target: 2-col grid on Key Charts, else a vertical strip
+' to the RIGHT of the data on the tab itself
+Private Sub NextPos(target As String, hdr As Long, tws As Worksheet, ByRef L As Double, ByRef T As Double)
+    If target = "Key Charts" Then
+        L = 12 + (mKey Mod 2) * (CH_W + 16)
+        T = 30 + (mKey \ 2) * (CH_H + 16)
+        mKey = mKey + 1
+        Exit Sub
+    End If
+    If Not mLeft.Exists(target) Then
+        Dim lastCol As Long
+        lastCol = tws.Cells(hdr, tws.Columns.Count).End(xlToLeft).Column
+        mLeft.Add target, tws.Cells(1, lastCol + 2).Left
+        mTop.Add target, tws.Cells(2, 1).Top
+    End If
+    L = mLeft.Item(target)
+    T = mTop.Item(target)
+    Dim nt As Double: nt = T + CH_H + GAP        ' update via Remove+Add (safe late-bound, no parameterized Let)
+    mTop.Remove target
+    mTop.Add target, nt
+End Sub
+
+Private Function SheetOrNothing(nm As String) As Worksheet
+    On Error Resume Next
+    Set SheetOrNothing = WB.Worksheets(nm)
+    On Error GoTo 0
+End Function
+
+Private Function EnsureSheet(nm As String) As Worksheet
+    Set EnsureSheet = SheetOrNothing(nm)
+    If EnsureSheet Is Nothing Then
+        Set EnsureSheet = WB.Worksheets.Add(After:=WB.Sheets(WB.Sheets.Count))
+        EnsureSheet.Name = nm
+    End If
+End Function
+
+' delete existing charts on every distinct target tab (idempotent re-run)
+Private Sub ClearTargets()
+    Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
+    Dim sp As Variant, t As String, ws As Worksheet, co As ChartObject
+    For Each sp In mSpecs
+        t = Split(CStr(sp), "|")(0)
+        If Not seen.Exists(t) Then
+            seen(t) = 1
+            Set ws = SheetOrNothing(t)
+            If ws Is Nothing And t = "Key Charts" Then Set ws = EnsureSheet(t)
+            If Not ws Is Nothing Then
+                For Each co In ws.ChartObjects: co.Delete: Next co
+            End If
+        End If
+    Next sp
+End Sub
+
+'=================================================================== the spec table
+'  target | type | src | hdrRow | catCol | seriesCols | title | yAxis | [xAxis]
+Private Sub S(spec As String)
+    mSpecs.Add spec
+End Sub
+
+Private Sub LoadSpecs()
+    Set mSpecs = New Collection
+
+    ' ---- Performance -------------------------------------------------------
+    S "Perf Summary|C|Perf Summary|4|1|2,3|R2000G vs S&P 600 Growth - key statistics|Value"
+    S "Perf Summary|C|Perf Summary|4|1|4|R2KG minus S&P 600 Growth, by statistic|Difference"
+    S "Perf Trailing|C|Perf Trailing|3|1|2,3|Trailing total returns|Return %"
+    S "Perf Trailing|C|Perf Trailing|3|1|4|Trailing excess (R2KG - SP6G)|Excess %"
+    S "Perf Calendar Yr|C|Perf Calendar Yr|3|1|2,3|Calendar-year total return|Return %"
+    S "Perf Calendar Yr|C|Perf Calendar Yr|3|1|4|Calendar-year excess (R2KG - SP6G)|Excess %"
+    S "Perf Monthly|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"
+    S "Perf Monthly|L|Perf Monthly|1|1|7|Cumulative excess return (R2KG - SP6G)|Cumulative excess %"
+    S "Perf Monthly|L|Perf Monthly|1|1|4|Monthly excess return|Excess %"
+    S "Perf Monthly|S|Perf Monthly|1|2|3|Monthly returns: SP6G vs R2000G (slope = beta)|S&P 600 Growth monthly %|R2000G monthly %"
+    S "Perf Rolling 12m|L|Perf Rolling 12m|1|1|2,3|Rolling 12-month return|12m total return %"
+    S "Perf Rolling 12m|L|Perf Rolling 12m|1|1|4|Rolling 12-month excess (R2KG - SP6G)|Excess %"
+    S "Perf Capture|C|Perf Capture|3|1|2,3|Up / Down capture by window|Capture %"
+    S "Perf Capture|C|Perf Capture|3|1|10,11|Cumulative return by window|Cumulative %"
+    S "Perf Drawdown|L|Perf Drawdown|1|1|2,3|Drawdown: R2000G vs S&P 600 Growth|Drawdown %"
+    S "Perf Window Proof|C|Perf Window Proof|9|1|3,4|Cumulative return from candidate start dates|Return %"
+    S "Perf Window Proof|C|Perf Window Proof|9|1|5|Excess by candidate start date|Excess %"
+
+    ' ---- Quality (fundamentals) -------------------------------------------
+    S "Qual Comparison|L|Qual Comparison|3|1|2,3|% Unprofitable (NI) by weight|% of index weight"
+    S "Qual Comparison|L|Qual Comparison|3|1|11,12|Never-profitable weight|% of index weight"
+    S "Qual Comparison|L|Qual Comparison|3|1|17,18|Net margin ($agg)|Net margin %"
+    S "Qual Comparison|L|Qual Comparison|3|1|20,21|ROIC ($agg)|ROIC %"
+    S "Qual Comparison|L|Qual Comparison|3|1|26,27|Revenue YoY (wavg)|Rev YoY %"
+    S "Qual R2000G|L|Qual R2000G|3|1|9,10,11|R2000G cohort weights|% of index weight"
+    S "Qual R2000G|L|Qual R2000G|3|1|6,7|R2000G % unprofitable (NI / OI)|% of index weight"
+    S "Qual R2000G|L|Qual R2000G|3|1|12|R2000G total revenue|$B"
+    S "Qual R2000G|L|Qual R2000G|3|1|13,14,15|R2000G margins ($agg)|Margin %"
+    S "Qual R2000G|L|Qual R2000G|3|1|19,21|R2000G ROE / ROIC ($agg)|%"
+    S "Qual SP600G|L|Qual SP600G|3|1|9,10,11|S&P 600 Growth cohort weights|% of index weight"
+    S "Qual SP600G|L|Qual SP600G|3|1|6,7|S&P 600 Growth % unprofitable (NI / OI)|% of index weight"
+    S "Qual SP600G|L|Qual SP600G|3|1|13,14,15|S&P 600 Growth margins ($agg)|Margin %"
+    S "Qual SP600G|L|Qual SP600G|3|1|19,21|S&P 600 Growth ROE / ROIC ($agg)|%"
+    S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|4,7|Never-profitable weight: R2KG vs 600G|% of index weight"
+    S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|2,5|Profitable weight: R2KG vs 600G|% of index weight"
+    S "Qual Cohort Wt|C|Qual Cohort Wt|3|1|8|Never-profitable weight gap (R2KG - 600G)|Diff (pts)"
+    S "Qual Sector Mix|B|Qual Sector Mix|3|1|2,3|Sector weights: R2000G vs S&P 600 Growth|% weight"
+    S "Qual Sector Mix|B|Qual Sector Mix|3|1|4|Sector over / underweight (R2KG - 600G)|Diff (pts)"
+    S "Qual Concentration|L|Qual Concentration|3|1|2,7|Top-10 weight: R2KG vs 600G|% of index weight"
+    S "Qual Concentration|L|Qual Concentration|3|1|6,11|Effective N (diversification)|Eff. N"
+    S "Qual Concentration|L|Qual Concentration|3|1|5,10|HHI concentration|HHI"
+
+    ' ---- Attribution ------------------------------------------------------
+    S "Attr Contribution|C|Attr Contribution|3|1|2,4|Cohort contribution: full period vs window|Contribution %"
+    S "Attr Contribution|C|Attr Contribution|3|1|3,5|Average cohort weight: full vs window|Avg weight %"
+    S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|2,3,4,5|Cohort weights over time|% of index weight"
+    S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|6,4|Unprofitable & never-profitable weight|% of index weight"
+    S "Attr Cohort Ret|L|Attr Cohort Ret|1|1|2,3,5|Monthly return: index vs profitable vs never|Monthly return %"
+    S "Attr Counterfactual|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
+    S "Attr Reconstruction|L|Attr Reconstruction|3|1|2,3|Reconstruction check: actual vs rebuilt|Cumulative %"
+    S "Attr Reconstruction|L|Attr Reconstruction|3|1|4|Reconstruction error|Diff (bps)"
+
+    ' ---- Concentration ----------------------------------------------------
+    S "Conc Weight|L|Conc Weight|3|1|3,9|Top-10 weight: R2KG vs 600G|% of index weight"
+    S "Conc Weight|L|Conc Weight|3|1|7,13|Effective N: R2KG vs 600G|Eff. N"
+    S "Conc Weight|L|Conc Weight|3|1|2,8|Number of names|# names"
+    S "Conc Breadth|L|Conc Breadth|3|1|3,4|% positive & % beating index|% of names"
+    S "Conc Breadth|L|Conc Breadth|3|1|5,6|Cap-weighted vs median return|Return %"
+    S "Conc Breadth|L|Conc Breadth|3|1|8,9|Top-10 & Top-25 share of gains|% of gains"
+    S "Conc Return|BR|Conc Return|11|2|5|Top contributors to the benchmark (window)|Contribution (pts)"
+    S "Conc Return|BR|Conc Return|11|2|4|Top contributors - window return|Window return %"
+
+    ' ---- Biotech ----------------------------------------------------------
+    S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
+    S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|3,7|Biotech name count: R2KG vs 600G|# names"
+    S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|4,5|Biotech %unprofitable & %no-revenue|% within biotech"
+    S "Bio In Tail|L|Bio In Tail|3|1|4,8|Biotech share of unprofitable & never-prof|% of cohort"
+    S "Bio In Tail|L|Bio In Tail|3|1|2,7|R2KG unprofitable & never-prof weight|% of index weight"
+    S "Bio Unprof by Theme|A|Bio Unprof by Theme|3|1|2,3,4,5,6,7,8,9,10|Unprofitable weight by theme (stacked)|% of index weight"
+    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5|Top unprofitable industries|% of index weight"
+    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5,6,7|Unprofitable industry composition|% of index weight"
+    S "Bio Contribution|C|Bio Contribution|3|1|2,4|Biotech contribution: full vs window|Contribution %"
+    S "Bio Contribution|C|Bio Contribution|3|1|3,5|Average weight: full vs window|Avg weight %"
+    S "Bio Counterfactual|L|Bio Counterfactual|3|1|2,3,4|Ex-biotech counterfactual (growth of $1)|Growth of $1"
+
+    ' ---- R2KG deep-dive ---------------------------------------------------
+    S "R2KG Quality Trends|D|R2KG Quality Trends|3|1|2;3|Total revenue & net income (NI on right axis)|Total revenue $B|Total net income $B"
+    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|5,6|% Unprofitable (NI / OI)|% of index weight"
+    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|7,9,12|Margins: gross / op / net|Margin %"
+    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|15,19|ROE & ROIC ($agg)|%"
+    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|24,25,27|Growth: Rev YoY, 3y CAGR, Rule of 40|%"
+    S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|3,4|Unprofitable (NI): % count vs % weight|%"
+    S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|7,10|Never / fallen counts|# names"
+    S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|11,12|Profitable 2y / 3y weight|% of index weight"
+    S "R2KG DuPont|L|R2KG DuPont|3|1|5,6|DuPont ROE: implied vs actual ($agg)|ROE"
+    S "R2KG DuPont|L|R2KG DuPont|3|1|3,4|Asset turnover & leverage|x"
+    S "R2KG DuPont|L|R2KG DuPont|3|1|2|Net margin|Net margin"
+
+    ' ---- Panel-native exhibits -------------------------------------------
+    S "Quality Factor Spreads|L|Quality Factor Spreads|4|1|8,9|Composite & Prof-Never factor spread|Fwd-3m spread %"
+    S "Quality Factor Spreads|L|Quality Factor Spreads|4|1|3,4,6|ROIC / GP-Assets / NetMargin spreads|Fwd-3m spread %"
+    S "Solvency Tail|L|Solvency Tail|4|1|3,10|% can't cover interest: R2KG vs 600G|% of index weight"
+    S "Solvency Tail|L|Solvency Tail|4|1|8,9|% negative EBITDA (with / +net debt)|% of index weight"
+    S "Solvency Tail|L|Solvency Tail|4|1|5,7|Median coverage & net-debt / EBITDA|x"
+    S "Cohort Persistence|C|Cohort Persistence|4|1|2,3,4,5,6|Cohort transitions (year over year)|% of cohort"
+    S "Valuation of the Tail|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
+    S "Valuation of the Tail|L|Valuation of the Tail|4|1|7,8|P/B relative to the index by cohort|P/B (multiple of index; 1.0 = in line)"
+    S "Valuation of the Tail|L|Valuation of the Tail|4|1|2|% no-revenue weight|% of index weight"
+
+    ' ---- Key Charts: curated summary (best from each area) -----------------
+    S "Key Charts|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"
+    S "Key Charts|L|Perf Monthly|1|1|7|Cumulative excess return (R2KG - SP6G)|Cumulative excess %"
+    S "Key Charts|S|Perf Monthly|1|2|3|Monthly returns: SP6G vs R2000G (slope = beta)|S&P 600 Growth monthly %|R2000G monthly %"
+    S "Key Charts|L|Qual Comparison|3|1|2,3|% Unprofitable by weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Qual Cohort Wt|3|1|4,7|Never-profitable weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|C|Attr Contribution|3|1|2,4|Cohort contribution: full period vs window|Contribution %"
+    S "Key Charts|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
+    S "Key Charts|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Solvency Tail|4|1|3,10|% can't cover interest: R2KG vs 600G|% weight"
+    S "Key Charts|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
+    S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
+    S "Key Charts|L|Conc Breadth|3|1|8,9|Top-10 & Top-25 share of gains|% of gains"
+End Sub
