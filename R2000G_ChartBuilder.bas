@@ -108,6 +108,8 @@ Private Sub BuildSpec(p As Variant)
     ttl = p(6): yT = p(7)
     xT = ""                                 ' NOT IIf(): VBA's IIf evaluates BOTH args, so p(8) would
     If UBound(p) >= 8 Then xT = p(8)        ' throw "subscript out of range" on the 8-field specs
+    Dim skip As Long: skip = 0              ' optional p(9): drop this many leading data rows (e.g. a
+    If UBound(p) >= 9 Then skip = CLng(p(9)) '   dominant row that would flatten the rest of a chart)
 
     Dim sws As Worksheet: Set sws = SheetOrNothing(srcN)
     If sws Is Nothing Then Exit Sub
@@ -149,12 +151,12 @@ Private Sub BuildSpec(p As Variant)
         Dim catA As Variant: catA = CatLabels(sws.Range(sws.Cells(hdr + 1, catCol), sws.Cells(lr, catCol)))
         pc = Split(pp(0), ","): idx = 0
         For k = 0 To UBound(pc)
-            AddOneSeries cht, sws, hdr, lr, CLng(pc(k)), catA, idx, "L", False: idx = idx + 1
+            AddOneSeries cht, sws, hdr, hdr + 1, lr, CLng(pc(k)), catA, idx, "L", False: idx = idx + 1
         Next k
         If UBound(pp) >= 1 Then
             sc2 = Split(pp(1), ",")
             For k = 0 To UBound(sc2)
-                AddOneSeries cht, sws, hdr, lr, CLng(sc2(k)), catA, idx, "L", True: idx = idx + 1
+                AddOneSeries cht, sws, hdr, hdr + 1, lr, CLng(sc2(k)), catA, idx, "L", True: idx = idx + 1
             Next k
         End If
         StyleChart cht, ttl, "", yT, True
@@ -165,9 +167,10 @@ Private Sub BuildSpec(p As Variant)
         On Error GoTo 0
         ThinCategoryLabels cht, lr - hdr
     Else
-        Dim catB As Variant: catB = CatLabels(sws.Range(sws.Cells(hdr + 1, catCol), sws.Cells(lr, catCol)))
+        Dim dstart As Long: dstart = hdr + 1 + skip                 ' drop the first `skip` data rows
+        Dim catB As Variant: catB = CatLabels(sws.Range(sws.Cells(dstart, catCol), sws.Cells(lr, catCol)))
         For i = 0 To UBound(cols)
-            AddOneSeries cht, sws, hdr, lr, CLng(cols(i)), catB, i, typ, False
+            AddOneSeries cht, sws, hdr, dstart, lr, CLng(cols(i)), catB, i, typ, False
         Next i
         StyleChart cht, ttl, xT, yT, (UBound(cols) > 0)
         If typ = "L" Then ThinCategoryLabels cht, lr - hdr
@@ -180,15 +183,15 @@ Private Sub BuildSpec(p As Variant)
     End If
 End Sub
 
-' add one series (value column) to a chart; catArr is the pre-formatted category-label array
-Private Function AddOneSeries(cht As Chart, sws As Worksheet, hdr As Long, lr As Long, _
-                              col As Long, catArr As Variant, idx As Long, typ As String, _
+' add one series (value column); nameRow supplies the legend name, data runs dataStart..lr
+Private Function AddOneSeries(cht As Chart, sws As Worksheet, nameRow As Long, dataStart As Long, _
+                              lr As Long, col As Long, catArr As Variant, idx As Long, typ As String, _
                               secondary As Boolean) As Series
     Dim s As Series: Set s = cht.SeriesCollection.NewSeries
     s.XValues = catArr
-    s.Values = sws.Range(sws.Cells(hdr + 1, col), sws.Cells(lr, col))
+    s.Values = sws.Range(sws.Cells(dataStart, col), sws.Cells(lr, col))
     On Error Resume Next                                       ' series name is cosmetic
-    s.Name = CStr(sws.Cells(hdr, col).Value)
+    s.Name = CStr(sws.Cells(nameRow, col).Value)
     On Error GoTo 0
     ColorSeries s, idx, typ
     If secondary Then s.AxisGroup = xlSecondary
@@ -366,7 +369,7 @@ Private Sub LoadSpecs()
 
     ' ---- Performance -------------------------------------------------------
     S "Perf Summary|C|Perf Summary|4|1|2,3|R2000G vs S&P 600 Growth - key statistics|Value"
-    S "Perf Summary|C|Perf Summary|4|1|4|R2KG minus S&P 600 Growth, by statistic|Difference"
+    S "Perf Summary|C|Perf Summary|4|1|4|R2KG minus S&P 600 Growth, by statistic (ex cumulative)|Difference||1"
     S "Perf Trailing|C|Perf Trailing|3|1|2,3|Trailing total returns|Return %"
     S "Perf Trailing|C|Perf Trailing|3|1|4|Trailing excess (R2KG - SP6G)|Excess %"
     S "Perf Calendar Yr|C|Perf Calendar Yr|3|1|2,3|Calendar-year total return|Return %"

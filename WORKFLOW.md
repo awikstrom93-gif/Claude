@@ -33,6 +33,7 @@ ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv`. `r2k_dera_index.py`
 | # | Command | Produces |
 |---|---------|----------|
 | 5 | `python r2k_dera_classify.py` | **`fundamentals_dera.csv`** + **`tieout_report.csv`** |
+| 5b | `python r2k_revenue_recover.py` | **`fundamentals_dera_resolved.csv`** (fills blank revenue from Morningstar) + `revenue_recovery_audit.csv` |
 | 6 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** (back up the old one first) |
 
 **`r2k_dera_classify.py` is the accounting brain.** It reconstructs all three statements with
@@ -43,8 +44,19 @@ cascade, ~15 identity tie-outs, structural debt (funded + lease-adjusted, incl. 
 and a **`provenance`** column recording how every engineered value was built. Self-test:
 `python r2k_dera_classify.py --selftest`.
 
+**`r2k_revenue_recover.py`** closes a real extraction gap: some company-years have the rest of the
+income statement (net income, etc.) but a BLANK revenue, because the filer's revenue XBRL tag isn't in
+the classifier's priority list (refiners/healthcare especially — Western Refining fy2015 had net
+income $406M but no revenue; the true figure is $9.8B). Left unfixed these are miscounted as
+"no-revenue" names, which inflates the no-revenue weight in the EARLY years (the gap shrinks over
+time) and makes "% with revenue" look like a rising trend when it is mostly improving data capture. It
+fills ONLY blank revenues, ONLY where Morningstar has a positive `Total Revenue`, never overwrites an
+existing value, stamps each with `revenue_src=morningstar:recover`, and writes
+`fundamentals_dera_resolved.csv` (chaining on top of `r2k_resolve.py` if that ran first). On the
+R2000G panel it cuts the 2015 no-revenue weight from ~7.7% to ~2.2% and flattens the trend.
+
 `r2k_dera_to_fundamentals.py` auto-prefers `fundamentals_dera_resolved.csv` if present
-(see `r2k_resolve.py`), else `fundamentals_dera.csv`.
+(from `r2k_revenue_recover.py` and/or `r2k_resolve.py`), else `fundamentals_dera.csv`.
 
 ---
 
@@ -174,6 +186,7 @@ exposed to a single fiscal year's outlier than the annual forward-12m cut.
 
 ```
 python r2k_dera_classify.py            # back up edgar_annual_fundamentals_ASFILED.csv first
+python r2k_revenue_recover.py          # fill blank revenues from Morningstar -> fundamentals_dera_resolved.csv
 python r2k_dera_to_fundamentals.py
 python r2k_plausibility.py
 python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
