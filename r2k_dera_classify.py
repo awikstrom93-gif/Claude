@@ -194,6 +194,14 @@ CASH = ["CashAndCashEquivalentsAtCarryingValue", "Cash", "CashAndCashEquivalents
         # cash_total below is guarded so restricted is not double-counted when cash came from this tag.
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations"]
+# BANK cash & cash equivalents, reconstructed from components when no standard total is tagged: cash &
+# due from banks + interest-bearing deposits held AT other banks (Fed reserves) + noninterest-bearing
+# deposits at banks. Verified to reconstruct Morningstar cash on 57/57 probed bank-years. Deliberately
+# EXCLUDES federal funds sold / securities-purchased-under-resale (short-term lending, not cash) and
+# deposit LIABILITIES -- a bare CashAndDueFromBanks understates a large bank (TCBI $181M of $7.9B).
+BANK_CASH_COMPONENTS = ["CashAndDueFromBanks", "InterestBearingDepositsInBanks",
+                        "InterestBearingDepositsInBanksAndOtherFinancialInstitutions",
+                        "NoninterestBearingDepositsInBanks"]
 STI = ["ShortTermInvestments", "OtherShortTermInvestments", "AvailableForSaleSecuritiesCurrent"]
 ASSETS = ["Assets"]
 ASSETS_CUR = ["AssetsCurrent"]
@@ -692,7 +700,18 @@ def classify_filing(d, sector):
     inte, tie = first(d, *INT_EXP); put("interest_expense", inte, tie)
 
     # ---------- balance sheet ----------
-    cash, tcash = first(d, *CASH); put("cash", cash, tcash)
+    cash, tcash = first(d, *CASH)
+    if cash is None and sector == "bank":
+        # no standard total tagged -> reconstruct from components (verified 57/57 vs Morningstar).
+        # `first` on the interest-bearing variants so a bank that tags one form isn't double-counted.
+        due, _ = first(d, "CashAndDueFromBanks")
+        ibd, _ = first(d, "InterestBearingDepositsInBanks",
+                       "InterestBearingDepositsInBanksAndOtherFinancialInstitutions")
+        nibd, _ = first(d, "NoninterestBearingDepositsInBanks")
+        parts = [x for x in (due, ibd, nibd) if x is not None]
+        if parts:
+            cash, tcash = sum(parts), "BankCash:cashDue+interestBearingDeposits(sum)"
+    put("cash", cash, tcash)
     sti, tsti = first(d, *STI); put("short_term_investments", sti, tsti)
     ta, tta = first(d, *ASSETS); put("total_assets", ta, tta)
     ca, _ = first(d, *ASSETS_CUR); put("total_current_assets", ca, None)
@@ -1346,12 +1365,24 @@ def selftest():
         "Revenues": 1000, "CostOfGoodsAndServicesSold": 600, "CostOfImpairmentOfIntangibleAssets": 300,
         "GrossProfit": 100, "Assets": 5000, "Liabilities": 3000, "StockholdersEquity": 2000,
         "NetCashProvidedByUsedInOperatingActivities": 50}.items()}
+    # bank with NO standard cash total: reconstruct cash = due-from-banks + interest-bearing deposits
+    # (Fed reserves), EXCLUDING fed funds sold. Bank markers (NII net + noninterest) select the sector.
+    bankcash = {"CashAndDueFromBanks": 181 * _m, "InterestBearingDepositsInBanks": 7766 * _m,
+                "FederalFundsSold": 500 * _m, "InterestIncomeExpenseNet": 300 * _m,
+                "NoninterestIncome": 100 * _m, "Assets": 20000 * _m, "Liabilities": 18000 * _m,
+                "StockholdersEquity": 2000 * _m}
+    # op-income where the "OperatingExpenses" tag is the GRAND TOTAL incl COGS: GP-OpEx would be
+    # -2821 while pretax is +239 (impossible) -> the guard must reject and leave operating_income blank.
+    oiguard = {"Revenues": 5130 * _m, "GrossProfit": 2070 * _m, "CostOfGoodsAndServicesSold": 3060 * _m,
+               "OperatingExpenses": 4891 * _m,
+               "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 239 * _m,
+               "Assets": 3000 * _m, "Liabilities": 2000 * _m, "StockholdersEquity": 1000 * _m}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
                    ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
                    ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2),
-                   ("17", cogsgoods), ("18", cogsimpair)):
+                   ("17", cogsgoods), ("18", cogsimpair), ("20", bankcash), ("21", oiguard)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     # cik 16: a 3-year company whose MIDDLE year (2023) is uniformly 1000x too small (filer scale
@@ -1398,6 +1429,10 @@ def selftest():
     ok_rvn = (rvn["revenue"] == 300 * _m)
     cgn = next(r for r in out if r["cik"] == "13")
     ok_cgn = (cgn["cost_of_revenue"] == 500 * _m and cgn["gross_profit"] == 1500 * _m)
+    bkc = next(r for r in out if r["cik"] == "20")
+    ok_bkc = (bkc["cash"] == 7947 * _m)                 # 181 + 7766, fed funds excluded
+    oig = next(r for r in out if r["cik"] == "21")
+    ok_oig = (oig["operating_income"] is None)          # impossible GP-OpEx rejected -> blank
     pfx = next(r for r in out if r["cik"] == "14")
     ok_pfx = (pfx["net_income"] == 145.8 * _m and "IS_NCI" not in pfx["breaks"])
     pfx2 = next(r for r in out if r["cik"] == "15")
@@ -1447,6 +1482,10 @@ def selftest():
           f"{'PASS' if ok_rvn else 'FAIL'}")
     print(f"  SELFTEST COGS<0 sign-normalize (cost={cgn['cost_of_revenue']}, gp={cgn['gross_profit']}): "
           f"{'PASS' if ok_cgn else 'FAIL'}")
+    print(f"  SELFTEST bank-cash reconstruction (cash={bkc['cash']}, expect 7947M): "
+          f"{'PASS' if ok_bkc else 'FAIL'}")
+    print(f"  SELFTEST op-income impossible-GP-OpEx guard (operating_income={oig['operating_income']}, "
+          f"expect blank): {'PASS' if ok_oig else 'FAIL'}")
     print(f"  SELFTEST parent-NI recovery (net_income={pfx['net_income']}, expect 145.8M): "
           f"{'PASS' if ok_pfx else 'FAIL'}")
     print(f"  SELFTEST parent-NI via separate-line NCI (net_income={pfx2['net_income']}, expect 145.8M): "
