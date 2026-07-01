@@ -219,6 +219,12 @@ Use these to see exactly what a change moved before assembling the full report.
 These are the probe-first toolkit. Each reads the cached outputs (no pipeline re-run) and writes a
 focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run phase 2, and measure.
 
+- `python r2k_metric_gaps.py` — the revenue-gap audit generalized to EVERY fundamental: for each
+  panel metric, the index-weighted `blank%` (missing among covered names) and `recoverable%` (of that,
+  how much Morningstar has a value for = a real extraction gap, like revenue was) vs genuinely-absent.
+  Ranks which metrics have revenue-style holes worth an as-filed recovery pass. → `metric_gaps_report.txt`,
+  `metric_gaps.csv`. Found: operating_income/equity/cash (~5–7% recoverable, directly reported),
+  gross_profit (~21%, but largely derived from COGS), fcf (~6%, derived from capex).
 - `python r2k_identity_probe.py <IDENTITY> <STMT>` — for ANY identity (e.g. `IS_NI IS`, `IS_GP IS`,
   `IS_NCI IS`), find the as-filed tag whose value equals the break's residual.
 - `python r2k_bsfoots_probe.py` — balance-sheet foot: tags that equal the A−(L+E+mezz) gap.
