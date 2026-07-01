@@ -591,13 +591,20 @@ def classify_filing(d, sector):
     if oi is None and sector in ("bank", "insurer"):
         oi, toi = pretax, "=Pretax(financial)"      # financials: operating income := pretax
     if oi is None and r.get("gross_profit") is not None:
+        gp_ = r["gross_profit"]
         opex, _ = first(d, *OPEX)
         if opex is not None:
-            cand = r["gross_profit"] - opex
-            # accept the derivation ONLY if it doesn't just reproduce pretax -- a GP-OpEx that lands
-            # on pretax means the "OperatingExpenses" tag was the grand total (incl. interest/non-op),
-            # so it's NOT operating income. Don't fabricate: leave OI blank in that case.
-            if pretax is None or abs(cand - pretax) > max(TOL_ABS, TOL_REL * max(abs(cand), abs(pretax))):
+            cand = gp_ - opex
+            # Two ways the "OperatingExpenses" tag is really a GRAND TOTAL, not below-GP operating cost:
+            #  (a) it lands on pretax -> the tag included interest / non-operating, so cand == pretax;
+            #  (b) it included COGS -> cand falls IMPLAUSIBLY far below pretax. Operating income cannot sit
+            #      below pretax by more than gross profit (that would need non-operating INCOME > GP), so
+            #      cand < pretax - GP is accounting-impossible (the COGS double-count: BURL -2.8B vs +0.3B).
+            # Reject either case and leave OI blank rather than emit a nonsense figure.
+            reproduces_pretax = (pretax is not None
+                                 and abs(cand - pretax) <= max(TOL_ABS, TOL_REL * max(abs(cand), abs(pretax))))
+            impossible = (pretax is not None and cand < pretax - abs(gp_) - TOL_ABS)
+            if not reproduces_pretax and not impossible:
                 oi, toi = cand, "GP-OpEx(derived)"
     put("operating_income", oi, toi)
 
