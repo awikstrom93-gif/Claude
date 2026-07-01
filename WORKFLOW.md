@@ -33,7 +33,7 @@ ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv`. `r2k_dera_index.py`
 | # | Command | Produces |
 |---|---------|----------|
 | 5 | `python r2k_dera_classify.py` | **`fundamentals_dera.csv`** + **`tieout_report.csv`** |
-| 5b | `python r2k_revenue_recover.py` | **`fundamentals_dera_resolved.csv`** (fills blank revenue from Morningstar) + `revenue_recovery_audit.csv` |
+| 5b | `python r2k_revenue_recover.py` | **`fundamentals_dera_resolved.csv`** (recovers blank revenue from the AS-FILED DERA tag, located via a Morningstar target) + `revenue_recovery_audit.csv` |
 | 6 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** (back up the old one first) |
 
 **`r2k_dera_classify.py` is the accounting brain.** It reconstructs all three statements with
@@ -46,14 +46,20 @@ and a **`provenance`** column recording how every engineered value was built. Se
 
 **`r2k_revenue_recover.py`** closes a real extraction gap: some company-years have the rest of the
 income statement (net income, etc.) but a BLANK revenue, because the filer's revenue XBRL tag isn't in
-the classifier's priority list (refiners/healthcare especially — Western Refining fy2015 had net
-income $406M but no revenue; the true figure is $9.8B). Left unfixed these are miscounted as
-"no-revenue" names, which inflates the no-revenue weight in the EARLY years (the gap shrinks over
-time) and makes "% with revenue" look like a rising trend when it is mostly improving data capture. It
-fills ONLY blank revenues, ONLY where Morningstar has a positive `Total Revenue`, never overwrites an
-existing value, stamps each with `revenue_src=morningstar:recover`, and writes
-`fundamentals_dera_resolved.csv` (chaining on top of `r2k_resolve.py` if that ran first). On the
-R2000G panel it cuts the 2015 no-revenue weight from ~7.7% to ~2.2% and flattens the trend.
+the classifier's `REV` priority list (refiners/healthcare/hotels especially — Western Refining fy2015
+had net income $406M but no revenue; the true figure is $9.8B). Left unfixed these are miscounted as
+"no-revenue" names, which inflates the no-revenue weight in the EARLY years (the gap shrinks over time)
+and makes "% with revenue" look like a rising trend when it is mostly improving data capture. **It stays
+faithful to the "diagnose, don't plug" principle**: it does NOT adopt Morningstar's number — it uses
+Morningstar `Total Revenue` only as a *target* to locate the correct AS-FILED DERA tag (a single
+top-line tag, or the SUM of segment lines like `FoodAndBeverageRevenue+OccupancyRevenue+…`), then adopts
+that as-filed value — the ORIGINAL filing's figure (point-in-time, not a restatement; it dedups
+multi-filing years to the accession whose own latest year == fy). Morningstar (which may carry restated
+numbers) never enters the data. Only if no as-filed fact reconciles to the target does it fall back to
+the Morningstar value, stamped `morningstar:fallback` in the audit so it is rare and visible. Each
+adoption records the tag(s) used and how far as-filed sits from Morningstar (= restatements avoided).
+On the R2000G panel it cuts the 2015 no-revenue weight from ~7.7% to ~2.2% and flattens the trend.
+Requires `dera_facts.csv` (phase 1) in addition to `fundamentals_dera.csv` and `morningstar_long.csv`.
 
 `r2k_dera_to_fundamentals.py` auto-prefers `fundamentals_dera_resolved.csv` if present
 (from `r2k_revenue_recover.py` and/or `r2k_resolve.py`), else `fundamentals_dera.csv`.
