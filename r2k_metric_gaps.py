@@ -34,7 +34,7 @@ MMAP = {
     "revenue":          ["Total Revenue"],
     "net_income":       ["Net Income Available To Common Stockholders",
                          "Net Income After Non Controlling Minority Interests"],
-    "operating_income": ["Operating Income Expenses"],
+    "operating_income": ["Total Operating Profit Loss"],
     "gross_profit":     ["Gross Profit"],
     "assets":           ["Total Assets"],
     "equity":           ["Total Equity"],

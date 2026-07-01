@@ -105,7 +105,7 @@ METRICS = [
      "identity": lambda r: _sub(_g(r, "revenue"), _g(r, "cost_of_revenue")),
      "tag_pat": ["grossprofit"], "tag_excl": [], "solo": False},
 
-    {"field": "operating_income", "ms": ["Operating Income Expenses"], "identity": None,
+    {"field": "operating_income", "ms": ["Total Operating Profit Loss"], "identity": None,
      "tag_pat": ["operatingincomeloss", "operatingincome"],
      "tag_excl": ["nonoperating", "beforeincometax"], "solo": False},
 

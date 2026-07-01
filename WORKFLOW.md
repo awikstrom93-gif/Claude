@@ -235,6 +235,15 @@ focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run 
   Ranks which metrics have revenue-style holes worth an as-filed recovery pass. → `metric_gaps_report.txt`,
   `metric_gaps.csv`. Found: operating_income/equity/cash (~5–7% recoverable, directly reported),
   gross_profit (~21%, but largely derived from COGS), fcf (~6%, derived from capex).
+- `python r2k_metric_crosscheck.py` — the OTHER half: finds PRESENT-but-WRONG values (filled and
+  internally consistent, so the tie-out passes, but still off — e.g. an understated revenue with GP
+  derived from it). Internal identities can't see these; only an external reference can. Compares every
+  present value to Morningstar, index-weighted: the MEDIAN ratio flags SYSTEMATIC bias (a mapping /
+  selection problem), off>10%/off>25% flag individual review candidates, and it writes a worklist
+  ranked by index weight × gap. → `metric_crosscheck_report.txt`, `metric_crosscheck.csv`. On the
+  current data all metrics are clean (median 1.000) except operating_income (median 1.000 but ~19% of
+  weight >10% apart — mostly definitional: what counts as "operating"). A gap is a candidate, not proof
+  of error (restatements / adjusted / gross-vs-net). Diagnostic only.
 - `python r2k_identity_probe.py <IDENTITY> <STMT>` — for ANY identity (e.g. `IS_NI IS`, `IS_GP IS`,
   `IS_NCI IS`), find the as-filed tag whose value equals the break's residual.
 - `python r2k_bsfoots_probe.py` — balance-sheet foot: tags that equal the A−(L+E+mezz) gap.
