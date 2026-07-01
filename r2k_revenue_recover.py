@@ -178,39 +178,48 @@ def main():
     if "revenue_src" not in fields:
         fields = fields + ["revenue_src"]
 
+    for r in rows:
+        r.setdefault("revenue_src", "")
     blanks = [r for r in rows if _num(r.get("revenue")) is None]
-    need = {(_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip()) for r in blanks}
-    print(f"  {len(blanks):,} company-years have BLANK revenue -- locating the as-filed tag for each")
+    prior = [r for r in rows if r.get("revenue_src", "").startswith(("asfiled", "morningstar"))]
+    # need the as-filed facts for the still-blank names AND for any prior fallback (to re-diagnose it),
+    # so the audit is FULL and self-explaining on every run -- even an idempotent re-run.
+    need = {(_ck(r["cik"]), str(r["fiscal_year"]).strip()) for r in blanks}
+    need |= {(_ck(r["cik"]), str(r["fiscal_year"]).strip()) for r in prior if r["revenue_src"].startswith("morningstar")}
+    print(f"  {len(blanks):,} company-years have BLANK revenue ; {len(prior):,} already recovered in this file")
     target = load_ms_target()
     asfiled = load_asfiled_revenue(need)
     print(f"  Morningstar targets: {len(target):,} ; as-filed revenue-fact sets: {len(asfiled):,}")
 
-    n_asfiled = n_fallback = n_none = 0
-    audit = []
-    for r in blanks:
-        key = (_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip())
+    n_new = n_none = 0
+    for r in blanks:                                     # FILL: only touch genuinely blank rows
+        key = (_ck(r["cik"]), str(r["fiscal_year"]).strip())
         tgt = target.get(key)
         val, prov = resolve(asfiled.get(key, {}), tgt)
-        reason = ""
-        if val is None:                       # no as-filed reconciliation
-            reason = diagnose(asfiled.get(key, {}), tgt)
+        if val is None:
             if tgt is not None:
-                val, prov = tgt, "morningstar:fallback"   # last resort, stamped + audited
-                n_fallback += 1
+                val, prov = tgt, "morningstar:fallback"
             else:
                 n_none += 1
                 continue
-        else:
-            n_asfiled += 1
         r["revenue"] = f"{val}"
         r["revenue_src"] = prov
-        audit.append({"cik": key[0], "fiscal_year": key[1], "adopted_revenue": f"{val:.0f}",
-                      "ms_target": f"{tgt:.0f}" if tgt else "", "source": prov,
-                      "ms_vs_asfiled_pct": (f"{100*(tgt-val)/val:+.1f}" if (tgt and prov.startswith('asfiled')) else ""),
-                      "fallback_reason": reason,
-                      "net_income": r.get("net_income", ""), "sector": r.get("sector", "")})
+        n_new += 1
+
+    # AUDIT: every recovered row (this run's + prior), so it is always complete
+    audit = []
     for r in rows:
-        r.setdefault("revenue_src", "")
+        prov = r.get("revenue_src", "")
+        if not prov.startswith(("asfiled", "morningstar")):
+            continue
+        key = (_ck(r["cik"]), str(r["fiscal_year"]).strip())
+        tgt = target.get(key)
+        rev = _num(r.get("revenue"))
+        audit.append({"cik": key[0], "fiscal_year": key[1], "adopted_revenue": f"{rev:.0f}" if rev else "",
+                      "ms_target": f"{tgt:.0f}" if tgt else "", "source": prov,
+                      "ms_vs_asfiled_pct": (f"{100*(tgt-rev)/rev:+.1f}" if (tgt and rev and prov.startswith('asfiled')) else ""),
+                      "fallback_reason": (diagnose(asfiled.get(key, {}), tgt) if prov.startswith("morningstar") else ""),
+                      "net_income": r.get("net_income", ""), "sector": r.get("sector", "")})
 
     with open(RESOLVED, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -222,10 +231,14 @@ def main():
         w.writeheader()
         w.writerows(sorted(audit, key=lambda x: -abs(_num(x["adopted_revenue"]) or 0)))
 
+    n_asfiled = sum(1 for a in audit if a["source"].startswith("asfiled"))
+    n_fallback = sum(1 for a in audit if a["source"].startswith("morningstar"))
     print(f"\n  recovered AS-FILED (original filing, point-in-time): {n_asfiled:,}")
     print(f"  Morningstar fallback (no as-filed fact reconciled -- stamped, audited): {n_fallback:,}")
-    print(f"  still blank (no target, no fact): {n_none:,}")
-    print(f"  -> {RESOLVED.name} ; {AUDIT.name}")
+    print(f"  new this run: {n_new:,} ; still blank (Morningstar has no revenue -> genuinely no-revenue): {n_none:,}")
+    if n_new == 0 and prior:
+        print(f"  (idempotent re-run: all recoverable names were already filled; audit re-emitted in full.)")
+    print(f"  -> {RESOLVED.name} ; {AUDIT.name}  ({len(audit):,} audit rows)")
     # how often as-filed differs from Morningstar (= restatements Morningstar carries that we avoided)
     diffs = [abs(_num(a["ms_vs_asfiled_pct"])) for a in audit if a["ms_vs_asfiled_pct"]]
     if diffs:
