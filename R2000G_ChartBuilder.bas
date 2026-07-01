@@ -123,6 +123,7 @@ Private Sub BuildSpec(p As Variant)
     Select Case typ
         Case "L", "D": cht.ChartType = xlLine        ' D = dual-axis line (secondary axis for small series)
         Case "C":      cht.ChartType = xlColumnClustered
+        Case "CS":     cht.ChartType = xlColumnStacked ' stacked column (decomposition that sums to a total)
         Case "B", "BR": cht.ChartType = xlBarClustered   ' BR = bar, largest at top (reversed)
         Case "A":      cht.ChartType = xlAreaStacked
         Case "S":      cht.ChartType = xlXYScatter
@@ -442,7 +443,7 @@ Private Sub LoadSpecs()
     ' ---- R2KG deep-dive ---------------------------------------------------
     S "R2KG Quality Trends|D|R2KG Quality Trends|3|1|2;3|Total revenue & net income (NI on right axis)|Total revenue $B|Total net income $B"
     S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|5,6|% Unprofitable (NI / OI)|% of index weight"
-    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|7,9,12|Margins: gross / op / net|Margin %"
+    S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|8,10,12|Margins: gross / op / net (median company)|Margin %"
     S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|15,19|ROE & ROIC ($agg)|%"
     S "R2KG Quality Trends|L|R2KG Quality Trends|3|1|24,25,27|Growth: Rev YoY, 3y CAGR, Rule of 40|%"
     S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|3,4|Unprofitable (NI): % count vs % weight|%"
@@ -451,6 +452,8 @@ Private Sub LoadSpecs()
     S "R2KG DuPont|L|R2KG DuPont|3|1|5,6|DuPont ROE: implied vs actual ($agg)|ROE"
     S "R2KG DuPont|L|R2KG DuPont|3|1|3,4|Asset turnover & leverage|x"
     S "R2KG DuPont|L|R2KG DuPont|3|1|2|Net margin|Net margin"
+    S "R2KG Composition|CS|R2KG Composition|4|1|3,4,5,6|% Unprofitable weight: what drove the change|Change (pts)"
+    S "R2KG Composition|CS|R2KG Composition|4|8|10,11,12,13|Operating margin (wt): what drove the change|Change (pts)"
 
     ' ---- Panel-native exhibits -------------------------------------------
     S "Quality Factor Spreads|L|Quality Factor Spreads|4|1|8,9|Composite & Prof-Never factor spread|Fwd-3m spread %"

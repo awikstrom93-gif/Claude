@@ -54,15 +54,31 @@ def composition_rows(panel):
     return out
 
 
+SUBHDR = ["Period", "Total change", "Within-name", "Reweight", "Entrants", "Leavers"]
+BLOCK_ORDER = ["% unprofitable (wt)", "Op margin (wt)"]   # thesis metric on the left
+
+
 def write_sheet(wb, panel):
+    """Two metric blocks side by side (cols 1-6 and 8-13), each a self-contained decomposition table
+    with the same header row -- so each is chartable as a stacked column and the layout is robust to
+    adding years (both blocks just grow downward)."""
     from openpyxl.styles import Font
     ws = wb.create_sheet(SHEET)
     ws.cell(row=1, column=1, value=TITLE_TEXT).font = Font(bold=True, size=12)
-    for c, h in enumerate(HDR, 1):
-        ws.cell(row=3, column=c, value=h).font = Font(bold=True)
-    for i, row in enumerate(composition_rows(panel), start=4):
-        for c, v in enumerate(row, 1):
-            ws.cell(row=i, column=c, value=v)
+    ws.cell(row=2, column=1, value="Each column decomposes the year-over-year change into: within-name "
+            "(same names' fundamentals), reweight (existing names' weight shifts), entrants (new index "
+            "members), leavers (removed members). The four sum to the total change.").font = Font(size=9, italic=True, color="555555")
+    groups = {}
+    for r in composition_rows(panel):
+        groups.setdefault(r[1], []).append(r)              # r[1] = metric label
+    for gi, metric in enumerate(BLOCK_ORDER):
+        c0 = 1 + gi * 7                                     # block 1: cols 1-6; block 2: cols 8-13
+        ws.cell(row=3, column=c0, value=metric).font = Font(bold=True)
+        for j, h in enumerate(SUBHDR):
+            ws.cell(row=4, column=c0 + j, value=h).font = Font(bold=True)
+        for i, r in enumerate(groups.get(metric, []), start=5):
+            for j, v in enumerate([r[0], r[2], r[3], r[4], r[5], r[6]]):   # Period, Total, Within, Reweight, Entrants, Leavers
+                ws.cell(row=i, column=c0 + j, value=v)
     return ws
 
 

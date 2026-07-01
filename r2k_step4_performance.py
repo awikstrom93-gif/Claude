@@ -141,8 +141,10 @@ def build():
         ("Annualized return", _p(aR), _p(aS), _p(aR - aS) if (aR is not None and aS is not None) else None),
         ("Annualized volatility", _p(vR), _p(vS), _p(vR - vS) if (vR is not None and vS is not None) else None),
         ("Return / volatility", round(aR / vR, 2) if (aR and vR) else None,
-         round(aS / vS, 2) if (aS and vS) else None, None),
-        ("Max drawdown", _p(mddR), _p(mddS), None),
+         round(aS / vS, 2) if (aS and vS) else None,
+         round(aR / vR - aS / vS, 2) if (aR and vR and aS and vS) else None),
+        ("Max drawdown", _p(mddR), _p(mddS),
+         _p(mddR - mddS) if (mddR is not None and mddS is not None) else None),
         ("% months R2KG > SP6G", round(100 * sum(1 for x in er if x > 0) / n, 1), None, None),
     ]
     r = 5
