@@ -239,7 +239,17 @@ def recover(spec, r, facts_row, target):
 
 
 def main():
-    base_file = RESOLVED if RESOLVED.exists() else DERA
+    # STALENESS GUARD: if the classifier re-ran (fundamentals_dera.csv NEWER than the resolved file),
+    # start fresh from it so classifier improvements propagate instead of being shadowed by a stale
+    # resolved file. revenue_recover runs first and rewrites resolved, so metric_recover then correctly
+    # sees the just-written resolved as newest and continues the chain.
+    if RESOLVED.exists() and (not DERA.exists() or RESOLVED.stat().st_mtime >= DERA.stat().st_mtime):
+        base_file = RESOLVED
+    else:
+        base_file = DERA
+        if RESOLVED.exists():
+            print("  (fundamentals_dera.csv is newer than the resolved file -> rebuilding from the fresh "
+                  "classification)")
     if not base_file.exists():
         sys.exit(f"!! {base_file.name} not found.")
     print(f"  base fundamentals: {base_file.name}")

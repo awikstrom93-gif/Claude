@@ -173,7 +173,16 @@ def diagnose(byt, target):
 
 
 def main():
-    base_file = RESOLVED if RESOLVED.exists() else DERA
+    # STALENESS GUARD: if the classifier re-ran (fundamentals_dera.csv is NEWER than the resolved file),
+    # start fresh from it -- otherwise a stale resolved file shadows the new classification and any tags
+    # just added to the classifier (e.g. the ASU combined cash line, sector revenue tags) never appear.
+    if RESOLVED.exists() and (not DERA.exists() or RESOLVED.stat().st_mtime >= DERA.stat().st_mtime):
+        base_file = RESOLVED
+    else:
+        base_file = DERA
+        if RESOLVED.exists():
+            print("  (fundamentals_dera.csv is newer than the resolved file -> rebuilding recovery from "
+                  "the fresh classification so new classifier tags propagate)")
     if not base_file.exists():
         sys.exit(f"!! {base_file.name} not found -- run r2k_dera_classify.py first.")
     print(f"  base fundamentals: {base_file.name}")
