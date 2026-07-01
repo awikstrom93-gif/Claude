@@ -17,8 +17,8 @@ Pure panel projection.  RUN:  python r2k_view_valuation.py
 from r2k_universe import get_panel, get_quarterly_panel, by_index_year, BASE
 
 OUT = BASE / "r2k_valuation.txt"
-HDR = ["Year", "%NoRev wt", "Prof P/S xIdx", "Unprof P/S xIdx", "Never P/S xIdx",
-       "Unprof/Prof P/S", "Prof P/B xIdx", "Unprof P/B xIdx", "Unprof/Prof P/B"]
+HDR = ["Year", "%NoRev wt", "Prof P/S", "Unprof P/S", "Never P/S",
+       "Unprof/Prof P/S", "Prof P/B", "Unprof P/B", "Unprof/Prof P/B"]
 
 
 def _agg_ps(rows, vf):
