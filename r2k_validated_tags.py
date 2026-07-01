@@ -69,7 +69,10 @@ DISALLOW = {
     # catastrophically (TCBI: CashAndDueFromBanks $181M vs true $7.9B). They reconcile for small banks
     # but MUST NOT be promoted/adopted blanket -- proper bank cash is the standard total or a component
     # SUM incl. interest-bearing deposits. Until that reconstruction exists, leave bank cash blank (honest).
-    "cash": re.compile(r"effectofexchangerate|duefrombanks|federalfundssold", re.I),
+    # marketablesecurities = a "cash + marketable securities" combined line -> broader than Morningstar's
+    # cash concept (securities are short-term INVESTMENTS, not cash), so it overstates. Same class as the
+    # narrow bank-cash tags above: an ambiguous combined line that must not fill `cash`.
+    "cash": re.compile(r"effectofexchangerate|duefrombanks|federalfundssold|marketablesecurities", re.I),
 }
 
 
