@@ -136,13 +136,19 @@ def resolve(byt, target):
         v = byt.get(t)
         if v and abs(v - target) / target <= TOL:
             return v, "asfiled:" + t
-    # 2. SUM of segment revenue lines that reconciles to the target
+    # 2. ANY single revenue-like tag that already reconciles to the target (a non-standard top line
+    #    the REV list just doesn't name -- e.g. RefiningAndMarketingRevenue, HealthCareOrganization...)
+    singles = [(t, v) for t, v in byt.items() if v and v > 0 and abs(v - target) / target <= TOL]
+    if singles:
+        t, v = min(singles, key=lambda kv: abs(kv[1] - target))
+        return v, "asfiled:" + t
+    # 3. SUM of segment revenue lines that reconciles to the target (revenue reported only by segment)
     segs = {t: v for t, v in byt.items() if is_segment(t) and v and v > 0}
-    if segs:
+    if len(segs) >= 2:
         ssum = sum(segs.values())
         if abs(ssum - target) / target <= TOL:
             return ssum, "asfiled:sum(" + "+".join(sorted(segs)) + ")"
-    # 3. the single revenue-like tag closest to the target, within a looser tolerance
+    # 4. the single revenue-like tag closest to the target, within a looser tolerance
     cands = [(t, v) for t, v in byt.items() if v and v > 0]
     if cands:
         t, v = min(cands, key=lambda kv: abs(kv[1] - target))
