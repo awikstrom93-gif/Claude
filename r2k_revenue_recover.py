@@ -157,6 +157,16 @@ def resolve(byt, target):
     return None, "no-asfiled-match"
 
 
+def diagnose(byt, target):
+    """Why a name fell back to Morningstar -- so the audit is self-explaining on real data."""
+    if not byt:
+        return "no-revenue-fact (extract gap or a tag without 'revenue'/'sales')"
+    if not target:
+        return "no-morningstar-target"
+    t, v = min(byt.items(), key=lambda kv: abs(kv[1] - target))
+    return f"closest as-filed {t}=${v/1e6:.0f}M is {100*(v-target)/target:+.1f}% off the total (component / gross-vs-net)"
+
+
 def main():
     base_file = RESOLVED if RESOLVED.exists() else DERA
     if not base_file.exists():
@@ -181,7 +191,9 @@ def main():
         key = (_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip())
         tgt = target.get(key)
         val, prov = resolve(asfiled.get(key, {}), tgt)
+        reason = ""
         if val is None:                       # no as-filed reconciliation
+            reason = diagnose(asfiled.get(key, {}), tgt)
             if tgt is not None:
                 val, prov = tgt, "morningstar:fallback"   # last resort, stamped + audited
                 n_fallback += 1
@@ -195,6 +207,7 @@ def main():
         audit.append({"cik": key[0], "fiscal_year": key[1], "adopted_revenue": f"{val:.0f}",
                       "ms_target": f"{tgt:.0f}" if tgt else "", "source": prov,
                       "ms_vs_asfiled_pct": (f"{100*(tgt-val)/val:+.1f}" if (tgt and prov.startswith('asfiled')) else ""),
+                      "fallback_reason": reason,
                       "net_income": r.get("net_income", ""), "sector": r.get("sector", "")})
     for r in rows:
         r.setdefault("revenue_src", "")
@@ -204,7 +217,7 @@ def main():
         w.writeheader(); w.writerows(rows)
     with open(AUDIT, "w", newline="", encoding="utf-8") as f:
         cols = ["cik", "fiscal_year", "adopted_revenue", "ms_target", "source", "ms_vs_asfiled_pct",
-                "net_income", "sector"]
+                "fallback_reason", "net_income", "sector"]
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(sorted(audit, key=lambda x: -abs(_num(x["adopted_revenue"]) or 0)))
