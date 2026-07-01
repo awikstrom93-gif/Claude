@@ -41,6 +41,8 @@ AUDIT = BASE / "revenue_recovery_audit.csv"
 
 TOL = 0.08                    # as-filed value must reconcile to the Morningstar target within this
 TOL_LOOSE = 0.12              # looser tolerance for a single best-match tag
+# vendor plug OFF by default (diagnose, don't plug): unlocatable revenue stays blank unless opted in
+MS_FALLBACK = os.environ.get("R2KG_MS_FALLBACK", "0") == "1"
 # curated TOTAL top-line tags (a single tag that already is the whole revenue), in priority order
 REV_TOTAL = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
              "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
@@ -183,6 +185,15 @@ def main():
 
     for r in rows:
         r.setdefault("revenue_src", "")
+    # SELF-HEAL: with the vendor plug OFF, purge any prior Morningstar revenue plug back to blank so a
+    # re-run re-derives it as-filed only (never inherits a stale plug). As-filed picks are preserved.
+    if not MS_FALLBACK:
+        healed = 0
+        for r in rows:
+            if str(r.get("revenue_src", "")).startswith("morningstar"):
+                r["revenue"] = ""; r["revenue_src"] = ""; healed += 1
+        if healed:
+            print(f"  self-heal: purged {healed:,} prior Morningstar revenue plug(s) -> as-filed only.")
     blanks = [r for r in rows if _num(r.get("revenue")) is None]
     prior = [r for r in rows if r.get("revenue_src", "").startswith(("asfiled", "morningstar"))]
     # need the as-filed facts for the still-blank names AND for any prior fallback (to re-diagnose it),
@@ -200,7 +211,9 @@ def main():
         tgt = target.get(key)
         val, prov = resolve(asfiled.get(key, {}), tgt)
         if val is None:
-            if tgt is not None:
+            # diagnose, don't plug: the Morningstar last-resort plug is OFF unless R2KG_MS_FALLBACK=1.
+            # Otherwise a revenue we can't locate as-filed stays BLANK (honest "no as-filed top line").
+            if tgt is not None and MS_FALLBACK:
                 val, prov = tgt, "morningstar:fallback"
             else:
                 n_none += 1

@@ -15,7 +15,16 @@ Per blank metric, in order:
                         this fires once cost_of_revenue / capex are filled.
   TIER 2  AS-FILED TAG -- locate the metric's OWN as-filed tag (non-standard/industry) in dera_facts,
                         verified against the Morningstar target within tolerance; original filing only.
-  TIER 3  MORNINGSTAR FALLBACK -- last resort, stamped `morningstar:fallback`.
+
+NO VENDOR PLUGS BY DEFAULT ("diagnose, don't plug"). If neither tier fills the metric, it stays BLANK --
+the honest "not reported as-filed" state -- because plugging a vendor's number (often a RESTATED or a
+vendor-DERIVED figure, e.g. a computed gross profit for a filer that never reported one) both violates
+the as-filed principle and CONTAMINATES the identities: a plugged cost_of_revenue would make the later
+gross_profit = revenue - COGS identity fire on a plug and stamp the result `identity`, laundering the
+vendor number into what looks like a clean reconstruction. Leaving the component blank prevents that --
+the dependent identity simply doesn't fire. A Morningstar last-resort plug is available ONLY when
+explicitly enabled (env R2KG_MS_FALLBACK=1); when on it is stamped `morningstar:fallback` AND any
+identity that consumes a fallback component is stamped `identity(from-ms)` so it is never laundered.
 
 Metric order matters: revenue, cost_of_revenue, gross_profit, operating_income, total_equity, cash,
 capex, free_cash_flow -- so each dependent metric sees its just-recovered components.
@@ -41,6 +50,9 @@ MS = BASE / "morningstar_long.csv"
 AUDIT = BASE / "metric_recovery_audit.csv"
 
 TOL = 0.08
+# Morningstar last-resort plug is OFF by default (diagnose, don't plug). Set R2KG_MS_FALLBACK=1 only for
+# a deliberate, fully-flagged vendor backfill -- otherwise unfilled metrics stay blank (as-filed truth).
+MS_FALLBACK = os.environ.get("R2KG_MS_FALLBACK", "0") == "1"
 _EXCL_REV = ("cost", "gain", "loss", "deferred", "unearned", "receivable", "expense", "pershare",
              "growth", "percent")
 
@@ -85,38 +97,43 @@ def _match(tag, pats, excls):
 
 # ---- per-metric spec ------------------------------------------------------------------------------
 # field    : fundamentals_dera column to fill
-# ms       : Morningstar metric name(s) -> target / fallback
+# ms       : Morningstar metric name(s) -> target (tier-2 locator) / opt-in fallback
 # identity : (row) -> value from STORED components (tier 1), or None
+# deps     : the component fields the identity reads -- so a plug consumed by an identity can be stamped
+#            (never laundered) when the opt-in fallback is enabled
 # tag_pat  : substrings identifying the metric's own as-filed tag family (tier 2)
 # tag_excl : disqualifying substrings
 # solo     : if True, may adopt a single matching curated tag even without a Morningstar target
 #            (only for unambiguous single-tag metrics: capex, cash)
 METRICS = [
-    {"field": "revenue", "ms": ["Total Revenue"], "identity": None,
+    {"field": "revenue", "ms": ["Total Revenue"], "identity": None, "deps": [],
      "tag_pat": ["revenue", "sales"], "tag_excl": list(_EXCL_REV), "solo": False},
 
     {"field": "cost_of_revenue", "ms": ["Cost Of Revenue"],
      # if GP is already present, COGS = revenue - gross_profit (keeps the row consistent with the
      # existing as-filed GP instead of pulling a separate COGS tag that might disagree with it)
      "identity": lambda r: _pos(_sub(_g(r, "revenue"), _g(r, "gross_profit"))),
+     "deps": ["revenue", "gross_profit"],
      "tag_pat": ["costofrevenue", "costofgoodsandservices", "costofgoodssold", "costofsales",
                  "costofservices"],
      "tag_excl": ["gross", "depreciation", "amortization", "excludingdepreciation"], "solo": False},
 
     {"field": "gross_profit", "ms": ["Gross Profit"],
      "identity": lambda r: _sub(_g(r, "revenue"), _g(r, "cost_of_revenue")),
+     "deps": ["revenue", "cost_of_revenue"],
      "tag_pat": ["grossprofit"], "tag_excl": [], "solo": False},
 
-    {"field": "operating_income", "ms": ["Total Operating Profit Loss"], "identity": None,
+    {"field": "operating_income", "ms": ["Total Operating Profit Loss"], "identity": None, "deps": [],
      "tag_pat": ["operatingincomeloss", "operatingincome"],
      "tag_excl": ["nonoperating", "beforeincometax"], "solo": False},
 
     {"field": "total_equity", "ms": ["Total Equity"],
      "identity": lambda r: _sub(_g(r, "total_assets"), _g(r, "total_liabilities"), _g(r, "redeemable_nci")),
+     "deps": ["total_assets", "total_liabilities", "redeemable_nci"],
      "tag_pat": ["stockholdersequity", "partnerscapital", "membersequity", "totalequity"],
      "tag_excl": ["accumulated", "othercomprehensive", "pershare"], "solo": False},
 
-    {"field": "cash", "ms": ["Cash And Cash Equivalents"], "identity": None,
+    {"field": "cash", "ms": ["Cash And Cash Equivalents"], "identity": None, "deps": [],
      "tag_pat": ["cashandcashequivalents", "cashcashequivalents", "cashanddue"],
      "tag_excl": ["restricted", "financing", "investing", "operating", "period", "increase", "decrease"],
      "solo": True},
@@ -124,12 +141,13 @@ METRICS = [
     {"field": "capex", "ms": ["Capital Expenditure Reported"],
      # if FCF is already present, capex = cfo - free_cash_flow (consistent with the existing FCF)
      "identity": lambda r: _pos(_sub(_g(r, "cfo"), _g(r, "free_cash_flow"))),
+     "deps": ["cfo", "free_cash_flow"],
      "tag_pat": ["paymentstoacquirepropertyplant", "paymentsforcapitalimprovements",
                  "paymentstoacquireproductiveassets", "paymentstoacquireoilandgasproperty"],
      "tag_excl": ["proceeds"], "solo": True},
 
     {"field": "free_cash_flow", "ms": ["Free Cash Flow to Firm", "Free Cash Flow to Equity Holders"],
-     "identity": lambda r: _sub(_g(r, "cfo"), _g(r, "capex")),
+     "identity": lambda r: _sub(_g(r, "cfo"), _g(r, "capex")), "deps": ["cfo", "capex"],
      "tag_pat": [], "tag_excl": [], "solo": False},
 ]
 
@@ -221,6 +239,25 @@ def main():
         for m in METRICS:
             r.setdefault(m["field"] + "_src", "")
 
+    # SELF-HEAL: when the vendor plug is OFF, purge any Morningstar-traceable recovery a PRIOR run left,
+    # so a re-run can't inherit stale plugs (recovery is otherwise fill-only). In METRIC order so a
+    # purged component orphans its dependent identity in the same sweep: a direct plug and a laundered
+    # identity(from-ms) are dropped outright; a plain `identity` is dropped only if it no longer holds
+    # (a required component is now blank). Genuine as-filed tags and real-component identities survive.
+    if not MS_FALLBACK:
+        purged = 0
+        for r in rows:
+            for m in METRICS:
+                fld = m["field"]; src = r.get(fld + "_src", "")
+                drop = src.startswith("morningstar") or src == "identity(from-ms)"
+                if not drop and src == "identity" and m["identity"] is not None:
+                    drop = m["identity"](r) is None      # required component was purged -> stale
+                if drop:
+                    r[fld] = ""; r[fld + "_src"] = ""; purged += 1
+        if purged:
+            print(f"  self-heal: purged {purged:,} stale Morningstar-traceable value(s) from a prior "
+                  f"plugged run -> re-deriving as-filed only.")
+
     need = set()
     for r in rows:
         if any(_num(r.get(m["field"])) is None for m in METRICS):
@@ -244,7 +281,12 @@ def main():
                 continue
             tgt = ms.get(fld, {}).get(key)
             val, method, prov = recover(m, r, frow, tgt)
-            if val is None and tgt is not None:
+            # anti-laundering: an identity built on a component that was itself a Morningstar plug is
+            # NOT a clean as-filed reconstruction -- stamp it so it can never masquerade as `identity`.
+            if method == "identity" and any(
+                    str(r.get(d + "_src", "")).startswith("morningstar") for d in m.get("deps", [])):
+                prov = "identity(from-ms)"
+            if val is None and tgt is not None and MS_FALLBACK:   # opt-in vendor plug (default OFF)
                 val, method, prov = tgt, "ms-fallback", "morningstar:fallback"
             if val is None:
                 counts[fld]["no-source"] += 1
@@ -271,11 +313,12 @@ def main():
         w.writeheader()
         w.writerows(sorted(audit, key=lambda x: (x["metric"], -abs(_num(x["adopted"]) or 0))))
 
-    print("\n  recovered per metric  (identity = as-filed reconstruction; asfiled = own tag; ms = plugged):")
-    print(f"    {'metric':>16} {'identity':>9} {'asfiled':>8} {'ms-fallback':>12} {'no-source':>10}")
+    print(f"\n  Morningstar vendor plug: {'ON (R2KG_MS_FALLBACK=1)' if MS_FALLBACK else 'OFF (as-filed only -- unfilled metrics stay blank)'}")
+    print("  recovered per metric  (identity = as-filed reconstruction; asfiled = own tag; ms = plugged):")
+    print(f"    {'metric':>16} {'identity':>9} {'asfiled':>8} {'ms-fallback':>12} {'blank(left)':>12}")
     for m in METRICS:
         c = counts[m["field"]]
-        print(f"    {m['field']:>16} {c['identity']:>9} {c['asfiled']:>8} {c['ms-fallback']:>12} {c['no-source']:>10}")
+        print(f"    {m['field']:>16} {c['identity']:>9} {c['asfiled']:>8} {c['ms-fallback']:>12} {c['no-source']:>12}")
     print(f"\n  -> {RESOLVED.name} ; {AUDIT.name} ({len(audit):,} recoveries)")
 
     # close the loop: hand the validated as-filed tags back to the classifier so it learns them and
