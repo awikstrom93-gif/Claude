@@ -60,7 +60,10 @@ DISALLOW = {
     "revenue": re.compile(r"securit|availableforsale|proceedsfrom|paymentsto|paymentsfor|"
                           r"purchaseof|maturityof|heldtomaturity", re.I),
     "operating_income": re.compile(r"otheroperating|segmentoperating|interestandother|totalother", re.I),
-    "total_equity": re.compile(r"adjustedbalance|balance1|beforetreasury|excludingnet|rollforward", re.I),
+    # ...NotAllowableForNetCapital = a broker-dealer net-capital SCHEDULE figure (a custom extension tag),
+    # not clean GAAP total equity -- it reconciled within tolerance but is systematically 3-7% understated.
+    "total_equity": re.compile(r"adjustedbalance|balance1|beforetreasury|excludingnet|rollforward|"
+                               r"netcapital|notallowable", re.I),
     "cash": re.compile(r"effectofexchangerate", re.I),
 }
 

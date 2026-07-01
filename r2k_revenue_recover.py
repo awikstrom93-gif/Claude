@@ -185,15 +185,28 @@ def main():
 
     for r in rows:
         r.setdefault("revenue_src", "")
-    # SELF-HEAL: with the vendor plug OFF, purge any prior Morningstar revenue plug back to blank so a
-    # re-run re-derives it as-filed only (never inherits a stale plug). As-filed picks are preserved.
-    if not MS_FALLBACK:
-        healed = 0
-        for r in rows:
-            if str(r.get("revenue_src", "")).startswith("morningstar"):
-                r["revenue"] = ""; r["revenue_src"] = ""; healed += 1
-        if healed:
-            print(f"  self-heal: purged {healed:,} prior Morningstar revenue plug(s) -> as-filed only.")
+    # SELF-HEAL: purge stale prior recoveries so a re-run reflects current rules. Two cases:
+    #   (a) a DISALLOWED as-filed look-alike (e.g. a cross-statement AvailableForSale/Proceeds tag a prior
+    #       metric_recover adopted as revenue) -> purged ALWAYS; it's a wrong tag, not a plug. This also
+    #       stops the audit from re-emitting it. (segment SUMs / 'closest' picks are left alone.)
+    #   (b) a Morningstar plug -> purged when the vendor plug is OFF.
+    healed = 0
+    for r in rows:
+        src = str(r.get("revenue_src", ""))
+        drop = False
+        if src.startswith("asfiled:") and not src.startswith("asfiled:sum("):
+            tag = src[len("asfiled:"):]
+            for suf in ("(closest)", "(no-target)"):
+                if tag.endswith(suf):
+                    tag = tag[:-len(suf)]
+            drop = not vt.is_allowed("revenue", tag)
+        if not drop and not MS_FALLBACK and src.startswith("morningstar"):
+            drop = True
+        if drop:
+            r["revenue"] = ""; r["revenue_src"] = ""; healed += 1
+    if healed:
+        print(f"  self-heal: purged {healed:,} stale revenue value(s) (plugs and/or disallowed tags) "
+              f"-> re-deriving as-filed only.")
     blanks = [r for r in rows if _num(r.get("revenue")) is None]
     prior = [r for r in rows if r.get("revenue_src", "").startswith(("asfiled", "morningstar"))]
     # need the as-filed facts for the still-blank names AND for any prior fallback (to re-diagnose it),
