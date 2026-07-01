@@ -27,7 +27,8 @@ import os
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.chart import LineChart, Reference
+from openpyxl.chart import LineChart, ScatterChart, Reference, Series
+from openpyxl.chart.trendline import Trendline
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 PERF = BASE / "R2000G_vs_SP600G_Performance.xlsx"
@@ -381,10 +382,45 @@ def preserve_charts(wb):
         return 0, None
     moved = 0
     for s in wb.sheetnames:
-        if s in old.sheetnames:
+        # skip tabs the rebuild already draws its own chart on (e.g. Perf Scatter) -- else the old
+        # copy would stack on top of the fresh one every rebuild.
+        if s in old.sheetnames and not getattr(wb[s], "_charts", []):
             for ch in list(getattr(old[s], "_charts", [])):
                 wb[s].add_chart(ch); moved += 1
     return moved, src.name
+
+
+def perf_scatter(wb):
+    """A 'Perf Scatter' tab: each month's R2000G return (x) vs S&P 600 Growth return (y), with a
+    linear fit whose slope IS SP6G's beta to R2KG. Visually validates the capture discussion --
+    the cloud's tilt shows co-movement, points below the 45-deg line in down-months show downside
+    behavior. References the existing 'Perf Monthly' tab (col2 = R2KG ret %, col3 = SP6G ret %) so
+    it adds no duplicate data. Returns the sheet name (or None if the source tab is absent)."""
+    if "Perf Monthly" not in wb.sheetnames:
+        return None
+    pm = wb["Perf Monthly"]
+    last = max((r for r in range(2, pm.max_row + 1)
+                if isinstance(pm.cell(r, 2).value, (int, float))), default=1)
+    if last < 3:
+        return None
+    ws = wb.create_sheet("Perf Scatter")
+    ws.cell(1, 1, "Monthly returns: S&P 600 Growth vs R2000G  (slope of the fit = SP6G beta to R2KG)").font = TITLE
+    ws.cell(2, 1, "Each point is one month (132 total). X = R2000G return %, Y = S&P 600 Growth return %. "
+                  "The linear fit's slope is beta and its R² the co-movement; points below the diagonal are "
+                  "months SP6G trailed R2KG. This is the visual behind the Up-Down Capture tab.").font = BODY
+    x = Reference(pm, min_col=2, min_row=2, max_row=last)          # R2KG ret %
+    y = Reference(pm, min_col=3, min_row=2, max_row=last)          # SP6G ret %
+    ch = ScatterChart(); ch.title = "SP6G vs R2000G monthly total return (%)"
+    ch.height, ch.width = 12, 16
+    ch.x_axis.title = "R2000G monthly return %"; ch.y_axis.title = "S&P 600 Growth monthly return %"
+    ch.x_axis.delete = False; ch.y_axis.delete = False
+    s = Series(y, x, title="Monthly returns")
+    s.marker.symbol = "circle"; s.marker.size = 5
+    s.graphicalProperties.line.noFill = True                       # markers only, no connecting line
+    s.trendline = Trendline(trendlineType="linear", dispEq=True, dispRSqr=True)  # beta line + equation/R2
+    ch.series.append(s)
+    ws.add_chart(ch, "A4")
+    return "Perf Scatter"
 
 
 def key_charts(wb):
@@ -583,6 +619,9 @@ def main():
                 print(f"  added {label} tab")
         except Exception as e:
             print(f"  ({label} tab skipped: {e})")
+    sc = perf_scatter(wb)                  # return-scatter tab (R2KG vs SP6G monthly, beta trendline)
+    if sc:
+        copied.append(sc); print("  added Perf Scatter tab")
     wb.create_sheet("Key Charts")          # home for charts (always present)
     contents(wb, copied)
     # preserve hand-made charts from the existing file; only auto-generate on a true first run
