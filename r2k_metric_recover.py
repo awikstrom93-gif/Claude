@@ -1,26 +1,29 @@
 """
 r2k_metric_recover.py  --  the as-filed recovery, generalized to every metric with a real extraction
-gap (see r2k_metric_gaps.py), and made IDENTITY-FIRST. Supersedes r2k_revenue_recover.py.
+gap (see r2k_metric_gaps.py), IDENTITY-FIRST, and COMPONENT-COMPLETE. Supersedes r2k_revenue_recover.py.
 
-For each blank metric on a covered company-year it tries, in order:
-  TIER 1  IDENTITY  -- reconstruct from as-filed COMPONENT tags via an accounting identity, e.g.
-                       total_equity = total_assets - total_liabilities - redeemable_NCI
-                       gross_profit = revenue - cost_of_revenue (an as-filed COGS tag)
-                       free_cash_flow = CFO - capex (an as-filed capex tag)
-                       No vendor, fully as-filed, and self-checking. This is preferred.
-  TIER 2  AS-FILED TAG -- locate the metric's OWN as-filed tag (a non-standard/industry tag the
-                       classifier's list doesn't name), verified against the Morningstar target
-                       within tolerance (the r2k_revenue_recover approach). Adopts the original
-                       filing's value (point-in-time; dedups multi-filing years to the original).
-  TIER 3  MORNINGSTAR FALLBACK -- only if neither works; stamped `morningstar:fallback` in the audit.
+Holes cluster: gross_profit is blank because COST OF REVENUE is blank; free_cash_flow is blank because
+CAPEX is blank. So we recover the COMPONENTS as their own as-filed columns first, then derive the
+dependent metric from the stored values -- filling cost_of_revenue / capex too, and keeping the row
+internally consistent (revenue - cost_of_revenue = gross_profit; cfo - capex = free_cash_flow).
 
-Morningstar is used ONLY to test/verify presence and as a last resort -- never plugged when an
-as-filed value (own tag or identity reconstruction) reconciles.
+Per blank metric, in order:
+  TIER 1  IDENTITY   -- compute from other STORED as-filed values via an accounting identity
+                        (total_equity = assets - liabilities - redeemable_NCI; gross_profit =
+                        revenue - cost_of_revenue; free_cash_flow = cfo - capex). No vendor; adopted
+                        even when Morningstar lacks the value. Because components are recovered first,
+                        this fires once cost_of_revenue / capex are filled.
+  TIER 2  AS-FILED TAG -- locate the metric's OWN as-filed tag (non-standard/industry) in dera_facts,
+                        verified against the Morningstar target within tolerance; original filing only.
+  TIER 3  MORNINGSTAR FALLBACK -- last resort, stamped `morningstar:fallback`.
+
+Metric order matters: revenue, cost_of_revenue, gross_profit, operating_income, total_equity, cash,
+capex, free_cash_flow -- so each dependent metric sees its just-recovered components.
 
 INPUTS   fundamentals_dera_resolved.csv (if present) else fundamentals_dera.csv ; dera_facts.csv ;
          morningstar_long.csv
 OUTPUTS  fundamentals_dera_resolved.csv (+ <metric>_src cols) ; metric_recovery_audit.csv
-RUN      python r2k_metric_recover.py           (then dera_to_fundamentals -> plausibility -> report)
+RUN      python r2k_metric_recover.py            (then dera_to_fundamentals -> plausibility -> report)
 """
 import csv
 import os
@@ -36,51 +39,8 @@ MS = BASE / "morningstar_long.csv"
 AUDIT = BASE / "metric_recovery_audit.csv"
 
 TOL = 0.08
-_EXCL = ("cost", "gain", "loss", "deferred", "unearned", "receivable", "expense", "pershare",
-         "growth", "percent", "pertax")
-
-# ---- per-metric recovery spec ---------------------------------------------------------------------
-# field         : fundamentals_dera column to fill
-# ms            : Morningstar metric name(s) used as the target / fallback
-# tag_pat       : substrings that identify the metric's OWN as-filed tag family (tier 2)
-# tag_excl      : substrings that DISQUALIFY a tag (avoid components / gross variants)
-# identity      : (component_field_or_tags...) -> value, using as-filed COMPONENT facts (tier 1)
-METRICS = [
-    {"field": "revenue", "ms": ["Total Revenue"],
-     "tag_pat": ["revenue", "sales"], "tag_excl": list(_EXCL), "identity": None},
-    {"field": "operating_income", "ms": ["Operating Income Expenses"],
-     "tag_pat": ["operatingincomeloss", "operatingincome"], "tag_excl": ["nonoperating", "beforeincometax"],
-     "identity": None},
-    {"field": "total_equity", "ms": ["Total Equity"],
-     "tag_pat": ["stockholdersequity", "partnerscapital", "membersequity", "totalequity"],
-     "tag_excl": ["accumulated", "othercomprehensive", "pershare"],
-     # identity: assets - liabilities - redeemable NCI
-     "identity": lambda d: _sub(d.get("_asset"), d.get("_liab"), d.get("_mezz"))},
-    {"field": "cash", "ms": ["Cash And Cash Equivalents"],
-     "tag_pat": ["cashandcashequivalents", "cashcashequivalents", "cashanddue"],
-     "tag_excl": ["restricted", "financing", "investing", "operating", "period", "increase", "decrease"],
-     "identity": None},
-    {"field": "gross_profit", "ms": ["Gross Profit"],
-     "tag_pat": ["grossprofit"], "tag_excl": [],
-     # identity: revenue - cost_of_revenue (both as-filed)
-     "identity": lambda d: _sub(d.get("_rev"), d.get("_cogs"))},
-    {"field": "free_cash_flow", "ms": ["Free Cash Flow to Firm", "Free Cash Flow to Equity Holders"],
-     "tag_pat": [], "tag_excl": [],
-     # identity: CFO - capex (both as-filed)
-     "identity": lambda d: _sub(d.get("_cfo"), d.get("_capex"))},
-]
-
-# as-filed COMPONENT tag families used by the identities (tier 1), matched on lowercased tag
-COMPONENTS = {
-    "_asset": (["assets"], ["current", "noncurrent", "intangible", "goodwill", "held", "deferred", "net"]),
-    "_liab":  (["liabilities"], ["current", "noncurrent", "deferred", "contingencies", "andstockholders"]),
-    "_mezz":  (["redeemable", "temporaryequity", "mezzanine"], ["stockholders"]),
-    "_rev":   (["revenues", "revenuefromcontract", "salesrevenuenet"], list(_EXCL)),
-    "_cogs":  (["costofrevenue", "costofgoodssold", "costofgoodsandservices", "costofsales"], ["gross"]),
-    "_cfo":   (["netcashprovidedbyusedinoperatingactivities"], ["financing", "investing", "discontinued"]),
-    "_capex": (["paymentstoacquirepropertyplant", "paymentsforcapitalimprovements",
-                "paymentstoacquireproductiveassets"], []),
-}
+_EXCL_REV = ("cost", "gain", "loss", "deferred", "unearned", "receivable", "expense", "pershare",
+             "growth", "percent")
 
 
 def _num(x):
@@ -90,8 +50,12 @@ def _num(x):
         return None
 
 
+def _g(r, f):
+    return _num(r.get(f))
+
+
 def _sub(*xs):
-    if xs[0] is None:
+    if not xs or xs[0] is None:
         return None
     tot = xs[0]
     for x in xs[1:]:
@@ -109,8 +73,53 @@ def _match(tag, pats, excls):
     return any(p in tl for p in pats) and not any(e in tl for e in excls)
 
 
+# ---- per-metric spec ------------------------------------------------------------------------------
+# field    : fundamentals_dera column to fill
+# ms       : Morningstar metric name(s) -> target / fallback
+# identity : (row) -> value from STORED components (tier 1), or None
+# tag_pat  : substrings identifying the metric's own as-filed tag family (tier 2)
+# tag_excl : disqualifying substrings
+# solo     : if True, may adopt a single matching curated tag even without a Morningstar target
+#            (only for unambiguous single-tag metrics: capex, cash)
+METRICS = [
+    {"field": "revenue", "ms": ["Total Revenue"], "identity": None,
+     "tag_pat": ["revenue", "sales"], "tag_excl": list(_EXCL_REV), "solo": False},
+
+    {"field": "cost_of_revenue", "ms": ["Cost Of Revenue"], "identity": None,
+     "tag_pat": ["costofrevenue", "costofgoodsandservices", "costofgoodssold", "costofsales",
+                 "costofservices"],
+     "tag_excl": ["gross", "depreciation", "amortization", "excludingdepreciation"], "solo": False},
+
+    {"field": "gross_profit", "ms": ["Gross Profit"],
+     "identity": lambda r: _sub(_g(r, "revenue"), _g(r, "cost_of_revenue")),
+     "tag_pat": ["grossprofit"], "tag_excl": [], "solo": False},
+
+    {"field": "operating_income", "ms": ["Operating Income Expenses"], "identity": None,
+     "tag_pat": ["operatingincomeloss", "operatingincome"],
+     "tag_excl": ["nonoperating", "beforeincometax"], "solo": False},
+
+    {"field": "total_equity", "ms": ["Total Equity"],
+     "identity": lambda r: _sub(_g(r, "total_assets"), _g(r, "total_liabilities"), _g(r, "redeemable_nci")),
+     "tag_pat": ["stockholdersequity", "partnerscapital", "membersequity", "totalequity"],
+     "tag_excl": ["accumulated", "othercomprehensive", "pershare"], "solo": False},
+
+    {"field": "cash", "ms": ["Cash And Cash Equivalents"], "identity": None,
+     "tag_pat": ["cashandcashequivalents", "cashcashequivalents", "cashanddue"],
+     "tag_excl": ["restricted", "financing", "investing", "operating", "period", "increase", "decrease"],
+     "solo": True},
+
+    {"field": "capex", "ms": ["Capital Expenditure Reported"], "identity": None,
+     "tag_pat": ["paymentstoacquirepropertyplant", "paymentsforcapitalimprovements",
+                 "paymentstoacquireproductiveassets", "paymentstoacquireoilandgasproperty"],
+     "tag_excl": ["proceeds"], "solo": True},
+
+    {"field": "free_cash_flow", "ms": ["Free Cash Flow to Firm", "Free Cash Flow to Equity Holders"],
+     "identity": lambda r: _sub(_g(r, "cfo"), _g(r, "capex")),
+     "tag_pat": [], "tag_excl": [], "solo": False},
+]
+
+
 def load_ms(names_by_field):
-    """{field: {(cik,fy): value}} for the Morningstar target of each metric."""
     want = {n: fld for fld, names in names_by_field.items() for n in names}
     out = defaultdict(dict)
     if not MS.exists():
@@ -128,20 +137,15 @@ def load_ms(names_by_field):
 
 
 def load_facts(need):
-    """{(cik,fy): {tag: value}} of ORIGINAL-filing annual facts for the needed (cik,fy). Keeps every
-    tag (so both metric-own tags and identity component tags are available); dedups multi-filing years
-    to the accession whose own latest year == fy."""
+    """{(cik,fy): {tag: value}} original-filing annual USD facts for the needed (cik,fy)."""
     if not FACTS.exists():
         sys.exit(f"!! {FACTS.name} not found -- run r2k_dera_extract.py first.")
     need_ciks = {c for c, _ in need}
-    kept = []
-    acc_year = {}
+    kept, acc_year = [], {}
     with open(FACTS, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             c = _ck(r.get("cik", ""))
-            if c not in need_ciks:
-                continue
-            if (r.get("uom") or "USD") != "USD":
+            if c not in need_ciks or (r.get("uom") or "USD") != "USD":
                 continue
             fy = str(r.get("fiscal_year", "")).strip()
             v = _num(r.get("value"))
@@ -163,33 +167,23 @@ def load_facts(need):
     return out
 
 
-def component(facts_row, pats, excls):
-    """Sum the as-filed facts whose tag matches a component family (first match wins per family)."""
-    for tag, v in facts_row.items():
-        if _match(tag, pats, excls):
-            return v
-    return None
-
-
-def recover_metric(spec, facts_row, target):
-    """(value, method, provenance) for one metric on one company-year, identity-first."""
-    # TIER 1 -- identity reconstruction from as-filed components
-    if spec["identity"] is not None:
-        comp = {}
-        for cvar, (pats, excls) in COMPONENTS.items():
-            comp[cvar] = component(facts_row, pats, excls)
-        val = spec["identity"](comp)
+def recover(spec, r, facts_row, target):
+    """(value, method, provenance) -- identity from stored values, else own as-filed tag."""
+    if spec["identity"] is not None:                       # TIER 1
+        val = spec["identity"](r)
         if val is not None and (target is None or abs(val - target) / max(abs(target), 1) <= TOL):
-            used = [c for c in comp if comp[c] is not None]
-            return val, "identity", "identity(" + "+".join(used) + ")"
-    # TIER 2 -- the metric's own as-filed tag, verified against the Morningstar target
-    if target and spec["tag_pat"]:
+            return val, "identity", "identity"
+    if spec["tag_pat"]:                                    # TIER 2
         cands = [(t, v) for t, v in facts_row.items()
-                 if _match(t, spec["tag_pat"], spec["tag_excl"]) and v is not None
-                 and abs(v - target) / max(abs(target), 1) <= TOL]
-        if cands:
-            t, v = min(cands, key=lambda kv: abs(kv[1] - target))
-            return v, "asfiled", "asfiled:" + t
+                 if _match(t, spec["tag_pat"], spec["tag_excl"]) and v is not None]
+        if target:
+            ok = [(t, v) for t, v in cands if abs(v - target) / max(abs(target), 1) <= TOL]
+            if ok:
+                t, v = min(ok, key=lambda kv: abs(kv[1] - target))
+                return v, "asfiled", "asfiled:" + t
+        elif spec["solo"] and len(cands) == 1:             # unambiguous single tag, no target needed
+            t, v = cands[0]
+            return v, "asfiled", "asfiled:" + t + "(no-target)"
     return None, None, None
 
 
@@ -202,18 +196,16 @@ def main():
         rows = list(csv.DictReader(f))
         fields = list(rows[0].keys()) if rows else []
     for m in METRICS:
-        c = m["field"] + "_src"
-        if c not in fields:
-            fields.append(c)
+        if m["field"] + "_src" not in fields:
+            fields.append(m["field"] + "_src")
     for r in rows:
         for m in METRICS:
             r.setdefault(m["field"] + "_src", "")
 
     need = set()
     for r in rows:
-        key = (_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip())
         if any(_num(r.get(m["field"])) is None for m in METRICS):
-            need.add(key)
+            need.add((_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip()))
     print(f"  {len(need):,} company-years have >=1 target metric blank -- loading targets + as-filed facts")
     ms = load_ms({m["field"]: m["ms"] for m in METRICS})
     facts = load_facts(need)
@@ -223,12 +215,12 @@ def main():
     for r in rows:
         key = (_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip())
         frow = facts.get(key, {})
-        for m in METRICS:
+        for m in METRICS:                                  # IN ORDER -> components before dependents
             fld = m["field"]
             if _num(r.get(fld)) is not None:
                 continue
             tgt = ms.get(fld, {}).get(key)
-            val, method, prov = recover_metric(m, frow, tgt)
+            val, method, prov = recover(m, r, frow, tgt)
             if val is None and tgt is not None:
                 val, method, prov = tgt, "ms-fallback", "morningstar:fallback"
             if val is None:
@@ -237,9 +229,9 @@ def main():
             r[fld] = f"{val}"
             r[fld + "_src"] = prov
             counts[fld][method] += 1
-            audit.append({"cik": key[0], "fiscal_year": key[1], "metric": fld,
-                          "adopted": f"{val:.0f}", "ms_target": f"{tgt:.0f}" if tgt else "",
-                          "method": method, "provenance": prov, "sector": r.get("sector", "")})
+            audit.append({"cik": key[0], "fiscal_year": key[1], "metric": fld, "adopted": f"{val:.0f}",
+                          "ms_target": f"{tgt:.0f}" if tgt else "", "method": method,
+                          "provenance": prov, "sector": r.get("sector", "")})
 
     with open(RESOLVED, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -250,7 +242,7 @@ def main():
         w.writeheader()
         w.writerows(sorted(audit, key=lambda x: (x["metric"], -abs(_num(x["adopted"]) or 0))))
 
-    print("\n  recovered per metric  (identity = as-filed reconstruction; asfiled = own tag; ms-fallback = plugged):")
+    print("\n  recovered per metric  (identity = as-filed reconstruction; asfiled = own tag; ms = plugged):")
     print(f"    {'metric':>16} {'identity':>9} {'asfiled':>8} {'ms-fallback':>12} {'no-source':>10}")
     for m in METRICS:
         c = counts[m["field"]]
