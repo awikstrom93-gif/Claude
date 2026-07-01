@@ -32,7 +32,7 @@ ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv`. `r2k_dera_index.py`
 
 | # | Command | Produces |
 |---|---------|----------|
-| 5 | `python r2k_dera_classify.py` | **`fundamentals_dera.csv`** + **`tieout_report.csv`** |
+| 5 | `python r2k_dera_classify.py` | **`fundamentals_dera.csv`** + **`tieout_report.csv`** (also learns any recovery-validated tags from `validated_tags.csv` — re-run after 5b to close the loop) |
 | 5b | `python r2k_metric_recover.py` | **`fundamentals_dera_resolved.csv`** (recovers blank revenue/op-income/equity/cash/gross-profit/FCF, IDENTITY-first then as-filed tag) + `metric_recovery_audit.csv` |
 | 6 | `python r2k_dera_to_fundamentals.py` | **`edgar_annual_fundamentals_ASFILED.csv`** (back up the old one first) |
 
@@ -70,6 +70,25 @@ the Morningstar target (the revenue approach); (3) else Morningstar fallback, st
 a `<field>_src` provenance column, and the audit records the method per recovery. NOTE: the "present
 but inconsistent" class of hole is already caught upstream by the classifier's identity tie-outs
 (`tieout_report.csv`, the ~98% gating), so this focuses on BLANKS.
+
+**`r2k_validated_tags.py` — the closed loop that shrinks the recovery residual.** Whenever
+`r2k_metric_recover.py` or `r2k_revenue_recover.py` ADOPTS a specific as-filed tag (provenance
+`asfiled:<tag>`), that tag WAS the right line for the role and reconciled to Morningstar — a validated
+promotion candidate. The recovery pass records it (distinct company-years, by MAX so re-runs are
+idempotent) in **`validated_tags.csv`**. On the next build, `r2k_dera_classify.py` reads that file and
+APPENDS each validated tag to the matching role list (`revenue→REV`, `cost_of_revenue→COGS`,
+`operating_income→OINC`, `total_equity→EQ_PARENT`, `cash→CASH`, `capex→CAPEX`) at **lowest priority** —
+so every curated tag still wins and a promoted tag fires only for a filing that would otherwise be blank
+for that role (exactly the profile it was validated on). The effect: the classifier learns the
+non-standard tags at the SOURCE, those roles stop coming out blank, and the recovery pass has less to do
+each cycle — the hole closes permanently instead of being re-patched every run. Safety: only
+target-validated tags promote by default (env `R2KG_TAGPROMOTE_MIN`, default 1); solo/no-target
+adoptions (cash, capex) need ≥2 company-years (`R2KG_TAGPROMOTE_MIN_NOTARGET`, default 2); the
+classifier's identity/tie-out still gates the value — promotion only widens the candidate set.
+Segment-SUM and looser "closest" recoveries are NOT promoted (they aren't a single reusable tag).
+**Operationally: after a recovery pass reports "N tag(s) now promotable", re-run `r2k_dera_classify.py`
+(step 5) once so they fold in; watch the step-5b recovery count fall on the following build.** Inspect
+the current promotable set anytime with `python r2k_validated_tags.py`.
 
 `r2k_dera_to_fundamentals.py` auto-prefers `fundamentals_dera_resolved.csv` if present
 (from `r2k_metric_recover.py` and/or `r2k_resolve.py`), else `fundamentals_dera.csv`.
@@ -244,6 +263,10 @@ focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run 
   current data all metrics are clean (median 1.000) except operating_income (median 1.000 but ~19% of
   weight >10% apart — mostly definitional: what counts as "operating"). A gap is a candidate, not proof
   of error (restatements / adjusted / gross-vs-net). Diagnostic only.
+- `python r2k_validated_tags.py` — inspect the recovery→classifier feedback set: the as-filed tags
+  recovery has validated (`validated_tags.csv`) and which would be promoted into the classifier's role
+  lists on the next build. Read-only. This is the loop that shrinks the step-5b recovery residual over
+  time (see `r2k_validated_tags.py` in Phase 2). Recovery writes it automatically; re-run step 5 to fold.
 - `python r2k_identity_probe.py <IDENTITY> <STMT>` — for ANY identity (e.g. `IS_NI IS`, `IS_GP IS`,
   `IS_NCI IS`), find the as-filed tag whose value equals the break's residual.
 - `python r2k_bsfoots_probe.py` — balance-sheet foot: tags that equal the A−(L+E+mezz) gap.

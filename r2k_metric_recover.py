@@ -31,6 +31,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import r2k_validated_tags as vt
+
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 DERA = BASE / "fundamentals_dera.csv"
 RESOLVED = BASE / "fundamentals_dera_resolved.csv"
@@ -228,6 +230,10 @@ def main():
     facts = load_facts(need)
 
     counts = defaultdict(lambda: defaultdict(int))
+    # distinct company-years per (field, tag) validated as-filed -> fed back to the classifier so the
+    # tag is learned and picked at the source next build (see r2k_validated_tags.py). [0]=vs Morningstar
+    # target, [1]=solo/no-target.
+    validated = defaultdict(lambda: [set(), set()])
     audit = []
     for r in rows:
         key = (_ck(r.get("cik", "")), str(r.get("fiscal_year", "")).strip())
@@ -246,6 +252,12 @@ def main():
             r[fld] = f"{val}"
             r[fld + "_src"] = prov
             counts[fld][method] += 1
+            if method == "asfiled" and prov.startswith("asfiled:"):
+                no_target = prov.endswith("(no-target)")
+                tag = prov[len("asfiled:"):]
+                if no_target:
+                    tag = tag[:-len("(no-target)")]
+                validated[(fld, tag)][1 if no_target else 0].add(key)
             audit.append({"cik": key[0], "fiscal_year": key[1], "metric": fld, "adopted": f"{val:.0f}",
                           "ms_target": f"{tgt:.0f}" if tgt else "", "method": method,
                           "provenance": prov, "sector": r.get("sector", "")})
@@ -265,6 +277,19 @@ def main():
         c = counts[m["field"]]
         print(f"    {m['field']:>16} {c['identity']:>9} {c['asfiled']:>8} {c['ms-fallback']:>12} {c['no-source']:>10}")
     print(f"\n  -> {RESOLVED.name} ; {AUDIT.name} ({len(audit):,} recoveries)")
+
+    # close the loop: hand the validated as-filed tags back to the classifier so it learns them and
+    # picks them at the source next build (r2k_dera_classify.py reads validated_tags.csv). This is what
+    # makes this residual SHRINK over time instead of re-recovering the same tags every run.
+    runcounts = {kt: (len(s[0]), len(s[1])) for kt, s in validated.items()}
+    if runcounts:
+        total, new = vt.record_run(runcounts)
+        promo = vt.load_promotions()
+        n_promo = sum(len(v) for v in promo.values())
+        print(f"  -> {vt.PATH.name}: {len(runcounts):,} as-filed tag(s) validated this run "
+              f"({new:,} new) ; {n_promo:,} now promotable into the classifier's role lists.")
+        print("     RE-RUN r2k_dera_classify.py to fold them in -> those roles fill at the source and "
+              "this recovery shrinks.")
     print("  NEXT: python r2k_dera_to_fundamentals.py ; python r2k_plausibility.py ; python r2k_report.py")
 
 

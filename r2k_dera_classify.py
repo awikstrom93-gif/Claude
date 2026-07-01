@@ -25,6 +25,8 @@ from pathlib import Path
 import os, csv, sys, re
 from collections import defaultdict
 
+import r2k_validated_tags as vt
+
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 FACTS = BASE / "dera_facts.csv"
 INDEX = BASE / "dera_filing_index.csv"          # optional, for SIC
@@ -930,7 +932,37 @@ def _flag_predecessors(out_rows, name_of):
                 r["entity_flag"] = "PREDECESSOR"
 
 
+def apply_validated_promotions(verbose=True):
+    """Fold recovery-VALIDATED as-filed tags (validated_tags.csv) into the role candidate lists, at
+    LOWEST priority. This is the source-side half of the recovery loop: a tag that r2k_metric_recover /
+    r2k_revenue_recover confirmed was the right line for a role (reconciled to Morningstar) gets picked
+    HERE next build, so the role is no longer blank and recovery has nothing left to do for it.
+
+    Appended at the END of each list, so every curated tag still wins; a promoted tag fires only when a
+    filing has no canonical tag for that role -- exactly the blank it was validated on. Idempotent:
+    tags already in the list are skipped, so repeated run() calls don't duplicate. Returns {field:[added]}."""
+    # built at call time so it captures the current (module-global) list objects
+    role_list = {"revenue": REV, "cost_of_revenue": COGS, "operating_income": OINC,
+                 "total_equity": EQ_PARENT, "cash": CASH, "capex": CAPEX}
+    added = {}
+    for fld, tags in vt.load_promotions().items():
+        lst = role_list.get(fld)
+        if lst is None:
+            continue
+        new = [t for t in tags if t not in lst]
+        if new:
+            lst.extend(new)                     # lowest priority -> canonical tags always selected first
+            added[fld] = new
+    if verbose and added:
+        n = sum(len(v) for v in added.values())
+        print(f"  learned {n} validated as-filed tag(s) from {vt.PATH.name} (appended at low priority):")
+        for fld in sorted(added):
+            print(f"    +{fld}: {', '.join(added[fld])}")
+    return added
+
+
 def run(facts_rows, sic_of=None, name_of=None):
+    apply_validated_promotions()                # fold in tags learned from prior recovery passes
     by = defaultdict(dict); bs = defaultdict(dict)
     isf = defaultdict(dict); cff = defaultdict(dict); meta = {}
     for r in facts_rows:

@@ -27,7 +27,10 @@ RUN      python r2k_revenue_recover.py     (then dera_to_fundamentals -> plausib
 import csv
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
+
+import r2k_validated_tags as vt
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 DERA = BASE / "fundamentals_dera.csv"
@@ -208,11 +211,17 @@ def main():
 
     # AUDIT: every recovered row (this run's + prior), so it is always complete
     audit = []
+    # distinct company-years per single as-filed revenue tag validated against the Morningstar target
+    # -> fed back to the classifier's REV list (segment SUMs and looser 'closest' picks are NOT promoted)
+    validated = defaultdict(set)
     for r in rows:
         prov = r.get("revenue_src", "")
         if not prov.startswith(("asfiled", "morningstar")):
             continue
         key = (_ck(r["cik"]), str(r["fiscal_year"]).strip())
+        if (prov.startswith("asfiled:") and not prov.startswith("asfiled:sum(")
+                and not prov.endswith("(closest)")):
+            validated[("revenue", prov[len("asfiled:"):])].add(key)
         tgt = target.get(key)
         rev = _num(r.get("revenue"))
         audit.append({"cik": key[0], "fiscal_year": key[1], "adopted_revenue": f"{rev:.0f}" if rev else "",
@@ -239,6 +248,13 @@ def main():
     if n_new == 0 and prior:
         print(f"  (idempotent re-run: all recoverable names were already filled; audit re-emitted in full.)")
     print(f"  -> {RESOLVED.name} ; {AUDIT.name}  ({len(audit):,} audit rows)")
+    # close the loop: promote the validated revenue tags into the classifier's REV list next build
+    if validated:
+        runcounts = {kt: (len(s), 0) for kt, s in validated.items()}
+        total, new = vt.record_run(runcounts)
+        n_promo = sum(len(v) for v in vt.load_promotions().values())
+        print(f"  -> {vt.PATH.name}: {len(runcounts):,} revenue tag(s) validated ({new:,} new) ; "
+              f"{n_promo:,} tag(s) now promotable. RE-RUN r2k_dera_classify.py to learn them at the source.")
     # how often as-filed differs from Morningstar (= restatements Morningstar carries that we avoided)
     diffs = [abs(_num(a["ms_vs_asfiled_pct"])) for a in audit if a["ms_vs_asfiled_pct"]]
     if diffs:
