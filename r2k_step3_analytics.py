@@ -225,6 +225,12 @@ def company_metrics(cf, fy0):
             if roic is not None and abs(roic) > ROIC_CLAMP: roic = None
         else: ic = None
     m["roic"], m["_nopat"], m["_ic"] = roic, nopat, ic
+    # AVERAGE equity / assets (opening+closing) exposed so the dollar-aggregate ROE and the DuPont tab
+    # can use the SAME average-denominator convention as the per-name ROE/ROA and as ROIC $agg (which
+    # already aggregates over the average _ic). Without these, ROE $agg used ending equity while ROE
+    # wavg/median and ROIC $agg used average -- an inconsistency inside the $agg family. For a first
+    # fiscal year (no prior) avg() already returns the ending value, so these are never None when eq/ta are.
+    m["_aeq"], m["_ata"] = aeq, ata
     # quality lenses
     m["gp_to_assets"] = safe_div(gp, ata) if (ata and ata > 0) else None          # Novy-Marx
     m["accruals"] = safe_div((ni - cfo), ata) if (ni is not None and cfo is not None and ata and ata > 0) else None  # Sloan
@@ -340,7 +346,7 @@ def write_workbook(per_snap, detail, years):
         up_ni = 100*sum(w for m,w,_ in cov if m["prof_ni"] is False)/sum(w for m,w,_ in cov if m["prof_ni"] is not None) if any(m["prof_ni"] is not None for m,_,_ in cov) else None
         up_oi = 100*sum(w for m,w,_ in cov if m["prof_oi"] is False)/sum(w for m,w,_ in cov if m["prof_oi"] is not None) if any(m["prof_oi"] is not None for m,_,_ in cov) else None
         opm_da = dollar_agg([(m["operating_income"], m["revenue"]) for m,_,_ in cov])
-        roe_da = dollar_agg([(m["net_income"], m["equity"]) for m,_,_ in cov])
+        roe_da = dollar_agg([(m["net_income"], m.get("_aeq") if m.get("_aeq") is not None else m["equity"]) for m,_,_ in cov])
         roic_da = dollar_agg([(m["_nopat"], m["_ic"]) for m,_,_ in cov])
         dcap_da = dollar_agg([(m["debt"], (m["debt"]+m["equity"]) if (m["debt"] is not None and m["equity"] is not None) else None) for m,_,_ in cov])
         row = [f"{yr}-04-30", round(tot_rev,1), round(tot_ni,1), round(pct_rev,1),
@@ -403,10 +409,12 @@ def write_workbook(per_snap, detail, years):
     _hdr(wd, 3, dh); dr = 4
     for yr in years:
         cov=per_snap[yr]["cov"]
+        _ata=lambda m: m.get("_ata") if m.get("_ata") is not None else m["assets"]   # AVERAGE assets/equity,
+        _aeq=lambda m: m.get("_aeq") if m.get("_aeq") is not None else m["equity"]    # consistent with the views
         nm=dollar_agg([(m["net_income"],m["revenue"]) for m,_,_ in cov])
-        at=dollar_agg([(m["revenue"],m["assets"]) for m,_,_ in cov])
-        lev=dollar_agg([(m["assets"],m["equity"]) for m,_,_ in cov])
-        roe_da=dollar_agg([(m["net_income"],m["equity"]) for m,_,_ in cov])
+        at=dollar_agg([(m["revenue"],_ata(m)) for m,_,_ in cov])
+        lev=dollar_agg([(_ata(m),_aeq(m)) for m,_,_ in cov])
+        roe_da=dollar_agg([(m["net_income"],_aeq(m)) for m,_,_ in cov])
         implied=(nm*at*lev) if (nm is not None and at is not None and lev is not None) else None
         row=[f"{yr}-04-30",_p(nm),_x(at),_x(lev),_p(implied),_p(roe_da)]
         for c,v in enumerate(row,1): wd.cell(row=dr,column=c,value=v)

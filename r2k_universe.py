@@ -185,7 +185,8 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
                "gross_margin", "op_margin", "net_margin", "fcf_margin", "roe", "roa", "roic",
                "_nopat", "_ic", "gp_to_assets", "accruals", "cash_conversion", "asset_turnover",
                "rule_of_40", "d_to_equity", "d_to_capital", "prof_ni", "prof_oi", "p2", "p3",
-               "ever_profitable", "was_profitable_prior", "cohort", "never_basis", "has_rev"]
+               "ever_profitable", "was_profitable_prior", "cohort", "never_basis", "has_rev",
+               "_aeq", "_ata"]   # average equity/assets, for average-denominator ROE $agg + DuPont
 PANEL_COLS = ID_COLS + METRIC_COLS
 
 
@@ -394,7 +395,8 @@ def index_quality(members, tops=(10, 25, 50)):
         op_da=dollar_agg([(r["operating_income"], r["revenue"]) for r in cov]),
         net_da=dollar_agg([(r["net_income"], r["revenue"]) for r in cov]),
         gross_da=dollar_agg([(r["gross_profit"], r["revenue"]) for r in cov]),
-        roe_w=ag("roe")["wavg"], roe_da=dollar_agg([(r["net_income"], r["equity"]) for r in cov]),
+        roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, the views)
+        roe_da=dollar_agg([(r["net_income"], r["_aeq"] if r.get("_aeq") is not None else r["equity"]) for r in cov]),
         roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(r["_nopat"], r["_ic"]) for r in cov]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],

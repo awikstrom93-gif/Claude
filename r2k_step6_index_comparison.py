@@ -125,7 +125,8 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         op_da=dollar_agg([(m["operating_income"], m["revenue"]) for m, _ in cov]),
         net_da=dollar_agg([(m["net_income"], m["revenue"]) for m, _ in cov]),
         gross_da=dollar_agg([(m["gross_profit"], m["revenue"]) for m, _ in cov]),
-        roe_w=ag("roe")["wavg"], roe_da=dollar_agg([(m["net_income"], m["equity"]) for m, _ in cov]),
+        roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, and the views)
+        roe_da=dollar_agg([(m["net_income"], m["_aeq"] if m.get("_aeq") is not None else m["equity"]) for m, _ in cov]),
         roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(m["_nopat"], m["_ic"]) for m, _ in cov]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],

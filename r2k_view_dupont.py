@@ -35,10 +35,15 @@ def dupont_rows(panel):
         # than the headline ROE $agg on Index Quality Trends (which keeps any name with NI+equity), so
         # the check column here is the ROE *of the DuPont universe*, not necessarily the headline ROE.
         common = [r for r in cov if all(r[k] is not None for k in DUPONT_INPUTS)]
+        # Use AVERAGE assets/equity (opening+closing) so the DuPont ROE matches the per-name ROE and the
+        # ROIC $agg convention; fall back to ending only for an old cached panel without _aeq/_ata. The
+        # identity still telescopes: NM x (Rev/avgAssets) x (avgAssets/avgEquity) = NI/avgEquity = ROE.
+        ata = lambda r: r["_ata"] if r.get("_ata") is not None else r["assets"]
+        aeq = lambda r: r["_aeq"] if r.get("_aeq") is not None else r["equity"]
         nm = dollar_agg([(r["net_income"], r["revenue"]) for r in common])
-        at = dollar_agg([(r["revenue"], r["assets"]) for r in common])
-        lev = dollar_agg([(r["assets"], r["equity"]) for r in common])
-        roe_da = dollar_agg([(r["net_income"], r["equity"]) for r in common])
+        at = dollar_agg([(r["revenue"], ata(r)) for r in common])
+        lev = dollar_agg([(ata(r), aeq(r)) for r in common])
+        roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in common])
         implied = (nm * at * lev) if (nm is not None and at is not None and lev is not None) else None
         out.append([f"{yr}-04-30", _p(nm), _x(at), _x(lev), _p(implied), _p(roe_da)])
     return out
@@ -46,18 +51,21 @@ def dupont_rows(panel):
 
 def _selftest():
     """The DuPont identity must close (implied ROE == ROE check) on the common universe, even when a
-    name is missing one input -- that name is dropped from ALL four factors, not just some."""
+    name is missing one input; AND the ROE must be computed on AVERAGE equity/assets (_aeq/_ata),
+    not ending -- so a regression to ending equity is caught."""
+    # complete names carry _aeq/_ata DIFFERENT from ending equity/assets, so ending vs average is
+    # distinguishable: SNI=15, S_aeq=75 -> ROE=15/75=20.0% (ending would give 15/90=16.7%).
     panel = [
-        {"year": 2020, "covered": 1, "net_income": 10.0, "revenue": 100.0, "assets": 200.0, "equity": 50.0},
-        {"year": 2020, "covered": 1, "net_income": 5.0,  "revenue": 80.0,  "assets": 160.0, "equity": 40.0},
-        {"year": 2020, "covered": 1, "net_income": 3.0,  "revenue": 60.0,  "assets": 120.0, "equity": None},   # no equity
-        {"year": 2020, "covered": 1, "net_income": -8.0, "revenue": None,  "assets": 300.0, "equity": 90.0},   # pre-revenue loser
+        {"year": 2020, "covered": 1, "net_income": 10.0, "revenue": 100.0, "assets": 200.0, "equity": 50.0, "_ata": 180.0, "_aeq": 40.0},
+        {"year": 2020, "covered": 1, "net_income": 5.0,  "revenue": 80.0,  "assets": 160.0, "equity": 40.0, "_ata": 150.0, "_aeq": 35.0},
+        {"year": 2020, "covered": 1, "net_income": 3.0,  "revenue": 60.0,  "assets": 120.0, "equity": None},   # no equity -> dropped
+        {"year": 2020, "covered": 1, "net_income": -8.0, "revenue": None,  "assets": 300.0, "equity": 90.0},   # pre-revenue -> dropped
     ]
     implied, check = dupont_rows(panel)[0][4], dupont_rows(panel)[0][5]
-    # common universe = the two complete names: SNI=15, SRev=180, SAssets=360, SEq=90 -> ROE=15/90=16.7%
-    ok = implied is not None and check is not None and abs(implied - check) < 1e-9 and abs(check - 16.7) < 0.05
-    print(f"  SELFTEST DuPont identity closes on common universe "
-          f"(implied={implied}, check={check}, expect 16.7): {'PASS' if ok else 'FAIL'}")
+    ok = (implied is not None and check is not None and abs(implied - check) < 1e-9
+          and abs(check - 20.0) < 0.05)   # 20.0 = average-based; 16.7 would mean ending equity (regression)
+    print(f"  SELFTEST DuPont identity closes on AVERAGE equity "
+          f"(implied={implied}, check={check}, expect 20.0): {'PASS' if ok else 'FAIL'}")
     assert ok, (implied, check)
 
 

@@ -56,7 +56,10 @@ def quality_trends_rows(panel):
         up_oi = (100 * sum(r["weight"] for r in oi_cls if r["prof_oi"] is False) /
                  (sum(r["weight"] for r in oi_cls) or 1)) if oi_cls else None
         opm_da = dollar_agg([(r["operating_income"], r["revenue"]) for r in cov])
-        roe_da = dollar_agg([(r["net_income"], r["equity"]) for r in cov])
+        # ROE $agg on AVERAGE equity (matches per-name ROE and ROIC $agg); fall back to ending equity
+        # only for an old cached panel that predates the _aeq column.
+        aeq = lambda r: r["_aeq"] if r.get("_aeq") is not None else r["equity"]
+        roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in cov])
         roic_da = dollar_agg([(r["_nopat"], r["_ic"]) for r in cov])
         dcap_da = dollar_agg([(r["debt"], (r["debt"] + r["equity"])
                               if (r["debt"] is not None and r["equity"] is not None) else None) for r in cov])
