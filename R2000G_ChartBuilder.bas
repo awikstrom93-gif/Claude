@@ -490,7 +490,11 @@ Private Sub LoadSpecs()
     S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|3,4|Unprofitable (NI): % count vs % weight|%"
     S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|7,10|Never / fallen counts|# names"
     S "R2KG Prof Cohorts|L|R2KG Prof Cohorts|3|1|11,12|Profitable 2y / 3y weight|% of index weight"
-    S "R2KG DuPont|L|R2KG DuPont|3|1|5,6|DuPont ROE: implied vs actual ($agg)|ROE"
+    ' Implied ROE now EQUALS the ROE check by construction (the decomposition is computed on one
+    ' common universe), so plotting both draws two identical overlapping lines -> one line, two legend
+    ' labels, which reads as a broken series. Plot the single ROE line; the table still shows both
+    ' columns so the reconciliation is visible in the numbers.
+    S "R2KG DuPont|L|R2KG DuPont|3|1|5|DuPont ROE ($agg) = margin x turnover x leverage|ROE %"
     S "R2KG DuPont|L|R2KG DuPont|3|1|3,4|Asset turnover & leverage|x"
     S "R2KG DuPont|L|R2KG DuPont|3|1|2|Net margin|Net margin"
     S "R2KG Composition|CS|R2KG Composition|4|1|3,4,5,6|% Unprofitable weight: what drove the change|Change (pts)"
