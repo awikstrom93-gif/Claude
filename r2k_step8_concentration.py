@@ -27,7 +27,8 @@ by CIK then ticker. Calendar years 2015 & 2026 are partial.
 from pathlib import Path
 from datetime import date
 from statistics import median
-import os
+from collections import defaultdict
+import os, math
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -162,35 +163,52 @@ def build():
         ws0 = date.fromisoformat(WINDOW_START); win = [d for d in win if d >= ws0]
     else:
         win = win[max(0, len(win) - WINDOW_MONTHS):]
-    # average weight over the window's annual spines x window-cumulative constituent return
-    snap = hold_r[spine_r[years[-1]]]
-    names = []
-    for h in snap:
-        rec = ret_rec(h)
-        if not rec: continue
-        cr = compound([rec["ret"].get(d) for d in win])
-        if all(rec["ret"].get(d) is None for d in win): continue
-        names.append((h["nt"] or h["name"], h["weight"], cr))
+    # MONTHLY-LINKED contribution. The prior version used latest-snapshot weight x the constituent's
+    # return compounded over the WHOLE window -- so a name that grew INTO the index was credited with its
+    # entire multi-year run-up (including months before it was a member) at its final, large weight. That
+    # overstated late entrants wildly (AAOI: +8372% x 0.51% = 43 pts, from a spurious pre-membership run).
+    # Correct contribution = sum over window months of (beginning-of-month weight x that month's return),
+    # Carino-scaled so the parts sum to the COMPOUNDED index window return. Finest holdings cadence
+    # (annual+quarterly) means a name is only credited for the months it was actually held.
+    from r2k_step5_cohort_attribution import load_finest_holdings, nearest_prior
+    fh = load_finest_holdings(); hdates = sorted(fh)
     idx_win = compound([idx["R2KG"]["ret"].get(d) for d in win]) if "R2KG" in idx else None
-    tw = sum(w for _, w, _ in names) or 1e-9
-    # contribution_i = (avg weight fraction) x (constituent window return); store weight% too
-    enriched = [(nm, w / tw, cr, (w / tw) * cr) for nm, w, cr in names]
+    Kt = math.log(1 + idx_win) / idx_win if (idx_win not in (None, 0) and abs(idx_win) > 1e-12) else 1.0
+    contrib = defaultdict(float); wsum = defaultdict(float); wn = defaultdict(int); grow = defaultdict(lambda: 1.0)
+    for d in win:
+        snap = fh.get(nearest_prior(hdates, d))
+        if not snap: continue
+        traw = sum(h["weight"] for h in snap) or 1.0
+        Rm = idx["R2KG"]["ret"].get(d) if "R2KG" in idx else None
+        km = math.log(1 + Rm) / Rm if (Rm is not None and abs(Rm) > 1e-12) else 1.0
+        for h in snap:
+            rec = ret_rec(h)
+            if rec is None: continue
+            rm = rec["ret"].get(d)
+            if rm is None: continue
+            nm = h["nt"] or h["name"]
+            wf = h["weight"] / traw
+            contrib[nm] += (km / Kt) * wf * rm        # Carino-linked so contributions sum to compounded total
+            wsum[nm] += wf; wn[nm] += 1; grow[nm] *= (1 + rm)
+    enriched = [(nm, wsum[nm] / wn[nm], grow[nm] - 1.0, contrib[nm]) for nm in contrib if wn[nm]]
     enriched.sort(key=lambda x: x[3], reverse=True)
     tot = sum(c for _, _, _, c in enriched)
     wc.cell(3, 1, f"Window: {win[0]:%Y-%m} to {win[-1]:%Y-%m}").font = Font(bold=True)
     wc.cell(3, 4, "Index return %"); wc.cell(3, 5, round(100 * idx_win, 1) if idx_win is not None else None)
-    wc.cell(5, 1, "Share of window return from top contributors (latest-year membership):").font = Font(bold=True)
+    wc.cell(5, 1, "Share of window return from top contributors (monthly-linked, held-period weights):").font = Font(bold=True)
     for i, k in enumerate([10, 25, 50]):
         sh = sum(c for _, _, _, c in enriched[:k]) / tot * 100 if tot else None
         wc.cell(6 + i, 1, f"Top {k} names"); wc.cell(6 + i, 2, round(sh, 1) if sh is not None else None)
-    _hdr(wc, 11, ["Rank", "Name", "Avg weight %", "Window return %", "Contribution (pts)"])
-    for i, (nm, wf, cr, c) in enumerate(enriched[:15], 1):
+    _hdr(wc, 11, ["Rank", "Name", "Avg weight (held) %", "Return while held %", "Contribution (pts)"])
+    for i, (nm, wf, hr, c) in enumerate(enriched[:15], 1):
         wc.cell(11 + i, 1, i); wc.cell(11 + i, 2, nm)
-        wc.cell(11 + i, 3, round(100 * wf, 2)); wc.cell(11 + i, 4, round(100 * cr, 1))
+        wc.cell(11 + i, 3, round(100 * wf, 2)); wc.cell(11 + i, 4, round(100 * hr, 1))
         wc.cell(11 + i, 5, round(100 * c, 2))
-    wc.cell(28, 1, "Contribution = avg window weight x constituent window return. Top-contributor share shows how "
-            "much of the benchmark's gain came from a handful of names -- the narrower it is, the harder for a "
-            "diversified active manager to keep pace.")
+    wc.cell(28, 1, "Contribution = sum over window months of (beginning-of-month weight x that month's return), "
+            "Carino-linked so the parts sum to the compounded index window return. 'Return while held' compounds "
+            "only the months the name was actually in the index -- a mid-window entrant is credited for its held "
+            "period, not its entire multi-year run-up. Top-contributor share shows how much of the benchmark's "
+            "gain came from a handful of names.")
 
     # ---- Notes ----
     nd = wb.create_sheet("Notes")
