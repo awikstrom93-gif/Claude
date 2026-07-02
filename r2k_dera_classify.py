@@ -700,17 +700,26 @@ def classify_filing(d, sector):
     inte, tie = first(d, *INT_EXP); put("interest_expense", inte, tie)
 
     # ---------- balance sheet ----------
-    cash, tcash = first(d, *CASH)
-    if cash is None and sector == "bank":
-        # no standard total tagged -> reconstruct from components (verified 57/57 vs Morningstar).
-        # `first` on the interest-bearing variants so a bank that tags one form isn't double-counted.
-        due, _ = first(d, "CashAndDueFromBanks")
-        ibd, _ = first(d, "InterestBearingDepositsInBanks",
-                       "InterestBearingDepositsInBanksAndOtherFinancialInstitutions")
-        nibd, _ = first(d, "NoninterestBearingDepositsInBanks")
-        parts = [x for x in (due, ibd, nibd) if x is not None]
-        if parts:
-            cash, tcash = sum(parts), "BankCash:cashDue+interestBearingDeposits(sum)"
+    if sector == "bank":
+        # BANK cash is reconstructed AUTHORITATIVELY, so a promoted narrow/combined bank tag can't shadow
+        # it: (1) a standard reported total if the bank tags one; else (2) the component sum cash+due +
+        # interest-bearing deposits (verified 57/57 vs Morningstar), which beats a bare CashAndDueFromBanks
+        # (understates: CCB 14 vs 813) and excludes fed funds sold / repo that a combined tag overstates
+        # (SYBT 886 vs 70); else (3) fall back to the generic list. `first` on the interest-bearing
+        # variants so a bank tagging one form isn't double-counted.
+        cash, tcash = first(d, "CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents")
+        if cash is None:
+            due, _ = first(d, "CashAndDueFromBanks")
+            ibd, _ = first(d, "InterestBearingDepositsInBanks",
+                           "InterestBearingDepositsInBanksAndOtherFinancialInstitutions")
+            nibd, _ = first(d, "NoninterestBearingDepositsInBanks")
+            parts = [x for x in (due, ibd, nibd) if x is not None]
+            if parts:
+                cash, tcash = sum(parts), "BankCash:cashDue+interestBearingDeposits(sum)"
+        if cash is None:
+            cash, tcash = first(d, *CASH)
+    else:
+        cash, tcash = first(d, *CASH)
     put("cash", cash, tcash)
     sti, tsti = first(d, *STI); put("short_term_investments", sti, tsti)
     ta, tta = first(d, *ASSETS); put("total_assets", ta, tta)
