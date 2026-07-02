@@ -217,7 +217,7 @@ def build():
                                  _p(win_attr.get(c)), _p(wwt[c])], 1):
             wa.cell(row=ar, column=col, value=v)
         ar += 1
-    for col, v in enumerate(["Unexplained (no return / timing)", _p(full_resid), None,
+    for col, v in enumerate(["Unexplained (coverage + intra-period drift)", _p(full_resid), None,
                              _p(win_resid), None], 1):
         wa.cell(row=ar, column=col, value=v);
     ar += 1
@@ -225,6 +225,12 @@ def build():
         wa.cell(row=ar, column=col, value=v)
     wa.cell(row=ar + 2, column=1, value="Unprofitable tail = Fallen + Never profitable. "
             "Contribution columns sum to the index's cumulative return (Carino linking).")
+    wa.cell(row=ar + 3, column=1, value="Unexplained = the bottom-up reconstruction residual (see 'Reconstruction' tab): "
+            "the small share of index weight with no return stream, plus weight drift BETWEEN holdings snapshots. It "
+            "skews positive because under-weighted / unmatched names clip the index's upside in up-markets; it is "
+            "concentrated in years with a fast-moving concentrated leader (2020, 2024) where a name's weight rose "
+            "sharply within a quarter, faster than the snapshot cadence can track. It is a coverage/timing artifact, "
+            "not an unattributed cohort return.")
 
     # ---- Cohort Weights (monthly) ----
     ww = wb.create_sheet("Cohort Weights")
