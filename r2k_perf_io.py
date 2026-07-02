@@ -31,6 +31,11 @@ import openpyxl
 
 RET_MODE = os.environ.get("RET_MODE", "auto").lower()
 BASE = Path(os.environ.get("R2KG_BASE", "."))
+# a returns row with no CIK is kept as a real constituent if it has a ticker and at least this many
+# monthly observations -- Morningstar leaves the CIK blank for many names (esp. delisted / biotech)
+# that DO carry a full return history, and dropping them was a large chunk of the reconstruction's
+# unmatched weight. The obs floor still excludes empty section / group-header rows (which have none).
+MIN_CONSTITUENT_OBS = int(os.environ.get("MIN_CONSTITUENT_OBS", "6"))
 
 # index/benchmark row recognition (substring match on the Name column, case-insensitive)
 IDX_R2KG = ("russell 2000 growth",)
@@ -197,7 +202,12 @@ def load_performance(path=None, verbose=True):
             cur = index_rows.get(key)
             if cur is None or (cur.get("_bench") and not is_bench):
                 index_rows[key] = rec                  # prefer the non-'Benchmark N:' duplicate
-        elif meta["cik"]:                              # real constituent (group/section rows have no CIK)
+        elif meta["cik"] or (meta["nt"] and nnn >= MIN_CONSTITUENT_OBS):
+            # real constituent. Keep it even when the file omits the CIK, provided it has a ticker and
+            # real return data -- it is then matched downstream by ticker (by_nt). This recovers the
+            # ~54 no-CIK names (Aduro, Advaxis, Cara, TCF Financial, ...) that were being dropped and
+            # showing up as unmatched weight in the bottom-up reconstruction. Empty section/group-header
+            # rows have no observations and are still excluded by the obs floor.
             series.append(rec)
 
     # 4. choose conversion mode (auto from index rows) and compute periodic returns
