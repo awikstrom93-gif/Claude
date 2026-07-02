@@ -16,12 +16,25 @@ from r2k_step3_analytics import aggregate, dollar_agg, _p, _x
 
 SHEET = "Index Quality Trends"
 TITLE_TEXT = "Russell 2000 Growth -- Index Quality Trends (weight-weighted / median / dollar-aggregate)"
+# NOTE on the margin/return aggregations (see NOTE_TEXT below): for a RATIO like operating margin,
+# "$agg" = sum(numerator)/sum(denominator) is the revenue-weighted (blended, index-as-one-company)
+# margin -- the economically standard figure. "med" is the typical constituent. "wavg" here is the
+# INDEX-WEIGHT-weighted average of each name's (winsorized) per-name ratio; for margins that is tilted
+# deeply negative because small-revenue heavy-loss names carry index weight with ratios floored at
+# -200% -- so read OpMgn/GrossMgn "wavg (idx-wt)" as a loss-TILT signal, NOT the index's margin. Use
+# $agg (blended) or med for the margin itself. Columns are unchanged in ORDER (charts/guard depend on
+# position); only the wavg headers are clarified.
 HDR = ["Snapshot", "Total Rev $B", "Total NI $B", "% with Revenue", "% Unprofitable (NI) wt",
-       "% Unprofitable (OI) wt", "GrossMgn wavg", "GrossMgn med", "OpMgn wavg", "OpMgn med",
-       "OpMgn $agg", "NetMgn med", "ROE wavg", "ROE med", "ROE $agg", "ROA med", "ROIC wavg",
+       "% Unprofitable (OI) wt", "GrossMgn wavg (idx-wt)", "GrossMgn med", "OpMgn wavg (idx-wt)", "OpMgn med",
+       "OpMgn $agg (blended)", "NetMgn med", "ROE wavg", "ROE med", "ROE $agg", "ROA med", "ROIC wavg",
        "ROIC med", "ROIC $agg", "GP/Assets med", "Accruals med", "CashConv med", "AssetTurn med",
        "Rev YoY wavg", "Rev 3yCAGR med", "FCF mgn med", "RuleOf40 med", "D/E wavg", "D/Cap wavg",
        "D/Cap $agg"]
+NOTE_TEXT = ("Margins: '$agg (blended)' = sum(op income)/sum(revenue) is the index-as-one-company margin "
+             "(the standard figure). 'med' = typical constituent. 'wavg (idx-wt)' = index-weight-weighted "
+             "average of per-name margins, winsorized to +/-200%/500%; for margins it runs deeply NEGATIVE "
+             "because small-revenue loss-makers carry index weight -- read it as a loss-tilt signal, not the "
+             "index's operating margin. For the index's margin use OpMgn $agg (blended) or OpMgn med.")
 
 
 def quality_trends_rows(panel):
@@ -68,6 +81,7 @@ def write_sheet(wb, panel):
     from openpyxl.styles import Font
     ws = wb.create_sheet(SHEET)
     ws.cell(row=1, column=1, value=TITLE_TEXT).font = Font(bold=True, size=12)
+    ws.cell(row=2, column=1, value=NOTE_TEXT).font = Font(size=9, italic=True, color="555555")
     for c, h in enumerate(HDR, 1):
         ws.cell(row=3, column=c, value=h).font = Font(bold=True)
     for i, row in enumerate(quality_trends_rows(panel), start=4):
