@@ -188,16 +188,19 @@ INT_EXP = ["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperatin
            "InterestAndDebtExpense", "InterestExpenseOperating"]
 # balance sheet
 CASH = ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents",
-        "CashCashEquivalentsAndShortTermInvestments", "CashEquivalentsAtCarryingValue",
-        # ASU 2016-18 combined line (cash + restricted), used ONLY when no pure-cash tag is present.
-        # For these filers restricted cash is immaterial (verified ~0% vs target, r2k_gap_tags.py);
-        # cash_total below is guarded so restricted is not double-counted when cash came from this tag.
+        "CashEquivalentsAtCarryingValue",
+        # bare `Cash` is PHYSICAL cash only (<= the total). It ranks BELOW the pure totals + equivalents
+        # (so it can't understate a name that splits Cash from equivalents -- HTO picked Cash $9M over
+        # CashEquivalents $412M), but ABOVE the ShortTermInvestments- and restricted-INCLUSIVE combined
+        # lines below (which OVERSTATE cash) -- ranking it dead-last let those overstate a name where
+        # bare Cash was the closest figure.
+        "Cash",
+        "CashCashEquivalentsAndShortTermInvestments",
+        # ASU 2016-18 combined line (cash + restricted), used ONLY when no purer tag is present. For these
+        # filers restricted cash is immaterial (verified ~0% vs target, r2k_gap_tags.py); cash_total below
+        # is guarded so restricted is not double-counted when cash came from this tag.
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations",
-        # bare `Cash` is PHYSICAL cash only (excludes equivalents) -> always <= the total, so it must be
-        # the LAST resort. Ranked above the totals it understated names that split Cash from equivalents
-        # (HTO: picked Cash $9M over CashEquivalentsAtCarryingValue $412M).
-        "Cash"]
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations"]
 # BANK cash & cash equivalents, reconstructed from components when no standard total is tagged: cash &
 # due from banks + interest-bearing deposits held AT other banks (Fed reserves) + noninterest-bearing
 # deposits at banks. Verified to reconstruct Morningstar cash on 57/57 probed bank-years. Deliberately
