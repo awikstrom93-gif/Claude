@@ -34,9 +34,9 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 
-from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
+from r2k_perf_io import load_performance, load_monthly_holdings, find_holdings_file, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
-from r2k_universe import norm_facts, fund_for, ticker_cik_map   # consolidated: one definition
+from r2k_universe import norm_facts, fund_for, ticker_cik_map, find_quarterly   # consolidated: one definition
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
@@ -56,6 +56,36 @@ def nearest_prior(sorted_dates, target):
         if d < target: prev = d
         else: break
     return prev
+
+
+def load_finest_holdings():
+    """Beginning-of-month weights at the FINEST available cadence, to minimize weight-drift error in
+    the bottom-up reconstruction. The ANNUAL R2000G holdings carry only one snapshot per April, so a
+    month can be reweighted with April weights up to ~12 months stale -- and in the concentrated,
+    high-dispersion 2025-26 tape that stale weighting, NOT return coverage (matched weight stayed
+    ~95%), was the dominant reconstruction error (e.g. 2026-04 rebuilt +10.5% vs actual +14.7%).
+    Merge the annual AND quarterly holdings files so each month uses the nearest PRIOR snapshot: <=3
+    months stale wherever the quarterly file reaches, falling back to annual for any earlier gap.
+    Quarterly wins on a date collision (finer methodology); returns {month_end_date: [rows]}."""
+    merged, sources = {}, []
+    finders = [("annual", find_holdings_file), ("quarterly", lambda: find_quarterly("R2KG"))]
+    for tag, finder in finders:
+        try:
+            path = finder()
+        except Exception:
+            path = None
+        if not path:
+            continue
+        snaps = load_monthly_holdings(path, verbose=False)
+        for d, rows in snaps.items():
+            merged[d] = rows            # quarterly is iterated last -> wins any date collision
+        sources.append(f"{tag}:{path.name} ({len(snaps)} snaps)")
+    if not merged:
+        raise FileNotFoundError("no R2000G holdings workbook found (annual or quarterly)")
+    ds = sorted(merged)
+    print(f"  holdings (finest cadence): {len(merged)} snapshots {ds[0]:%Y-%m}..{ds[-1]:%Y-%m}  "
+          f"[{'; '.join(sources)}]")
+    return merged
 
 
 def carino(actual_cum, monthly_actual):
@@ -79,7 +109,7 @@ def _p(v, nd=2): return round(100 * v, nd) if v is not None else None
 
 def build():
     series, idx, perf_dates = load_performance()
-    holdings = load_monthly_holdings()
+    holdings = load_finest_holdings()
     facts = norm_facts(load_fundamentals())
     base, temporal = load_maps()
     tmap = ticker_cik_map(base, temporal)
@@ -251,7 +281,9 @@ def build():
     avg_abs_diff = sum(abs(r["actual"] - r["recon"]) for r in rows) / len(rows)
     wre.cell(row=4 + len(rows) + 1, column=1,
              value=f"Avg matched weight {100*avg_match:.1f}%  |  avg |diff| {1e4*avg_abs_diff:.0f} bps/mo "
-                   f"(gap = names without a return stream + intra-month weight drift).")
+                   f"(gap = names without a return stream + residual weight drift between snapshots). "
+                   f"Weights use the finest available holdings cadence (annual + quarterly merged), so a "
+                   f"month is reweighted with a snapshot <=3 months old wherever quarterly holdings reach.")
     wre.freeze_panes = "A4"
 
     # ---- Charts ----
@@ -272,7 +304,8 @@ def build():
         "R2000G cohort attribution -- WHY a profitability-disciplined manager lagged the benchmark.",
         "Point-in-time cohorts: each name's FY0 = latest 10-K filed before that month; cohort from as-filed NI history.",
         "  profitable (NI>0), fallen (NI<=0 but profitable before), never_profitable (no profitable year on record), unknown (no NI).",
-        "Weights: BEGINNING-of-month (prior month-end holdings snapshot), normalized to the snapshot total.",
+        "Weights: BEGINNING-of-month = nearest PRIOR holdings snapshot, finest available cadence",
+        "  (annual + quarterly holdings merged, so <=3 months stale where quarterly reaches), normalized to snapshot total.",
         "Cohort Contribution: Carino-linked so cohort contributions + unexplained = the index's cumulative return.",
         "  'Unexplained' = constituents lacking a return stream (delisted/missing) + intra-month weight drift; see Reconstruction.",
         "Counterfactual: rebuilds two sub-portfolios from R2000G's OWN names, reweighted monthly --",
