@@ -187,13 +187,17 @@ DA = ["DepreciationDepletionAndAmortization", "DepreciationAmortizationAndAccret
 INT_EXP = ["InterestExpense", "InterestExpenseDebt", "InterestExpenseNonoperating",
            "InterestAndDebtExpense", "InterestExpenseOperating"]
 # balance sheet
-CASH = ["CashAndCashEquivalentsAtCarryingValue", "Cash", "CashAndCashEquivalents",
+CASH = ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents",
         "CashCashEquivalentsAndShortTermInvestments", "CashEquivalentsAtCarryingValue",
         # ASU 2016-18 combined line (cash + restricted), used ONLY when no pure-cash tag is present.
         # For these filers restricted cash is immaterial (verified ~0% vs target, r2k_gap_tags.py);
         # cash_total below is guarded so restricted is not double-counted when cash came from this tag.
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations"]
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations",
+        # bare `Cash` is PHYSICAL cash only (excludes equivalents) -> always <= the total, so it must be
+        # the LAST resort. Ranked above the totals it understated names that split Cash from equivalents
+        # (HTO: picked Cash $9M over CashEquivalentsAtCarryingValue $412M).
+        "Cash"]
 # BANK cash & cash equivalents, reconstructed from components when no standard total is tagged: cash &
 # due from banks + interest-bearing deposits held AT other banks (Fed reserves) + noninterest-bearing
 # deposits at banks. Verified to reconstruct Morningstar cash on 57/57 probed bank-years. Deliberately
@@ -1386,12 +1390,17 @@ def selftest():
                "OperatingExpenses": 4891 * _m,
                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": 239 * _m,
                "Assets": 3000 * _m, "Liabilities": 2000 * _m, "StockholdersEquity": 1000 * _m}
+    # a filer that SPLITS cash: bare Cash (physical) + CashEquivalentsAtCarryingValue. `cash` must take the
+    # equivalents ($412), not physical Cash ($9) -- bare Cash is a last resort (HTO fy2018 pattern).
+    cashorder = {"Cash": 9 * _m, "CashEquivalentsAtCarryingValue": 412 * _m,
+                 "Revenues": 500 * _m, "Assets": 900 * _m, "Liabilities": 400 * _m, "StockholdersEquity": 500 * _m}
     facts = []
     for cik, d in (("1", industrial), ("2", bank), ("3", discops), ("4", reit),
                    ("5", splitnci), ("6", splitcogs), ("7", mezz_single), ("8", mezz_sum),
                    ("9", residual_mezz), ("10", debt_overcap), ("11", debt_overcap2),
                    ("12", revneg), ("13", cogsneg), ("14", parentfix), ("15", parentfix2),
-                   ("17", cogsgoods), ("18", cogsimpair), ("20", bankcash), ("21", oiguard)):
+                   ("17", cogsgoods), ("18", cogsimpair), ("20", bankcash), ("21", oiguard),
+                   ("22", cashorder)):
         for tag, v in d.items():
             facts.append(dict(cik=cik, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=tag, value=str(v)))
     # cik 16: a 3-year company whose MIDDLE year (2023) is uniformly 1000x too small (filer scale
@@ -1442,6 +1451,8 @@ def selftest():
     ok_bkc = (bkc["cash"] == 7947 * _m)                 # 181 + 7766, fed funds excluded
     oig = next(r for r in out if r["cik"] == "21")
     ok_oig = (oig["operating_income"] is None)          # impossible GP-OpEx rejected -> blank
+    cor = next(r for r in out if r["cik"] == "22")
+    ok_cor = (cor["cash"] == 412 * _m)                  # equivalents preferred over bare physical Cash
     pfx = next(r for r in out if r["cik"] == "14")
     ok_pfx = (pfx["net_income"] == 145.8 * _m and "IS_NCI" not in pfx["breaks"])
     pfx2 = next(r for r in out if r["cik"] == "15")
@@ -1495,6 +1506,8 @@ def selftest():
           f"{'PASS' if ok_bkc else 'FAIL'}")
     print(f"  SELFTEST op-income impossible-GP-OpEx guard (operating_income={oig['operating_income']}, "
           f"expect blank): {'PASS' if ok_oig else 'FAIL'}")
+    print(f"  SELFTEST cash prefers equivalents over bare Cash (cash={cor['cash']}, expect 412M): "
+          f"{'PASS' if ok_cor else 'FAIL'}")
     print(f"  SELFTEST parent-NI recovery (net_income={pfx['net_income']}, expect 145.8M): "
           f"{'PASS' if ok_pfx else 'FAIL'}")
     print(f"  SELFTEST parent-NI via separate-line NCI (net_income={pfx2['net_income']}, expect 145.8M): "
