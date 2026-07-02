@@ -15,8 +15,8 @@ Attribute VB_Name = "R2000G_ChartBuilder"
 '     rebuild. Series are coloured by ObjectThemeColor Accent 1,2,3,4,5,6 (then wrap), assigned by
 '     series POSITION, so the pairing is consistent: series 1 = R2000G (Accent 1), series 2 = S&P
 '     600 Growth (Accent 2). Change Theme1 (Page Layout > Colors) and the charts change with it.
-'     THEME_FILE below is the only thing to edit if you rename the theme.
-'   * Difference charts (single series) get NEGATIVE bars in red so "R2KG - 600G" reads at a glance.
+'     THEME_FILE below is the only thing to edit if you rename the theme. Negative values are the
+'     SAME theme colour as positive ones (no special-case red) -- the whole deck stays on the palette.
 '   * Arial throughout.
 '   * Chart title, axis titles and legend sit OUTSIDE the plot area (no overlap);
 '     dense month axes are thinned to ~12 labels so they don't collide.
@@ -206,9 +206,6 @@ Private Sub BuildSpec(p As Variant)
         Next i
         StyleChart cht, ttl, xT, yT, (UBound(cols) > 0)
         If typ = "L" Then ThinCategoryLabels cht, lrUse - hdr
-        If (typ = "C" Or typ = "BR") And UBound(cols) = 0 Then      ' single-series diff -> red negatives
-            EmphasizeNegatives cht.SeriesCollection(1), sws, dstart, lrUse, CLng(cols(0))
-        End If
         If typ = "BR" Then                                     ' largest value at the TOP, value axis stays at bottom
             On Error Resume Next
             cht.Axes(xlCategory).ReversePlotOrder = True
@@ -270,20 +267,6 @@ Private Sub ColorSeries(s As Series, idx As Long, typ As String)
     End Select
 End Sub
 
-' Colour the negative bars of a SINGLE-series difference chart red, so an "R2KG - 600G" excess/gap
-' chart reads at a glance (positive = index colour, negative = red). Points are 1-based.
-Private Sub EmphasizeNegatives(s As Series, sws As Worksheet, dataStart As Long, lr As Long, col As Long)
-    On Error Resume Next
-    Dim i As Long, v As Variant
-    For i = 1 To lr - dataStart + 1
-        v = sws.Cells(dataStart + i - 1, col).Value
-        If IsNumeric(v) Then
-            If CDbl(v) < 0 Then s.Points(i).Format.Fill.ForeColor.RGB = NegColor()
-        End If
-    Next i
-    On Error GoTo 0
-End Sub
-
 Private Sub StyleChart(cht As Chart, ttl As String, xTitle As String, _
                        yTitle As String, showLegend As Boolean)
     cht.HasTitle = True
@@ -342,10 +325,6 @@ Private Function ThemeAccent(idx As Long) As MsoThemeColorIndex
         Case 4: ThemeAccent = msoThemeColorAccent5
         Case 5: ThemeAccent = msoThemeColorAccent6
     End Select
-End Function
-
-Private Function NegColor() As Long
-    NegColor = RGB(192, 0, 0)                        ' C00000 red -- negative difference bars only
 End Function
 
 ' last row of the CONTIGUOUS data block below the header (stops at the first blank
