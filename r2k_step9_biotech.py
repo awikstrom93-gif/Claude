@@ -141,10 +141,14 @@ def build():
         raise SystemExit("!! R2000G index row not found in performance file")
     R = idx["R2KG"]
     from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
-    hr = find_annual("R2KG")
+    from r2k_step5_cohort_attribution import load_finest_holdings
     hs = find_annual("SP600G")
-    if not hr: raise SystemExit("!! R2000G holdings not found")
-    hold_r = load_monthly_holdings(hr, verbose=False)
+    # R2000G weights at the FINEST cadence (annual+quarterly merged) -- the SAME basis step5 uses, so the
+    # biotech-vs-non-biotech decomposition reconciles to the same index return and the same 'Unexplained'
+    # residual as the cohort attribution. (Before, step5 used finest but step9 used annual, so the two
+    # attribution tabs reported different Unexplained figures for the same index/period.) The ANNUAL bio
+    # tables below still key off annual_spine (April snapshots), so they are unaffected.
+    hold_r = load_finest_holdings()
     hold_s = load_monthly_holdings(hs, verbose=False) if hs else None
     facts = norm_facts(load_fundamentals())
     base, temporal = load_maps(); tmap = ticker_cik_map(base, temporal)
