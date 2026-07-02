@@ -136,15 +136,21 @@ def build():
     aR, aS = annualize(full_R, n), annualize(full_S, n)
     vR, vS = ann_vol(rr), ann_vol(sr)
     mddR, _, _ = max_drawdown(rg); mddS, _, _ = max_drawdown(sg)
+    # ORDER MATTERS: the Chart Builder carves this block into commensurable charts by row position --
+    # rows 1-3 are the annualized percent figures (return / vol / drawdown, all in the tens of %),
+    # row 4 is the unitless ratio, row 5 the cumulative % (hundreds), row 6 the hit-rate %. Keeping
+    # like-scaled statistics together is what lets each chart share one axis and actually mean something
+    # (the old single chart mixed 165% cumulative, a 0.44 ratio and -33% drawdown on one axis -> noise).
+    # The Executive Summary reads these by LABEL (label_row), so reordering here is safe.
     stats = [
-        ("Cumulative total return", _p(full_R), _p(full_S), _p(full_R - full_S)),
         ("Annualized return", _p(aR), _p(aS), _p(aR - aS) if (aR is not None and aS is not None) else None),
         ("Annualized volatility", _p(vR), _p(vS), _p(vR - vS) if (vR is not None and vS is not None) else None),
+        ("Max drawdown", _p(mddR), _p(mddS),
+         _p(mddR - mddS) if (mddR is not None and mddS is not None) else None),
         ("Return / volatility", round(aR / vR, 2) if (aR and vR) else None,
          round(aS / vS, 2) if (aS and vS) else None,
          round(aR / vR - aS / vS, 2) if (aR and vR and aS and vS) else None),
-        ("Max drawdown", _p(mddR), _p(mddS),
-         _p(mddR - mddS) if (mddR is not None and mddS is not None) else None),
+        ("Cumulative total return", _p(full_R), _p(full_S), _p(full_R - full_S)),
         ("% months R2KG > SP6G", round(100 * sum(1 for x in er if x > 0) / n, 1), None, None),
     ]
     r = 5
