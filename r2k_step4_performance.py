@@ -202,11 +202,13 @@ def build():
     wm = wb.create_sheet("Monthly & Cumulative")
     _hdr(wm, 1, ["Month", "R2KG ret %", "SP6G ret %", "Excess %",
                  "R2KG growth$1", "SP6G growth$1", "Cum excess (R2KG-SP6G) %"])
-    cum_ex = 1.0
+    # Cumulative excess = the growth-of-$1 DIFFERENCE (R2KG $ growth - SP6G $ growth), so it ends at the
+    # SAME -25.5% the Perf Summary scoreboard reports (165.0% - 190.5%). The prior version compounded the
+    # monthly excess (a monthly-rebalanced long/short), which ended at -7.69% and silently disagreed with
+    # the headline and with this column's own "R2KG-SP6G" label.
     for i, d in enumerate(dts):
-        cum_ex *= (1 + er[i])
         vals = [f"{d:%Y-%m-%d}", _p(rr[i]), _p(sr[i]), _p(er[i]),
-                round(rg[i][1], 4), round(sg[i][1], 4), round(100 * (cum_ex - 1), 2)]
+                round(rg[i][1], 4), round(sg[i][1], 4), round(100 * (rg[i][1] - sg[i][1]), 2)]
         for c, v in enumerate(vals, 1): wm.cell(row=i + 2, column=c, value=v)
     wm.freeze_panes = "A2"
 
@@ -309,11 +311,9 @@ def build():
     base_row = rr_ + 2
     wp.cell(base_row - 1, 1, "Cumulative excess (R2KG - SP6G), growth of $1 difference -- the proof series:").font = Font(bold=True)
     _hdr(wp, base_row, ["Month", "Cum excess (R2KG-SP6G) %", "Rolling 12m excess %"])
-    cum = 1.0
     for i, d in enumerate(dts):
-        cum *= (1 + er[i])
         wp.cell(base_row + 1 + i, 1, f"{d:%Y-%m-%d}")
-        wp.cell(base_row + 1 + i, 2, round(100 * (cum - 1), 2))
+        wp.cell(base_row + 1 + i, 2, round(100 * (rg[i][1] - sg[i][1]), 2))   # true growth-of-$1 difference (ends -25.5%)
         wp.cell(base_row + 1 + i, 3, _p(roll[i]) if roll[i] is not None else None)
     proof_first = base_row + 1; proof_last = base_row + n
     ch = LineChart(); ch.title = "Cumulative excess R2KG - SP6G (trough = start of R2KG's run)"
