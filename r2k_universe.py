@@ -64,14 +64,13 @@ def ticker_cik_map(base, temporal):
     return tmap
 
 
+from r2k_calc import annual_spine as _annual_spine   # single impl in the shared calc module
+
+
 def annual_spine(holdings):
-    """{year: snapshot_date nearest TARGET_MONTH}."""
-    out = {}
-    for d in sorted(holdings):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
+    """{year: snapshot_date nearest TARGET_MONTH}. Thin wrapper over r2k_calc.annual_spine so this
+    module stays the public home (step6/8/9 import annual_spine from here) but the logic lives once."""
+    return _annual_spine(holdings, TARGET_MONTH)
 
 
 def canon_cik(raw):

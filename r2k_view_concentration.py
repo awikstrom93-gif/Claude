@@ -6,22 +6,12 @@ and remain in r2k_step8_concentration.py.
 RUN:  python r2k_view_concentration.py
 """
 from r2k_universe import get_panel, by_index_year, diff_sheet, print_sheet, BASE
+from r2k_calc import weight_conc   # single definition (shared with step8's Weight Concentration)
 
 CONC = BASE / "R2000G_Concentration.xlsx"
 TOP_NS = [1, 5, 10, 25, 50]
 HDR = ["Year", "R2KG #", "R2KG Top10%", "R2KG Top25%", "R2KG Max name%", "R2KG HHI", "R2KG EffN",
        "600G #", "600G Top10%", "600G Top25%", "600G Max name%", "600G HHI", "600G EffN"]
-
-
-def weight_conc(members):
-    """Mirror step8.weight_conc exactly, from panel member rows."""
-    ws = sorted((r["weight"] for r in members), reverse=True)
-    tw = sum(ws) or 1e-9
-    shares = [w / tw for w in ws]
-    return {"n": len(ws), "top": {k: round(sum(ws[:k]) / tw * 100, 2) for k in TOP_NS},
-            "max": round(ws[0] / tw * 100, 2) if ws else None,
-            "hhi": round(sum((s * 100) ** 2 for s in shares), 1),
-            "effn": round(1 / sum(s * s for s in shares), 0) if shares else None}
 
 
 def weight_concentration_rows(panel):

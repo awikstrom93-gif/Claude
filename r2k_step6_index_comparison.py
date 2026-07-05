@@ -73,14 +73,7 @@ def ticker_cik_map(base, temporal):
     return tmap
 
 
-def annual_spine(holdings):
-    """{year: snapshot_date nearest TARGET_MONTH}."""
-    out = {}
-    for d in sorted(holdings):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
+from r2k_universe import annual_spine   # single definition (nearest-TARGET_MONTH snapshot per year)
 
 
 # ---------- per-snapshot index quality ----------

@@ -35,6 +35,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE
 from r2k_universe import annual_spine   # consolidated: one definition
+from r2k_calc import compound, weight_conc, carino_K, carino_k   # shared calc primitives (one definition)
 
 OUT = BASE / "R2000G_Concentration.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
@@ -61,21 +62,8 @@ def _hdr(ws, row, hs, fill=HDR):
 
 
 # annual_spine imported from r2k_universe (single source of truth).
-def weight_conc(rows):
-    ws = sorted((h["weight"] for h in rows), reverse=True)
-    tw = sum(ws) or 1e-9
-    shares = [w / tw for w in ws]
-    return {"n": len(ws), "top": {k: round(sum(ws[:k]) / tw * 100, 2) for k in TOP_NS},
-            "max": round(ws[0] / tw * 100, 2) if ws else None,
-            "hhi": round(sum((s * 100) ** 2 for s in shares), 1),
-            "effn": round(1 / sum(s * s for s in shares), 0) if shares else None}
-
-
-def compound(rets):
-    g = 1.0
-    for r in rets:
-        if r is not None: g *= (1 + r)
-    return g - 1.0
+# weight_conc() and compound() imported from r2k_calc (single definition). weight_conc uses TOP_NS by
+# default there ([1,5,10,25,50]), which matches this module's TOP_NS.
 
 
 def build():
@@ -173,14 +161,14 @@ def build():
     from r2k_step5_cohort_attribution import load_finest_holdings, nearest_prior
     fh = load_finest_holdings(); hdates = sorted(fh)
     idx_win = compound([idx["R2KG"]["ret"].get(d) for d in win]) if "R2KG" in idx else None
-    Kt = math.log(1 + idx_win) / idx_win if (idx_win not in (None, 0) and abs(idx_win) > 1e-12) else 1.0
+    Kt = carino_K(idx_win) if idx_win is not None else 1.0
     contrib = defaultdict(float); wsum = defaultdict(float); wn = defaultdict(int); grow = defaultdict(lambda: 1.0)
     for d in win:
         snap = fh.get(nearest_prior(hdates, d))
         if not snap: continue
         traw = sum(h["weight"] for h in snap) or 1.0
         Rm = idx["R2KG"]["ret"].get(d) if "R2KG" in idx else None
-        km = math.log(1 + Rm) / Rm if (Rm is not None and abs(Rm) > 1e-12) else 1.0
+        km = carino_k(Rm) if Rm is not None else 1.0
         for h in snap:
             rec = ret_rec(h)
             if rec is None: continue

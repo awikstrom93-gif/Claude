@@ -31,8 +31,9 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE, ntk
+from r2k_calc import compound, nearest_prior, carino_K, carino_k   # shared calc primitives (one definition)
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
-from r2k_universe import norm_facts, fund_for, ticker_cik_map   # consolidated: one definition
+from r2k_universe import norm_facts, fund_for, ticker_cik_map, annual_spine   # consolidated: one definition
 
 OUT = BASE / "R2000G_Biotech.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
@@ -93,42 +94,15 @@ def theme_of(ind):
     return "Other"
 
 
-# norm_facts / ticker_cik_map / fund_for imported from r2k_universe (single source of truth).
-def annual_spine(holdings):
-    out = {}
-    for d in sorted(holdings):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
-
-
-def nearest_prior(sorted_dates, target):
-    prev = None
-    for d in sorted_dates:
-        if d < target: prev = d
-        else: break
-    return prev
-
-
-def compound(rets):
-    g = 1.0
-    for r in rets:
-        if r is not None: g *= (1 + r)
-    return g - 1.0
-
-
+# norm_facts / ticker_cik_map / fund_for / annual_spine imported from r2k_universe; compound /
+# nearest_prior / carino_* from r2k_calc -- single definitions shared across the pipeline.
 def carino_link(slice_rows, key):
-    """Carino-linked contribution of `key` (a per-row contribution dict field name)."""
+    """Carino-linked contribution of `key` (a per-row contribution dict field name), matching the
+    cohort attribution's linking exactly (both use the shared r2k_calc primitives)."""
     if not slice_rows: return None, 0.0
-    acum = 1.0
-    for r in slice_rows: acum *= (1 + r["actual"])
-    acum -= 1.0
-    K = math.log(1 + acum) / acum if abs(acum) > 1e-12 else 1.0
-    out = 0.0
-    for r in slice_rows:
-        k = math.log(1 + r["actual"]) / r["actual"] if abs(r["actual"]) > 1e-12 else 1.0
-        out += (k / K) * r[key]
+    acum = compound([r["actual"] for r in slice_rows])
+    K = carino_K(acum)
+    out = sum((carino_k(r["actual"]) / K) * r[key] for r in slice_rows)
     return acum, out
 
 

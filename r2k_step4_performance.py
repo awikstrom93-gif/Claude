@@ -30,6 +30,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, BASE
+from r2k_calc import compound
 
 OUT = BASE / "R2000G_vs_SP600G_Performance.xlsx"
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
@@ -37,11 +38,7 @@ WINDOW_START = os.environ.get("WINDOW_START")  # optional YYYY-MM-DD
 
 
 # ---------- return math ----------
-def compound(rets):
-    g = 1.0
-    for r in rets:
-        if r is not None: g *= (1.0 + r)
-    return g - 1.0
+# compound() imported from r2k_calc (single definition; see top-of-file import)
 
 
 def annualize(total_ret, n_months):

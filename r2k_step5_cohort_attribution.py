@@ -37,6 +37,7 @@ from openpyxl.chart import LineChart, Reference
 from r2k_perf_io import load_performance, load_monthly_holdings, find_holdings_file, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
 from r2k_universe import norm_facts, fund_for, ticker_cik_map, find_quarterly   # consolidated: one definition
+from r2k_calc import compound, nearest_prior, carino_K, carino_k   # shared calc primitives (one definition)
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
@@ -49,13 +50,7 @@ COH_LABEL = {"profitable": "Profitable", "fallen": "Fallen (was profitable)",
 # ticker_cik_map / norm_facts / fund_for are imported from r2k_universe (single source of truth).
 
 
-def nearest_prior(sorted_dates, target):
-    """latest holdings snapshot strictly before `target` (beginning-of-month weights)."""
-    prev = None
-    for d in sorted_dates:
-        if d < target: prev = d
-        else: break
-    return prev
+# nearest_prior imported from r2k_calc (single definition)
 
 
 def load_finest_holdings():
@@ -89,13 +84,9 @@ def load_finest_holdings():
 
 
 def carino(actual_cum, monthly_actual):
-    """Return (K, [k_t]) Carino smoothing factors so sum_t k_t/K * contrib = cumulative."""
-    A = actual_cum
-    K = math.log(1 + A) / A if abs(A) > 1e-12 else 1.0
-    ks = []
-    for a in monthly_actual:
-        ks.append(math.log(1 + a) / a if abs(a) > 1e-12 else 1.0)
-    return K, ks
+    """(K, [k_t]) Carino smoothing factors so sum_t k_t/K * contrib = cumulative -- thin wrapper over the
+    shared r2k_calc primitives (single definition)."""
+    return carino_K(actual_cum), [carino_k(a) for a in monthly_actual]
 
 
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
@@ -194,7 +185,7 @@ def build():
         K, _ = carino(acum, [r["actual"] for r in slice_rows])
         out = {c: 0.0 for c in COHORTS}; resid = 0.0
         for r in slice_rows:
-            k = math.log(1 + r["actual"]) / r["actual"] if abs(r["actual"]) > 1e-12 else 1.0
+            k = carino_k(r["actual"])
             for c in COHORTS: out[c] += (k / K) * r["contrib"][c]
             resid += (k / K) * r["residual"]
         return acum, out, resid
