@@ -75,9 +75,20 @@ def write_sheet(wb, panel):
     ws.cell(row=1, column=1, value=TITLE_TEXT).font = Font(bold=True, size=12)
     for c, h in enumerate(HDR, 1):
         ws.cell(row=3, column=c, value=h).font = Font(bold=True)
+    last = 3
     for i, row in enumerate(dupont_rows(panel), start=4):
         for c, v in enumerate(row, 1):
             ws.cell(row=i, column=c, value=v)
+        last = i
+    ws.cell(row=last + 2, column=1, value=(
+        "Net margin, Asset turnover, Leverage and ROE are all dollar-aggregates on the COMMON universe "
+        "(names with revenue, net income, average assets AND average equity all present), so the three "
+        "factors multiply EXACTLY to the ROE check. ROE/turnover/leverage use AVERAGE (opening+closing) "
+        "assets & equity -- the same convention as the per-name ROE and ROIC. Because this common universe "
+        "is slightly narrower than the headline 'ROE $agg' on Index Quality Trends (which keeps any name "
+        "with net income + equity, incl. those missing revenue/assets), the ROE here can differ from that "
+        "headline by a few tenths of a point; it is the ROE OF THE DuPont universe, by construction."
+    )).font = Font(size=9, italic=True, color="555555")
     return ws
 
 

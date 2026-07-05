@@ -185,7 +185,8 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
                "_nopat", "_ic", "gp_to_assets", "accruals", "cash_conversion", "asset_turnover",
                "rule_of_40", "d_to_equity", "d_to_capital", "prof_ni", "prof_oi", "p2", "p3",
                "ever_profitable", "was_profitable_prior", "cohort", "never_basis", "has_rev",
-               "_aeq", "_ata"]   # average equity/assets, for average-denominator ROE $agg + DuPont
+               "_aeq", "_ata",   # average equity/assets, for average-denominator ROE $agg + DuPont
+               "ebitda", "interest_expense"]   # for the solvency tab -> single (panel) vintage
 PANEL_COLS = ID_COLS + METRIC_COLS
 
 

@@ -5,50 +5,30 @@ measures, by index weight: the share that CANNOT cover its interest (EBIT < inte
 net-debt/EBITDA > 4x, the share with NEGATIVE EBITDA (and how much of that also carries net debt),
 plus median interest coverage and median net-debt/EBITDA.  R2000G vs S&P 600 Growth.
 
-Joins the panel (membership, weight, EBIT=operating_income, debt, cash) to fundamentals_dera.csv
-(ebitda, interest_expense).  RUN:  python r2k_view_solvency.py
+All inputs come from the canonical panel (membership, weight, EBIT=operating_income, EBITDA, interest
+expense, debt, cash) -- a single vintage, consistent with every other tab. RUN: python r2k_view_solvency.py
 """
-import csv
 from statistics import median
 
 from r2k_universe import get_panel, by_index_year, BASE
 
-FUND = BASE / "fundamentals_dera.csv"
 OUT = BASE / "r2k_solvency.txt"
 HDR = ["Year", "n", "%Can'tCoverInt", "%Cover<2x", "MedCover(x)", "%ND/EBITDA>4x",
        "MedND/EBITDA(x)", "%NegEBITDA", "%NegEBITDA+NetDebt", "600G %Can'tCover"]
 
 
-def _f(x):
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
+# ebitda + interest_expense now travel on the panel (r["ebitda"], r["interest_expense"]) alongside every
+# other fundamental, so the solvency tab is single-vintage and consistent with all other tabs -- it no
+# longer reads fundamentals_dera.csv directly (which mixed the dera vintage into a panel/ASFILED tab).
 
 
-def _ck(c):
-    s = str(c)
-    return str(int(s)) if s.isdigit() else s
-
-
-def _inputs():
-    """{(cik, fy): {ebitda, interest}} from fundamentals_dera.csv."""
-    d = {}
-    if FUND.exists():
-        for r in csv.DictReader(open(FUND, encoding="utf-8")):
-            if r.get("fiscal_year", "").isdigit():
-                d[(_ck(r["cik"]), r["fiscal_year"])] = {"ebitda": _f(r.get("ebitda")),
-                                                         "interest": _f(r.get("interest_expense"))}
-    return d
-
-
-def _name_metrics(r, inp):
-    """Per name: (coverage, net_debt/ebitda, ebitda, net_debt) or Nones where not computable."""
-    k = (_ck(r["cik"]), str(r["fy0"]))
-    e = inp.get(k, {})
+def _name_metrics(r):
+    """Per name: (coverage, net_debt/ebitda, ebitda, net_debt) or Nones where not computable.
+    All inputs come from the panel row (single vintage) -- EBIT=operating income, EBITDA and interest
+    as carried on the panel, net debt = total debt - cash."""
     ebit = r.get("operating_income")
-    interest = e.get("interest")
-    ebitda = e.get("ebitda")
+    interest = r.get("interest_expense")
+    ebitda = r.get("ebitda")
     debt, cash = r.get("debt"), r.get("cash")
     nd = (debt - (cash or 0)) if debt is not None else None
     cover = (ebit / interest) if (ebit is not None and interest and interest > 0) else None
@@ -56,13 +36,13 @@ def _name_metrics(r, inp):
     return cover, nde, ebitda, nd
 
 
-def _solvency_for(members, inp):
+def _solvency_for(members):
     cov = [r for r in members if r["covered"]]
     tw = sum(r["weight"] for r in cov) or 1e-9
     cant = c2 = nde4 = nege = nege_nd = 0.0
     covers, ndes = [], []
     for r in cov:
-        cover, nde, ebitda, nd = _name_metrics(r, inp)
+        cover, nde, ebitda, nd = _name_metrics(r)
         w = r["weight"]
         if cover is not None:
             covers.append(cover)
@@ -81,13 +61,13 @@ def _solvency_for(members, inp):
             "nege_nd": 100 * nege_nd / tw}
 
 
-def solvency_rows(panel, inp):
+def solvency_rows(panel):
     grp = by_index_year(panel)
     years = sorted(y for (ix, y) in grp if ix == "R2KG")
     out = []
     for y in years:
-        a = _solvency_for(grp[("R2KG", y)], inp)
-        b = _solvency_for(grp[("SP600G", y)], inp) if ("SP600G", y) in grp else None
+        a = _solvency_for(grp[("R2KG", y)])
+        b = _solvency_for(grp[("SP600G", y)]) if ("SP600G", y) in grp else None
         out.append([y, a["n"], round(a["cant"], 1), round(a["c2"], 1),
                     round(a["medcov"], 1) if a["medcov"] is not None else None, round(a["nde4"], 1),
                     round(a["mednde"], 1) if a["mednde"] is not None else None,
@@ -99,7 +79,7 @@ def solvency_rows(panel, inp):
 def write_sheet(wb, panel=None):
     from openpyxl.styles import Font, PatternFill, Alignment
     panel = panel if panel is not None else get_panel(index=None)
-    rows = solvency_rows(panel, _inputs())
+    rows = solvency_rows(panel)
     ws = wb.create_sheet("Solvency Tail")
     ws.cell(1, 1, "Solvency / interest-coverage tail -- the credit & rate-sensitivity risk of R2000G").font = Font(bold=True, size=12)
     ws.cell(2, 1, "By index weight: share that can't cover interest (EBIT<interest), high net-debt/EBITDA, "
@@ -118,10 +98,7 @@ def write_sheet(wb, panel=None):
 
 def main():
     panel = get_panel(index=None)
-    if not FUND.exists():
-        print(f"  !! {FUND.name} not found -- run r2k_dera_classify.py first.")
-        return
-    rows = solvency_rows(panel, _inputs())
+    rows = solvency_rows(panel)
     L = ["SOLVENCY / INTEREST-COVERAGE TAIL  --  R2000G credit & rate risk (by index weight)", ""]
     L.append("  " + "".join(str(h)[:15].rjust(17) for h in HDR))
     L.append("  " + "-" * (17 * len(HDR)))

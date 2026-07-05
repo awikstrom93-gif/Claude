@@ -113,7 +113,8 @@ def load_fundamentals():
             facts.setdefault(cik, {})[yr] = {k: to_f(r.get(k)) for k in
                 ("revenue","net_income","operating_income","gross_profit","tax_expense","pretax_income",
                  "stockholders_equity","total_assets","cash","short_term_investments","long_term_investments",
-                 "restricted_cash","total_debt","operating_cash_flow","capex","free_cash_flow")}
+                 "restricted_cash","total_debt","operating_cash_flow","capex","free_cash_flow",
+                 "ebitda","interest_expense")}   # for the solvency tab -> panel-sourced, single vintage
             facts[cik][yr].update(fye=fye, filed=filed, sector=r.get("sector","general"))
     return facts
 
@@ -231,6 +232,7 @@ def company_metrics(cf, fy0):
     # wavg/median and ROIC $agg used average -- an inconsistency inside the $agg family. For a first
     # fiscal year (no prior) avg() already returns the ending value, so these are never None when eq/ta are.
     m["_aeq"], m["_ata"] = aeq, ata
+    m["ebitda"], m["interest_expense"] = g("ebitda"), g("interest_expense")   # solvency tab (panel-sourced)
     # quality lenses
     m["gp_to_assets"] = safe_div(gp, ata) if (ata and ata > 0) else None          # Novy-Marx
     m["accruals"] = safe_div((ni - cfo), ata) if (ni is not None and cfo is not None and ata and ata > 0) else None  # Sloan
