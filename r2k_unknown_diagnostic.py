@@ -20,14 +20,13 @@ OUTPUTS  (R2KG_BASE)
 RUN: python r2k_unknown_diagnostic.py
 ============================================================
 """
-from pathlib import Path
-import os, csv
+import csv
 
 from r2k_perf_io import load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
+from r2k_universe import annual_spine   # single source: June spine + drift/truncation guards
 
 OUT = BASE / "unknown_cohort_diagnostic.csv"
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
 
 
 def find(pats):
@@ -57,15 +56,6 @@ def fund_for(nf, cik):
     if not cik: return None
     try: return nf.get(str(int(cik)))
     except (TypeError, ValueError): return nf.get(str(cik))
-
-
-def annual_spine(holdings):
-    out = {}
-    for d in sorted(holdings):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
 
 
 def main():

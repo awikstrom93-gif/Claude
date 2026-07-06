@@ -31,6 +31,7 @@ import os, re, csv, sys, json
 from collections import defaultdict
 
 import openpyxl
+from r2k_dera_name_index import norm_name, load_name_index
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 SEC_MAP = BASE / "security_cik_map.json"
@@ -38,6 +39,7 @@ TEMP_MAP = BASE / "temporal_cik_map.json"
 UNIVERSE = BASE / "universe_ciks.csv"
 CUSIP2CIK = BASE / "cusip2cik.json"
 TICKER2CIK = BASE / "ticker2cik.json"
+NAME_INDEX = BASE / "dera_name_index.csv"
 
 
 def snapshot_year(sn):
@@ -78,11 +80,12 @@ def load_json(p):
         return {}
 
 
-def build(holdings_files, cusip2cik, ticker2cik):
+def build(holdings_files, cusip2cik, ticker2cik, name2cik=None):
+    name2cik = name2cik or {}
     sec_map = {}                              # ticker -> cik
     temporal = defaultdict(dict)             # "YYYY-04-30" -> {ticker: cik}
     universe = set()
-    src = defaultdict(int); unresolved = []
+    src = defaultdict(int); unresolved = []; name_hits = []
     for f in holdings_files:
         wb = openpyxl.load_workbook(f, read_only=True, data_only=True)
         for sn in wb.sheetnames:
@@ -109,17 +112,25 @@ def build(holdings_files, cusip2cik, ticker2cik):
                     src["CIK column"] += 1
                 else:
                     cusip = str(g("CUSIP") or "").strip()
+                    nm = g("Name")
                     if cusip and cusip in cusip2cik:
                         cik = clean_cik(cusip2cik[cusip]); src["CUSIP fallback"] += 1
                     elif tk in ticker2cik:
                         cik = clean_cik(ticker2cik[tk]); src["ticker fallback"] += 1
+                    elif nm and norm_name(nm) in name2cik:
+                        # tier 4: resolve a no-CIK holding by its own point-in-time NAME against the
+                        # DERA name index (recovers delisted biotechs that carry no CIK/CUSIP).
+                        rec = name2cik[norm_name(nm)]
+                        cik = clean_cik(rec["cik"]); src["NAME fallback"] += 1
+                        name_hits.append((f.name, yr, tk, str(nm).strip(), cik,
+                                          rec.get("display_name", ""), rec.get("sic", "")))
                 if not cik:
-                    unresolved.append((f.name, yr, tk)); continue
+                    unresolved.append((f.name, yr, tk, str(g("Name") or "").strip())); continue
                 sec_map[tk] = cik
                 temporal[f"{yr:04d}-04-30"][tk] = cik
                 universe.add(cik)
         wb.close()
-    return sec_map, dict(temporal), sorted(universe), dict(src), unresolved
+    return sec_map, dict(temporal), sorted(universe), dict(src), unresolved, name_hits
 
 
 def main():
@@ -128,7 +139,14 @@ def main():
         raise SystemExit("!! no *Holding*.xlsx found in R2KG_BASE.")
     print(f"  holdings workbooks: {[h.name for h in holdings]}")
     cusip2cik = load_json(CUSIP2CIK); ticker2cik = load_json(TICKER2CIK)
-    sec_map, temporal, universe, src, unresolved = build(holdings, cusip2cik, ticker2cik)
+    name2cik = load_name_index(NAME_INDEX, full=True)
+    if name2cik:
+        print(f"  name index: {len(name2cik):,} auto-resolvable names from {NAME_INDEX.name}")
+    else:
+        print(f"  name index: {NAME_INDEX.name} not found -- run r2k_dera_name_index.py to rescue "
+              f"no-CIK holdings by name (delisted biotechs).")
+    sec_map, temporal, universe, src, unresolved, name_hits = build(
+        holdings, cusip2cik, ticker2cik, name2cik)
 
     SEC_MAP.write_text(json.dumps(sec_map, indent=0))
     TEMP_MAP.write_text(json.dumps(temporal, indent=0))
@@ -141,10 +159,24 @@ def main():
     print(f"  -> {SEC_MAP.name}: {len(sec_map)} tickers")
     print(f"  -> {TEMP_MAP.name}: {len(temporal)} snapshots")
     print(f"  -> {UNIVERSE.name}: {len(universe)} unique CIKs (R2000G + S&P 600 Growth)")
+    if name_hits:
+        # write the name-rescued rows so the analyst can eyeball ticker/name -> matched CIK before
+        # trusting them (name matching is powerful but must stay reviewable).
+        review = BASE / "name_resolved_review.csv"
+        with open(review, "w", newline="", encoding="utf-8") as fo:
+            w = csv.writer(fo)
+            w.writerow(["file", "year", "ticker", "holdings_name", "matched_cik",
+                        "matched_dera_name", "sic"])
+            for row in sorted(name_hits, key=lambda x: (x[2], x[1])):
+                w.writerow(row)
+        distinct = sorted({(t, c) for _, _, t, _, c, _, _ in name_hits})
+        print(f"  ++ {len(name_hits)} rows rescued by NAME ({len(distinct)} distinct tickers) "
+              f"-> {review.name} (REVIEW these: ticker/holdings-name vs matched DERA name+SIC). "
+              f"e.g. {[f'{t}={c}' for t, c in distinct[:6]]}")
     if unresolved:
-        u = sorted({(t,) for _, _, t in unresolved})
+        u = sorted({t for _, _, t, _ in unresolved})
         print(f"  !! {len(unresolved)} holding-rows unresolved ({len(u)} distinct tickers) -- "
-              f"no CIK/CUSIP/ticker match. e.g. {[t[0] for t in u[:8]]}")
+              f"no CIK/CUSIP/ticker/name match. e.g. {u[:8]}")
     print(f"\n  Next: point the DERA index at the full universe so step 6 (R2000G vs 600G) works:")
     print(f"     set R2KG_CIK_FILE={UNIVERSE.name}  (or r2k_dera_index.py auto-detects it)")
 
@@ -156,23 +188,32 @@ def selftest():
     ws.append(["CIK", "Name", "Ticker", "ISIN", "CUSIP", "Portfolio Weighting %"])
     ws.append([1664703, "Bloom Energy", "BE", "US0937121079", "093712107", 3.65])
     ws.append([None, "NoCik Co", "NCK", "US123", "12345678X", 0.5])      # resolve via cusip fallback
+    ws.append([None, "Aduro Biotech, Inc.", "ADRO", "US007", "00790T100", 0.4])  # resolve via NAME
     ws2 = wb.create_sheet("4.30.2025")
     ws2.append(["CIK", "Name", "Ticker", "CUSIP", "Portfolio Weighting %"])
     ws2.append([36029, "First Financial", "FFIN", "320218108", 0.9])
     hp = d / "Russell_2000_Growth_Holdings.xlsx"; wb.save(hp)
-    global BASE, SEC_MAP, TEMP_MAP, UNIVERSE, CUSIP2CIK, TICKER2CIK
+    global BASE, SEC_MAP, TEMP_MAP, UNIVERSE, CUSIP2CIK, TICKER2CIK, NAME_INDEX
     BASE = d; SEC_MAP = d / "security_cik_map.json"; TEMP_MAP = d / "temporal_cik_map.json"
     UNIVERSE = d / "universe_ciks.csv"
     CUSIP2CIK = d / "cusip2cik.json"; CUSIP2CIK.write_text(json.dumps({"12345678X": "999999"}))
     TICKER2CIK = d / "t.json"
+    NAME_INDEX = d / "dera_name_index.csv"
+    with open(NAME_INDEX, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["norm_name", "cik", "display_name", "sic", "has_annual", "n_filings", "ambiguous"])
+        w.writerow(["aduro biotech", "1655759", "Aduro Biotech Inc", "2836", "Y", "5", ""])
     main()
     sec = json.loads(SEC_MAP.read_text()); temp = json.loads(TEMP_MAP.read_text())
     uni = [r["cik"] for r in csv.DictReader(open(UNIVERSE))]
     ok = (sec.get("BE") == "1664703" and sec.get("NCK") == "999999" and sec.get("FFIN") == "36029"
+          and sec.get("ADRO") == "1655759"                      # rescued by NAME fallback
           and temp.get("2026-04-30", {}).get("BE") == "1664703"
           and temp.get("2025-04-30", {}).get("FFIN") == "36029"
-          and set(uni) == {"1664703", "999999", "36029"})
-    print(f"\n  SELFTEST (CIK col + CUSIP fallback + temporal key + universe): {'PASS' if ok else 'FAIL'}")
+          and set(uni) == {"1664703", "999999", "36029", "1655759"}
+          and (d / "name_resolved_review.csv").exists())
+    print(f"\n  SELFTEST (CIK col + CUSIP + ticker + NAME fallback + temporal + universe): "
+          f"{'PASS' if ok else 'FAIL'}")
 
 
 if __name__ == "__main__":

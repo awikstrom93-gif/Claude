@@ -6,15 +6,12 @@ Diagnostics & Research, Medical Devices) vs everything else.
 
 RUN: python r2k_biotech_check.py            # latest year + a couple of reference years
 """
-from pathlib import Path
-from datetime import date
-import os, csv
 from collections import defaultdict
 
 from r2k_perf_io import load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
+from r2k_universe import annual_spine   # single source: June spine + drift/truncation guards
 
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
 LIFESCI_HINTS = ["biotech", "drug manufactur", "pharmaceutical", "diagnostics", "medical device",
                  "medical instrument", "life science"]
 
@@ -43,15 +40,6 @@ def fund_for(nf, cik):
     if not cik: return None
     try: return nf.get(str(int(cik)))
     except (TypeError, ValueError): return nf.get(str(cik))
-
-def annual_spine(h):
-    out = {}
-    for d in sorted(h):
-        cur = out.get(d.year)
-        if cur is None or abs(d.month - TARGET_MONTH) < abs(cur.month - TARGET_MONTH):
-            out[d.year] = d
-    return out
-
 
 def main():
     hr = find(["*[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx"])

@@ -18,13 +18,26 @@ Run everything from the project folder.
 | # | Command | Produces | When |
 |---|---------|----------|------|
 | 1 | `python r2k_morningstar_parse.py` | `morningstar_long.csv`, `securities_crosswalk.csv`, `cusip2cik.json`, `ticker2cik.json` | Morningstar workbooks refreshed |
-| 2 | `python r2k_build_maps.py` | `security_cik_map.json`, `temporal_cik_map.json`, **`universe_ciks.csv`** | holdings change |
+| 1b | `python r2k_dera_name_index.py` | `dera_name_index.csv` (universe-independent name→CIK) | DERA quarters added |
+| 2 | `python r2k_build_maps.py` | `security_cik_map.json`, `temporal_cik_map.json`, **`universe_ciks.csv`**, `name_resolved_review.csv` | holdings change |
 | 3 | `python r2k_dera_index.py` | `dera_filing_index.csv` (every 10-K / 20-F / 40-F) | DERA quarters added |
 | 4 | `python r2k_dera_extract.py` | **`dera_facts.csv`** (all as-filed facts) | DERA quarters added — **LONG (streams every quarter)** |
 
 `r2k_build_maps.py` reads **both** the R2000G and S&P 600 Growth holdings, so it builds the
 ticker→CIK maps for steps 3/5/6 *and* `universe_ciks.csv`. `r2k_dera_index.py` auto-detects
 `universe_ciks.csv`, so the DERA dataset covers both indices with no extra configuration.
+
+**Step 1b (`r2k_dera_name_index.py`) is the no-CIK backstop.** Holdings resolve CIK → CUSIP →
+ticker → **name**. The name tier catches delisted names (mostly biotechs: ADRO/Aduro,
+ADXS/Advaxis, ALVR/AlloVir, ANGN/Angion, AVRO/AVROBIO, CARA…) that arrive with no CIK/CUSIP and
+would otherwise land in the "Unknown (no fundamentals)" attribution bucket. It scans **every**
+filer in `sub.txt` (not the resolved universe, so the missing names are present), keeps only
+**unambiguous** normalized names that have a real annual filing, and matches each holding by the
+name it carried *at that snapshot* (point-in-time). Every rescue is written to
+**`name_resolved_review.csv`** (ticker / holdings-name vs matched DERA name + SIC) — **review it**
+before trusting a build; a wrong homonym shows up as a mismatched SIC. Re-run 1b only when new
+DERA quarters are added; the newly-resolved CIKs then flow automatically into `universe_ciks.csv`
+→ index → extract → classify.
 
 ---
 
