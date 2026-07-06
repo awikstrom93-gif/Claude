@@ -394,17 +394,27 @@ def data_reliability(wb):
         for r in _csv.DictReader(open(FUND, encoding="utf-8")):
             if r.get("fiscal_year", "").isdigit():
                 prov[(r.get("cik"), r["fiscal_year"])] = r
-    # index weight + ticker (optional, via r2k_plausibility loaders + the cik map)
-    cik2w, cik2tkr = {}, {}
+    # index weight + ticker from the PANEL -- the canonical, point-in-time, index-tagged source the
+    # analytics already use. Weighting the reliability tab off the SAME panel (rather than a fragile
+    # re-read of the holdings workbook via r2k_plausibility.load_weights, which silently collapses to a
+    # name-count view when the workbook/sheet/column naming drifts) keeps this tab consistent with every
+    # other exhibit. wt_by_cikfy = that-year R2000G weight; cik2w = current-snapshot weight per name.
+    wt_by_cikfy, cik2w, cik2tkr = {}, {}, {}
     try:
-        from r2k_plausibility import load_weights, load_cikmap
-        weights, cm = load_weights(), load_cikmap()
-        for nt, w in (weights or {}).items():
-            c = cm.get(nt)
-            if c:
-                cik2w[c] = w
+        from r2k_view_reliability import _panel_weights
+        wt_by_cikfy, cik2w, cik2tkr = _panel_weights()
     except Exception:
         pass
+    if not cik2w:                                    # panel unavailable -> legacy holdings/cikmap path
+        try:
+            from r2k_plausibility import load_weights, load_cikmap
+            weights, cm = load_weights(), load_cikmap()
+            for nt, w in (weights or {}).items():
+                c = cm.get(nt)
+                if c:
+                    cik2w[c] = w
+        except Exception:
+            pass
     cmap = BASE / "security_cik_map.json"
     if cmap.exists():
         try:
@@ -433,7 +443,8 @@ def data_reliability(wb):
         why = fr.get("watch_reason", "") if fr.get("tier") == "watch" else ""
         flg = ";".join(x for x in (fr.get("critical", ""), fr.get("watch", "")) if x)
         rows.append({
-            "tkr": cik2tkr.get(c, ""), "cik": c, "wt": cik2w.get(c, 0.0), "fy": fy,
+            "tkr": cik2tkr.get(c, ""), "cik": c,
+            "wt": (wt_by_cikfy.get((c, fy), 0.0) if wt_by_cikfy else cik2w.get(c, 0.0)), "fy": fy,
             "tier": fr.get("tier", ""), "core": fr.get("core_reliable", ""),
             "conf": fr.get("confidence", "") or pr.get("confidence", ""),
             "breaks": pr.get("breaks", ""),
@@ -491,7 +502,9 @@ def data_reliability(wb):
     ws.auto_filter.ref = f"A5:J{5 + len(rows)}"      # sortable/filterable by core/tier, year, name
     ws.freeze_panes = "A6"
     print(f"  Data Reliability tab: {len(rows):,} company-years / {len({r['cik'] for r in rows}):,} names"
-          + (f", {100*clean_w/tw:.1f}% current weight clean" if tw else ""))
+          + (f", CORE-reliable {100*core_w/tw:.1f}% of index weight (tw={tw:.1f})"
+             if tw else " -- !! INDEX WEIGHTS UNAVAILABLE (name-count view): the panel had no current "
+                       "weights and the holdings/cikmap fallback also failed"))
     return "Data Reliability"
 
 

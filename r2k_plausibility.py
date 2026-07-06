@@ -224,7 +224,7 @@ def main():
 
     # weight by index (latest snapshot) if holdings available
     weights, cm = load_weights(), load_cikmap()
-    if weights and cm:
+    if weights and cm and any(weights.values()):
         cik2w = {}
         for nt, w in weights.items():
             c = cm.get(nt)
@@ -266,7 +266,20 @@ def main():
             flags = x["critical"] or (f"{x['break_kind']}-break" if x["break_kind"] else x["watch"])
             L.append(f"     {w:>5.2f}  {x['cik']:<9}{flags[:40]:<40}")
     else:
-        L.append("\n(no holdings/cik map found -> name-count view only; add them to weight by index)")
+        # diagnose WHY the weighted view is unavailable, so it can be fixed instead of silently
+        # shipping a name-count number that reads like a reliability drop.
+        why = []
+        if not weights:
+            why.append(f"no holdings weights (looked for *[Rr]ussell*[Gg]rowth*[Hh]olding*.xlsx in "
+                       f"'{BASE}'; needs a 'Ticker' + 'Portfolio Weighting %' column on the latest-dated "
+                       f"sheet -- run from the project directory or set R2KG_BASE)")
+        elif not any(weights.values()):
+            why.append(f"holdings found ({len(weights)} tickers) but every weight is 0 -- the "
+                       f"'Portfolio Weighting %' column header was not matched exactly")
+        if not cm:
+            why.append(f"no ticker->CIK map ({CIKMAP.name} not found in '{BASE}' -- run r2k_build_maps.py)")
+        L.append("\n(index weights unavailable -> name-count view only) -- " +
+                 ("; ".join(why) if why else "weights and cik map loaded but did not intersect"))
 
     REPORT.write_text("\n".join(L), encoding="utf-8")
     fields = ["cik", "fiscal_year", "sector", "tier", "core_reliable", "watch_reason", "break_kind",
