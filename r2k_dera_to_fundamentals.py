@@ -25,10 +25,27 @@ import os, csv, sys
 from collections import defaultdict
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
-# prefer the cross-source-RESOLVED fundamentals if r2k_resolve.py has produced them, so the
-# analytics run on the verified/adopted values; fall back to the raw DERA rebuild otherwise.
-FUND_DERA = (BASE / "fundamentals_dera_resolved.csv") if (BASE / "fundamentals_dera_resolved.csv").exists() \
-    else (BASE / "fundamentals_dera.csv")
+FUND_RAW = BASE / "fundamentals_dera.csv"
+FUND_RESOLVED = BASE / "fundamentals_dera_resolved.csv"
+
+
+def pick_fund_source():
+    """Which fundamentals file to adapt. Prefer the cross-source-RESOLVED file (r2k_resolve.py's
+    verified/adopted values) -- BUT never let a STALE resolved file silently shadow a fresh classify
+    run: if it predates fundamentals_dera.csv it is missing recent rows/fixes (this is exactly why a
+    manual override could 'match no row'). Warn loudly and, when stale, fall back to the raw file.
+    Force the raw file with R2KG_FUND_RAW=1."""
+    if os.environ.get("R2KG_FUND_RAW") or not FUND_RESOLVED.exists():
+        return FUND_RAW
+    if FUND_RAW.exists() and FUND_RESOLVED.stat().st_mtime < FUND_RAW.stat().st_mtime - 1:
+        print(f"  !! {FUND_RESOLVED.name} is OLDER than {FUND_RAW.name} -- it predates the last classify "
+              f"run and is missing its rows/fixes. Falling back to {FUND_RAW.name}. (Re-run r2k_resolve.py "
+              f"to refresh it, or set R2KG_FUND_RAW=1 to always use the raw file.)")
+        return FUND_RAW
+    return FUND_RESOLVED
+
+
+FUND_DERA = pick_fund_source()
 INDEX = BASE / "dera_filing_index.csv"
 XWALK = BASE / "securities_crosswalk.csv"
 OUT = BASE / os.environ.get("R2KG_FUND_OUT", "edgar_annual_fundamentals_ASFILED.csv")
@@ -160,6 +177,7 @@ def main():
     if not FUND_DERA.exists():
         raise SystemExit(f"!! {FUND_DERA.name} not found -- run r2k_dera_classify.py first.")
     dera_rows = list(csv.DictReader(open(FUND_DERA, encoding="utf-8")))
+    print(f"  source: {FUND_DERA.name}  ({len(dera_rows):,} company-years)")
     idx = load_index(); tickers = load_tickers()
     out = run(dera_rows, idx, tickers)
     overrides, unapproved = load_overrides()
