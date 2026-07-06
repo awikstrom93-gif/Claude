@@ -1,5 +1,5 @@
-cik,fiscal_year,metric,value,source,note
-785786,2024,revenue,3960827000,"10-K FY2024 Consolidated Statements of Comprehensive Income, Net sales, p.43","anomalous tagging: RFCwC-excl(4,078,149K) > RFCwC-incl(3,960,827K) and no Revenues tag; face top line is RFCwC-incl"
-356080,2012,total_assets,1499592000,"Belo Corp FY2012 10-K balance sheet","balance-sheet XBRL tagged in thousands while the income statement is in dollars; assets 1,499,592 foots with liab+equity but is ~1000x off $714M revenue -- scale x1000"
-356080,2012,total_liabilities,1199868000,"Belo Corp FY2012 10-K balance sheet","same thousands-scale balance sheet; x1000 to match the income statement"
-356080,2012,total_equity,299724000,"Belo Corp FY2012 10-K balance sheet","same thousands-scale balance sheet; x1000 (parent stockholders_equity was already tagged in dollars)"
+cik,fiscal_year,metric,value,source,note,approved
+785786,2024,revenue,3960827000,"10-K FY2024 Consolidated Statements of Comprehensive Income, Net sales, p.43","anomalous tagging: RFCwC-excl(4,078,149K) > RFCwC-incl(3,960,827K) and no Revenues tag; face top line is RFCwC-incl (DERA engine already produces this -- a confirmed no-op)",yes
+356080,2012,total_assets,1499592000,"Belo Corp FY2012 10-K balance sheet","balance-sheet XBRL tagged in thousands while the income statement is in dollars; assets 1,499,592 foots with liab+equity but is ~1000x off $714M revenue -- scale x1000",yes
+356080,2012,total_liabilities,1199868000,"Belo Corp FY2012 10-K balance sheet","same thousands-scale balance sheet; x1000 to match the income statement",yes
+356080,2012,total_equity,299724000,"Belo Corp FY2012 10-K balance sheet","same thousands-scale balance sheet; x1000 (parent stockholders_equity was already tagged in dollars)",yes

@@ -111,22 +111,30 @@ def run(dera_rows, idx, tickers):
 
 
 def load_overrides():
-    """[(cik, fiscal_year, field, value, note)] -- confirmed manual corrections for DEFINITE extraction
-    errors the automated engine cannot catch (e.g. a filing whose balance-sheet XBRL carried the wrong
-    `decimals` scale, so it foots internally but is ~1000x off the income statement). Human-verified,
-    committed to git, applied to the adapter output; every application is logged for audit."""
+    """([(cik, fiscal_year, field, value, note)], n_unapproved) -- manual corrections for DEFINITE
+    extraction errors the engine cannot self-catch (e.g. a filing whose balance-sheet XBRL carried the
+    wrong `decimals` scale, so it foots internally but is ~1000x off the income statement).
+
+    SAFETY -- only rows with an explicit `approved` flag (yes/true/1) are applied. The file doubles as a
+    CANDIDATE LEDGER: reconciliation/recovery passes append proposals (calcbench sign-flip candidates,
+    revenue-fix candidates, row-consistency worklists) whose own notes say "VERIFY". An unapproved row
+    is a PROPOSAL, not a correction, and must never silently rewrite an as-filed value. If no `approved`
+    column exists at all, NOTHING is applied (the whole file is treated as an unvetted ledger)."""
     if not OVERRIDES.exists():
-        return []
-    out = []
+        return [], 0
+    out, unapproved = [], 0
     for r in csv.DictReader(open(OVERRIDES, encoding="utf-8")):
         cik = (r.get("cik") or "").strip()
         cik = str(int(cik)) if cik.isdigit() else cik
         field = (r.get("metric") or r.get("field") or "").strip()   # 'metric' is the established column
         if not cik or not field:
             continue
+        if str(r.get("approved", "")).strip().lower() not in ("y", "yes", "true", "1"):
+            unapproved += 1
+            continue
         note = "; ".join(x for x in ((r.get("source") or "").strip(), (r.get("note") or "").strip()) if x)
         out.append((cik, (r.get("fiscal_year") or "").strip(), field, (r.get("value") or "").strip(), note))
-    return out
+    return out, unapproved
 
 
 def apply_overrides(rows, overrides):
@@ -154,7 +162,12 @@ def main():
     dera_rows = list(csv.DictReader(open(FUND_DERA, encoding="utf-8")))
     idx = load_index(); tickers = load_tickers()
     out = run(dera_rows, idx, tickers)
-    out = apply_overrides(out, load_overrides())
+    overrides, unapproved = load_overrides()
+    out = apply_overrides(out, overrides)
+    if unapproved:
+        print(f"  ({unapproved:,} row(s) in {OVERRIDES.name} are UNAPPROVED candidates -- skipped. "
+              f"They are proposals (calcbench sign-flip / recovery worklists), not corrections; vet one "
+              f"and set its 'approved' column to 'yes' to activate it.)")
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=PIPE_FIELDS, extrasaction="ignore")
         w.writeheader(); w.writerows(out)
