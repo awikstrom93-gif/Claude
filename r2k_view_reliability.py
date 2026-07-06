@@ -130,8 +130,10 @@ def write_sheet(wb):
 
     ws = wb.create_sheet("Data Reliability")
     ws.cell(1, 1, "Data Reliability — three-statement tie-out, sanity, and provenance").font = TITLE
+    fyears = sorted(int(r["fy"]) for r in rows if str(r["fy"]).isdigit())
+    span = f"{fyears[0]}–{fyears[-1]}" if fyears else "full history"
     sub = (f"{len(rows):,} company-years across {meta['n_names']:,} names (full historical ledger, "
-           f"2015–present). "
+           f"{span}). "
            + (f"CORE reliability (income statement + balance sheet tie out AND are plausible — the basis "
               f"of the quality/growth/leverage analytics): {100*core_w/tw:.1f}% of current index weight.  "
               f"Full three-statement articulation (adds the cash-flow roll-forward): {100*clean_w/tw:.1f}%."
