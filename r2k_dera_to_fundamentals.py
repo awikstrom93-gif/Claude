@@ -32,6 +32,7 @@ FUND_DERA = (BASE / "fundamentals_dera_resolved.csv") if (BASE / "fundamentals_d
 INDEX = BASE / "dera_filing_index.csv"
 XWALK = BASE / "securities_crosswalk.csv"
 OUT = BASE / os.environ.get("R2KG_FUND_OUT", "edgar_annual_fundamentals_ASFILED.csv")
+OVERRIDES = BASE / "manual_value_overrides.csv"   # confirmed one-off corrections (audited, in git)
 
 SECTOR_MAP = {"insurer": "insurance", "bank": "bank", "commercial": "general"}
 # DERA field -> pipeline field
@@ -109,12 +110,51 @@ def run(dera_rows, idx, tickers):
     return out
 
 
+def load_overrides():
+    """[(cik, fiscal_year, field, value, note)] -- confirmed manual corrections for DEFINITE extraction
+    errors the automated engine cannot catch (e.g. a filing whose balance-sheet XBRL carried the wrong
+    `decimals` scale, so it foots internally but is ~1000x off the income statement). Human-verified,
+    committed to git, applied to the adapter output; every application is logged for audit."""
+    if not OVERRIDES.exists():
+        return []
+    out = []
+    for r in csv.DictReader(open(OVERRIDES, encoding="utf-8")):
+        cik = (r.get("cik") or "").strip()
+        cik = str(int(cik)) if cik.isdigit() else cik
+        field = (r.get("metric") or r.get("field") or "").strip()   # 'metric' is the established column
+        if not cik or not field:
+            continue
+        note = "; ".join(x for x in ((r.get("source") or "").strip(), (r.get("note") or "").strip()) if x)
+        out.append((cik, (r.get("fiscal_year") or "").strip(), field, (r.get("value") or "").strip(), note))
+    return out
+
+
+def apply_overrides(rows, overrides):
+    """Set rows[field]=value for each (cik, fiscal_year) match. A stale override (matches no row, or
+    names a field not in the schema) is WARNED, never silently ignored -- so the correction list can't
+    rot unnoticed."""
+    by = {(r["cik"], r["fiscal_year"]): r for r in rows}
+    applied = 0
+    for cik, fy, field, value, note in overrides:
+        r = by.get((cik, fy))
+        if r is None:
+            print(f"  !! override skipped: no row for cik {cik} fy {fy} ({field}={value}; {note})"); continue
+        if field not in r:
+            print(f"  !! override skipped: unknown field '{field}' (cik {cik} fy {fy})"); continue
+        print(f"  ~ override cik {cik} fy {fy} {field}: {r.get(field, '')!r} -> {value!r}  ({note})")
+        r[field] = value; applied += 1
+    if overrides:
+        print(f"  applied {applied}/{len(overrides)} manual override(s) from {OVERRIDES.name}")
+    return rows
+
+
 def main():
     if not FUND_DERA.exists():
         raise SystemExit(f"!! {FUND_DERA.name} not found -- run r2k_dera_classify.py first.")
     dera_rows = list(csv.DictReader(open(FUND_DERA, encoding="utf-8")))
     idx = load_index(); tickers = load_tickers()
     out = run(dera_rows, idx, tickers)
+    out = apply_overrides(out, load_overrides())
     with open(OUT, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=PIPE_FIELDS, extrasaction="ignore")
         w.writeheader(); w.writerows(out)

@@ -238,9 +238,17 @@ def _index_rows(index, hold, snaps, nfacts, tmap, temporal=None):
                     rec["reason"] = "no-fy0-before-snapshot"
                 else:
                     cm = company_metrics(cf, fy0)
-                    rec["fy0"], rec["covered"] = fy0, 1
-                    for k in METRIC_COLS:
-                        rec[k] = cm.get(k)
+                    # a resolved fy0 whose fundamentals are ENTIRELY empty (no revenue, assets, equity,
+                    # or net income -- e.g. a reverse-merger predecessor/stub year like AMRX 2018) is not
+                    # usable data: keep it uncovered so it can't dilute coverage or feed a $0 balance
+                    # sheet into the quality/leverage analytics.
+                    core_vals = (cm.get("revenue"), cm.get("assets"), cm.get("equity"), cm.get("net_income"))
+                    if all(v is None or v == 0 for v in core_vals):
+                        rec["reason"] = "empty-fundamentals"
+                    else:
+                        rec["fy0"], rec["covered"] = fy0, 1
+                        for k in METRIC_COLS:
+                            rec[k] = cm.get(k)
             rows.append(rec)
     return rows
 
