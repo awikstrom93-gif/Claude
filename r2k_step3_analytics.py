@@ -19,7 +19,7 @@ OUTPUT
       Constituent Detail, Charts
 
 POINT-IN-TIME: each constituent's FY0 = latest fiscal year whose 10-K was actually
-filed before the Apr-30 snapshot (uses filed_date; falls back to FYE+90d). No look-ahead.
+filed before the annual snapshot (SNAP_MONTH, June by default; uses filed_date, falls back to FYE+90d). No look-ahead.
 RATIOS: ROE/ROA/ROIC use AVERAGE (opening+closing) denominators (CFA convention).
 ============================================================
 """

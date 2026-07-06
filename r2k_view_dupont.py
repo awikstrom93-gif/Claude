@@ -5,7 +5,7 @@ Leverage, all dollar-aggregated over the covered constituents.
 
 RUN:  python r2k_view_dupont.py
 """
-from r2k_universe import get_panel, diff_sheet, print_sheet
+from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
 from r2k_step3_analytics import dollar_agg, _p, _x
 
 SHEET = "DuPont"
@@ -21,6 +21,7 @@ DUPONT_INPUTS = ("net_income", "revenue", "assets", "equity")
 
 def dupont_rows(panel):
     years = sorted({int(r["year"]) for r in panel})
+    snap_of = year_snapshot(panel)                       # actual snapshot date per year (SNAP_MONTH-driven)
     out = []
     for yr in years:
         cov = [r for r in panel if int(r["year"]) == yr and r["covered"]]
@@ -45,7 +46,7 @@ def dupont_rows(panel):
         lev = dollar_agg([(ata(r), aeq(r)) for r in common])
         roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in common])
         implied = (nm * at * lev) if (nm is not None and at is not None and lev is not None) else None
-        out.append([f"{yr}-04-30", _p(nm), _x(at), _x(lev), _p(implied), _p(roe_da)])
+        out.append([snap_of.get(yr, f"{yr}-06-30"), _p(nm), _x(at), _x(lev), _p(implied), _p(roe_da)])
     return out
 
 

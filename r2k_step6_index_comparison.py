@@ -38,7 +38,7 @@ from r2k_step3_analytics import (load_fundamentals, company_metrics, pick_fy0,
                                  aggregate, dollar_agg, load_maps)
 
 OUT = BASE / "R2000G_vs_SP600G_Quality.xlsx"
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))     # annual spine: snapshot nearest this month
+TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))     # annual spine: snapshot nearest this month
 TOP_NS = [10, 25, 50]
 
 

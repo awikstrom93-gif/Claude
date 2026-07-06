@@ -36,7 +36,7 @@ from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, lo
 from r2k_universe import norm_facts, fund_for, ticker_cik_map, annual_spine   # consolidated: one definition
 
 OUT = BASE / "R2000G_Biotech.xlsx"
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
+TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
 # Biotech definition (Morningstar Industry keywords). Default = narrow 'Biotechnology' only.
@@ -121,7 +121,7 @@ def build():
     # biotech-vs-non-biotech decomposition reconciles to the same index return and the same 'Unexplained'
     # residual as the cohort attribution. (Before, step5 used finest but step9 used annual, so the two
     # attribution tabs reported different Unexplained figures for the same index/period.) The ANNUAL bio
-    # tables below still key off annual_spine (April snapshots), so they are unaffected.
+    # tables below key off annual_spine (the SNAP_MONTH snapshot per year, June by default).
     hold_r = load_finest_holdings()
     hold_s = load_monthly_holdings(hs, verbose=False) if hs else None
     facts = norm_facts(load_fundamentals())

@@ -34,7 +34,10 @@ from r2k_perf_io import load_monthly_holdings, ntk
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 PANEL_CSV = BASE / "r2k_panel.csv"
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))     # annual spine: snapshot nearest this month
+TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))     # annual spine: snapshot nearest this month.
+# Default = JUNE: 6/30 exists for every year in the quarterly holdings (April did not), it lands right
+# AFTER the annual Russell reconstitution (fresh membership + growth-style reassignment), and it puts
+# R2000G and S&P600G on the SAME snapshot date. Set SNAP_MONTH=4 to reproduce the legacy April cut.
 BIO_KEYWORDS = [k.strip().lower() for k in os.environ.get("BIOTECH_KEYWORDS", "biotech").split(",") if k.strip()]
 
 
@@ -352,6 +355,18 @@ def by_index_year(rows):
     out = {}
     for r in rows:
         out.setdefault((r["index"], int(r["year"])), []).append(r)
+    return out
+
+
+def year_snapshot(rows):
+    """{year: snapshot-date string} for a single-index panel -- the ACTUAL annual snapshot date used
+    each year (e.g. 2016-06-30 under SNAP_MONTH=6), so views label rows with the real date instead of a
+    hardcoded month. All rows in a year share one snapshot (annual_spine picks one per index-year)."""
+    out = {}
+    for r in rows:
+        y = int(r["year"])
+        if y not in out and r.get("snapshot"):
+            out[y] = r["snapshot"]
     return out
 
 

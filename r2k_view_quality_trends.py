@@ -11,7 +11,7 @@ the existing Russell2000Growth_Analytics.xlsx so you can confirm nothing else mo
 
 RUN:  python r2k_view_quality_trends.py        # builds the sheet from the panel + diffs vs current
 """
-from r2k_universe import get_panel, diff_sheet, print_sheet
+from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
 from r2k_step3_analytics import aggregate, dollar_agg, _p, _x
 
 SHEET = "Index Quality Trends"
@@ -40,6 +40,7 @@ NOTE_TEXT = ("Margins: '$agg (blended)' = sum(op income)/sum(revenue) is the ind
 def quality_trends_rows(panel):
     """The projection: panel -> one row per snapshot, columns == HDR. Mirrors step3 exactly."""
     years = sorted({int(r["year"]) for r in panel})
+    snap_of = year_snapshot(panel)                       # actual snapshot date per year (SNAP_MONTH-driven)
     out = []
     for yr in years:
         cov = [r for r in panel if int(r["year"]) == yr and r["covered"]]
@@ -63,7 +64,7 @@ def quality_trends_rows(panel):
         roic_da = dollar_agg([(r["_nopat"], r["_ic"]) for r in cov])
         dcap_da = dollar_agg([(r["debt"], (r["debt"] + r["equity"])
                               if (r["debt"] is not None and r["equity"] is not None) else None) for r in cov])
-        out.append([f"{yr}-04-30", round(tot_rev, 1), round(tot_ni, 1), round(pct_rev, 1),
+        out.append([snap_of.get(yr, f"{yr}-06-30"), round(tot_rev, 1), round(tot_ni, 1), round(pct_rev, 1),
                     round(up_ni, 1) if up_ni is not None else None,
                     round(up_oi, 1) if up_oi is not None else None,
                     _p(ag("gross_margin")["wavg"]), _p(ag("gross_margin")["median"]),

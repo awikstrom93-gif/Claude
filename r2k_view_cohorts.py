@@ -6,7 +6,7 @@ workbook is the base-first identity + canonical universe already validated on Qu
 
 RUN:  python r2k_view_cohorts.py        # builds the sheet from the panel + diffs vs current
 """
-from r2k_universe import get_panel, diff_sheet, print_sheet
+from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
 
 SHEET = "Profitability Cohorts"
 TITLE_TEXT = "Profitability cohorts (count and index weight)"
@@ -17,6 +17,7 @@ HDR = ["Snapshot", "Covered", "Unprof NI %cnt", "Unprof NI %wt", "Unprof OI %cnt
 
 def cohorts_rows(panel):
     years = sorted({int(r["year"]) for r in panel})
+    snap_of = year_snapshot(panel)                       # actual snapshot date per year (SNAP_MONTH-driven)
     out = []
     for yr in years:
         cov = [r for r in panel if int(r["year"]) == yr and r["covered"]]
@@ -37,7 +38,7 @@ def cohorts_rows(panel):
         w2 = 100 * sum(r["weight"] for r in cov if r["p2"]) / wtot
         w3 = 100 * sum(r["weight"] for r in cov if r["p3"]) / wtot
         prev = 100 * sum(r["weight"] for r in cov if r["has_rev"]) / wtot
-        out.append([f"{yr}-04-30", n,
+        out.append([snap_of.get(yr, f"{yr}-06-30"), n,
                     round(upc, 1) if upc is not None else None, round(upw, 1) if upw is not None else None,
                     round(uoc, 1) if uoc is not None else None, round(uow, 1) if uow is not None else None,
                     len(never), len(nconf), len(nlim), len(fallen),

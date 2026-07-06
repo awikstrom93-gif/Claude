@@ -38,7 +38,7 @@ from r2k_universe import annual_spine   # consolidated: one definition
 from r2k_calc import compound, weight_conc, carino_K, carino_k   # shared calc primitives (one definition)
 
 OUT = BASE / "R2000G_Concentration.xlsx"
-TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "4"))
+TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
 TOP_NS = [1, 5, 10, 25, 50]
