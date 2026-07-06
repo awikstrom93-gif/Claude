@@ -701,8 +701,14 @@ def classify_filing(d, sector):
     put("net_income_to_common", nicom, tnicom)
 
     put("discontinued_operations", disc, disc_src)
-    da, tda = first(d, *DA); put("depreciation_amortization", da, tda)
-    ebitda = (oi + da) if (oi is not None and da is not None) else None
+    da, tda = first(d, *DA)
+    if da is not None and da < 0:          # a negative operating D&A is impossible (it is an add-back);
+        da, tda = None, None               # treat as not-found so the CF-based gap-fill can supply it
+    put("depreciation_amortization", da, tda)
+    # EBITDA only where it is MEANINGFUL and DERIVABLE: banks/insurers have no clean operating-income or
+    # operating-D&A concept, and without a valid (>=0) D&A there is nothing to add back. Computing it
+    # anyway from a spurious negative D&A produced EBITDA<OI -- a data artifact, not a real signal.
+    ebitda = (oi + da) if (sector not in ("bank", "insurer") and oi is not None and da is not None) else None
     put("ebitda", ebitda, "OperatingIncome+D&A(derived)" if ebitda is not None else None)
     inte, tie = first(d, *INT_EXP); put("interest_expense", inte, tie)
 
@@ -1069,7 +1075,7 @@ def run(facts_rows, sic_of=None, name_of=None):
             # GAP-FILL ONLY: keep the standard-tag D&A where present (don't override a good value);
             # only fill from the cash-flow add-back when the income-statement role found nothing
             # (e.g. FirstCash, which tags D&A under non-standard names). Recompute EBITDA only then.
-            if rec.get("depreciation_amortization") is None and da_cf is not None:
+            if rec.get("depreciation_amortization") is None and da_cf is not None and da_cf >= 0:
                 rec["depreciation_amortization"] = da_cf
                 oi = rec.get("operating_income")
                 if oi is not None:
@@ -1435,7 +1441,8 @@ def selftest():
     ok = (ind["confidence"] == "1.00" and ind["ebitda"] == 150 and ind["net_income"] == 65
           and ind["minority_interest"] == 5 and ind["total_equity"] == 2000 and ind["total_debt"] == 850
           and bk["sector"] == "bank" and bk["revenue"] == 520 and bk["operating_income"] == 260
-          and bk["gross_profit"] is None and bk["confidence"] == "1.00")
+          and bk["gross_profit"] is None and bk["confidence"] == "1.00"
+          and bk["ebitda"] is None)          # EBITDA suppressed for financials (no clean OI/D&A concept)
     dops = next(r for r in out if r["cik"] == "3")
     ok_dops = (dops["discontinued_operations"] == 3 * _m and dops["net_income_consolidated"] == 73 * _m
                and "IS_NI" not in dops["breaks"])
