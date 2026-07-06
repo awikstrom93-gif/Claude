@@ -69,11 +69,36 @@ def ticker_cik_map(base, temporal):
 
 from r2k_calc import annual_spine as _annual_spine   # single impl in the shared calc module
 
+SNAP_DRIFT_TOL = int(os.environ.get("SNAP_DRIFT_TOL", "4"))        # drop a year whose only snapshot is >this many months from target
+MIN_MEMBER_FRAC = float(os.environ.get("MIN_MEMBER_FRAC", "0.5"))  # drop a snapshot with < this fraction of the median membership
+
 
 def annual_spine(holdings):
-    """{year: snapshot_date nearest TARGET_MONTH}. Thin wrapper over r2k_calc.annual_spine so this
-    module stays the public home (step6/8/9 import annual_spine from here) but the logic lives once."""
-    return _annual_spine(holdings, TARGET_MONTH)
+    """{year: snapshot_date} = the nearest-TARGET_MONTH snapshot per year (r2k_calc.annual_spine), with
+    TWO guards so a bad snapshot can't silently enter the annual analysis (each WARNS when it fires):
+      * DRIFT -- drop a year whose best snapshot is far from the target month (e.g. a lone December stub
+        when the spine is June): a poor point-in-time proxy, not a real annual observation.
+      * TRUNCATION -- drop a snapshot whose membership is far below the median (e.g. a partial holdings
+        export of 93 names vs ~1,150): it would bias every weight-weighted metric. This is exactly the
+        Russell-2013/14 truncated-sheet failure, now caught instead of silently analyzed."""
+    spine = _annual_spine(holdings, TARGET_MONTH)
+    if not spine:
+        return spine
+    counts = {y: len(holdings.get(d, [])) for y, d in spine.items()}
+    med = sorted(counts.values())[len(counts) // 2] if counts else 0
+    kept = {}
+    for y, d in sorted(spine.items()):
+        drift = abs(d.month - TARGET_MONTH)
+        if drift > SNAP_DRIFT_TOL:
+            print(f"  !! annual spine: dropping {y} -- snapshot {d} is {drift} months from target month "
+                  f"{TARGET_MONTH} (not a valid annual point; e.g. a lone December stub).")
+            continue
+        if med and counts[y] < MIN_MEMBER_FRAC * med:
+            print(f"  !! annual spine: dropping {y} -- snapshot {d} has only {counts[y]} members vs median "
+                  f"{med}: a TRUNCATED holdings export. Re-pull that period's holdings.")
+            continue
+        kept[y] = d
+    return kept
 
 
 def canon_cik(raw):

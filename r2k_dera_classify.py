@@ -1200,6 +1200,16 @@ def run(facts_rows, sic_of=None, name_of=None):
 def main():
     if not FACTS.exists():
         raise SystemExit(f"!! {FACTS.name} not found -- run r2k_dera_extract.py first.")
+    # Staleness guard: if the filing universe changed since the last extract,
+    # dera_facts.csv is out of date and classifying it silently produces a
+    # half-covered build (the skipped-extract bug). Refuse unless overridden.
+    if INDEX.exists() and not os.environ.get("R2KG_ALLOW_STALE_FACTS"):
+        if FACTS.stat().st_mtime < INDEX.stat().st_mtime - 1:
+            raise SystemExit(
+                f"!! {FACTS.name} is OLDER than {INDEX.name} -- the filing universe "
+                f"changed since the last extract, so the facts are stale. Re-run "
+                f"r2k_dera_extract.py before classifying "
+                f"(set R2KG_ALLOW_STALE_FACTS=1 to override).")
     facts = list(csv.DictReader(open(FACTS, encoding="utf-8")))
     sic_of, name_of = {}, {}
     if INDEX.exists():
