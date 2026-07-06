@@ -20,11 +20,16 @@ CHECKS (accounting-grounded)
     | D&A>revenue (asset-heavy)
 
 RELIABILITY tier per (cik, fy) -- keyed to what the index analysis actually uses (P&L + BS):
-    review  = a CRITICAL plausibility flag OR a P&L/BS identity break (the values can't be trusted)
-    watch   = a WATCH flag, or only a cash-flow-articulation break (P&L/BS values still fine)
+    review  = a CRITICAL plausibility flag OR a MATERIAL P&L/BS identity break (values can't be trusted)
+    watch   = a WATCH flag, a cash-flow-articulation break, or an IMMATERIAL P&L/BS identity residual
+              (a small % of the metric it touches -- values still usable)
     clean   = ties out and plausible
+  Materiality uses the tie-out residual (tieout_report.csv) sized against the metric each break
+  touches; the threshold is MATERIALITY (default 5%, env R2KG_RELIABILITY_MATERIALITY). Without the
+  tie-out report every P&L/BS break is treated as material (the prior, stricter behaviour).
 
 INPUTS   fundamentals_dera.csv (values + confidence + breaks)   [r2k_dera_classify]
+         tieout_report.csv (identity residuals, optional -> sizes P&L/BS breaks)   [r2k_dera_classify]
          holdings + security_cik_map.json (optional -> weight the result)
 OUTPUTS  plausibility_report.txt   summary by flag type + tier, weighted by index where available
          plausibility_flags.csv    per (cik, fy) flags + tier (sorted worst-by-weight first)
@@ -48,6 +53,58 @@ FLAGS = BASE / "plausibility_flags.csv"
 # those values, so it's a softer signal.
 PL_BS_BREAKS = ("IS_GP", "IS_NI", "IS_NCI", "BS_FOOTS", "BS_EQUITY")
 CF_BREAKS = ("CASH_ROLL", "CF_FOOT", "SBC_CONSISTENCY")
+
+# A P&L/BS identity break only makes the VALUES untrustworthy if the residual is MATERIAL. An
+# immaterial articulation gap -- a 0.2%-of-revenue Rev-COGS reconciliation, a <5% NCI-split residual on
+# an Up-C structure -- leaves revenue/margins/NI/assets/equity perfectly usable, so it should read as
+# 'watch', not 'review'. We size each break's residual (from the tie-out report) against the metric it
+# touches; only a residual >= MATERIALITY of that metric forces review.
+MATERIALITY = float(os.environ.get("R2KG_RELIABILITY_MATERIALITY", "0.05"))
+TIEOUT = BASE / "tieout_report.csv"
+_BREAK_DENOM = {"IS_GP": "revenue",        # residual is the Rev-COGS vs reported-GP gap -> margin impact
+                "IS_NI": "net_income",     # net-income reconciliation gap
+                "IS_NCI": "net_income",    # parent/NCI net-income split gap
+                "BS_FOOTS": "total_assets", "BS_EQUITY": "total_equity"}
+
+
+def load_tieout():
+    """{(cik, fiscal_year) -> {break_prefix -> abs residual}} for BREAK rows only, so a P&L/BS break
+    can be sized against the metric it touches. Empty (-> every P&L/BS break treated as material, the
+    prior behaviour) if the tie-out report is absent."""
+    out = {}
+    if not TIEOUT.exists():
+        return out
+    for r in csv.DictReader(open(TIEOUT, encoding="utf-8")):
+        if r.get("result") != "BREAK":
+            continue
+        pre = str(r.get("identity", "")).split("(")[0]
+        if pre not in _BREAK_DENOM:
+            continue
+        try:
+            cik = str(int(float(r["cik"]))); fy = str(int(float(r["fiscal_year"])))
+            res = abs(float(r["residual"]))
+        except (TypeError, ValueError):
+            continue
+        d = out.setdefault((cik, fy), {})
+        d[pre] = max(d.get(pre, 0.0), res)      # worst residual per break type
+    return out
+
+
+def plbs_material(breaks, resid, r):
+    """True if any P&L/BS break leg is MATERIAL (residual >= MATERIALITY x the metric it touches). If a
+    leg's residual is unknown (no tie-out row) or its denominator is unavailable, treat it as material
+    -- never silently soften a break we cannot size."""
+    for leg in [b.strip() for b in (breaks or "").split(";") if b.strip()]:
+        pre = next((p for p in PL_BS_BREAKS if leg.startswith(p)), None)
+        if not pre:
+            continue
+        res = resid.get(pre)
+        denom = r.get(_BREAK_DENOM[pre])
+        if res is None or not denom:
+            return True
+        if res >= MATERIALITY * abs(denom):
+            return True
+    return False
 
 
 def fnum(x):
@@ -135,23 +192,31 @@ def load_fundamentals():
     return rows, by_cik
 
 
-def assess(rows, by_cik):
+def assess(rows, by_cik, resid_of=None):
+    resid_of = resid_of or {}
     out = []
     for r in rows:
         fy = r["fiscal_year"]
         prev = by_cik[r["cik"]].get(int(fy) - 1) if fy.isdigit() else None
         crit, watch = plausibility(r, prev)
         bk = break_kind(r["_breaks"])
-        # review = the P&L/BS values can't be trusted (critical plausibility OR a P&L/BS identity
-        # break); watch = a softer signal (cash-flow-only break or a watch flag); else clean.
-        tier = "review" if (crit or bk == "plbs") else ("watch" if (watch or bk == "cf") else "clean")
-        # CORE reliability = the income statement and balance sheet tie and pass sanity (no critical
-        # flag, no P&L/BS identity break). This is what the quality/growth/margin/leverage analytics
-        # consume; the cash-flow roll-forward and growth-typical values are a stricter, separate check.
+        # a P&L/BS identity break only forces 'review' when its residual is MATERIAL; an immaterial
+        # articulation gap leaves the values usable -> soften to 'watch' (like a cash-flow break).
+        soft_plbs = bk == "plbs" and not plbs_material(r["_breaks"], resid_of.get((r["cik"], fy), {}), r)
+        # review = the P&L/BS values can't be trusted (critical plausibility OR a MATERIAL P&L/BS
+        # identity break); watch = a softer signal (cash-flow break, immaterial P&L/BS break, or a
+        # watch flag); else clean.
+        tier = ("review" if (crit or (bk == "plbs" and not soft_plbs))
+                else ("watch" if (watch or bk == "cf" or soft_plbs) else "clean"))
+        # CORE reliability = the income statement and balance sheet tie (materially) and pass sanity.
+        # This is what the quality/growth/margin/leverage analytics consume; the cash-flow roll-forward
+        # and growth-typical values are a stricter, separate check.
         core = tier != "review"
-        # why a core-reliable name still isn't "clean": a cash-flow articulation gap, or a value that's
-        # unusual but legitimate for a growth index (pre-revenue losses, M&A growth, valuation-allowance tax)
-        wreason = ("growth-typical flag" if watch else ("cash-flow articulation" if bk == "cf" else ""))
+        # why a core-reliable name still isn't "clean": a growth-typical value, an immaterial identity
+        # residual, or a cash-flow articulation gap -- none of which taint the values used.
+        wreason = ("growth-typical flag" if watch else
+                   ("immaterial identity residual" if soft_plbs else
+                    ("cash-flow articulation" if bk == "cf" else "")))
         out.append(dict(cik=r["cik"], fiscal_year=fy, sector=r["_sector"], tier=tier,
                         core_reliable=("Y" if core else "N"), watch_reason=wreason,
                         break_kind=bk, critical=";".join(crit), watch=";".join(watch),
@@ -206,7 +271,11 @@ def main():
     if not FUND.exists():
         raise SystemExit(f"!! {FUND.name} not found -- run r2k_dera_classify.py first.")
     rows, by_cik = load_fundamentals()
-    res = assess(rows, by_cik)
+    resid_of = load_tieout()
+    if not resid_of:
+        print(f"  (note: {TIEOUT.name} not found -- every P&L/BS break treated as material; run "
+              f"r2k_dera_classify.py to emit it so immaterial residuals soften to 'watch'.)")
+    res = assess(rows, by_cik, resid_of)
     from collections import Counter
     tiers = Counter(x["tier"] for x in res)
     crit_types = Counter(c for x in res for c in x["critical"].split(";") if c)
@@ -308,16 +377,24 @@ def selftest():
         dict(cik="4", fiscal_year="2024", _sector="general", _breaks="IS_NI(x)", _conf="0.90",
              revenue=1000, total_assets=5000, cash=300, gross_profit=400, operating_income=100,
              ebitda=150, depreciation_amortization=50, net_income=65, pretax_income=90,
-             tax_expense=20, total_equity=2000, total_liabilities=3000, total_debt=850),  # P&L break -> review
+             tax_expense=20, total_equity=2000, total_liabilities=3000, total_debt=850),  # MATERIAL P&L break -> review
+        dict(cik="5", fiscal_year="2024", _sector="general", _breaks="IS_NI(x)", _conf="0.95",
+             revenue=1000, total_assets=5000, cash=300, gross_profit=400, operating_income=100,
+             ebitda=150, depreciation_amortization=50, net_income=65, pretax_income=90,
+             tax_expense=20, total_equity=2000, total_liabilities=3000, total_debt=850),  # IMMATERIAL P&L break -> watch
     ]
     by = defaultdict(dict)
-    res = assess(rows, by)
+    resid = {("4", "2024"): {"IS_NI": 50.0},     # 50 / NI 65 = 77% -> MATERIAL -> review
+             ("5", "2024"): {"IS_NI": 1.0}}       # 1  / NI 65 = 1.5% -> immaterial -> watch
+    res = assess(rows, by, resid)
     t = {x["cik"]: x for x in res}
     checks = [("clean #1", t["1"]["tier"] == "clean"),
               ("critical #2 GM>100% & D&A", "GM>100%" in t["2"]["critical"] and "D&A>2x revenue" in t["2"]["critical"]),
               ("#2 review", t["2"]["tier"] == "review"),
               ("#3 CF-break -> watch", t["3"]["tier"] == "watch" and t["3"]["break_kind"] == "cf"),
-              ("#4 P&L-break -> review", t["4"]["tier"] == "review" and t["4"]["break_kind"] == "plbs")]
+              ("#4 MATERIAL P&L-break -> review", t["4"]["tier"] == "review" and t["4"]["break_kind"] == "plbs"),
+              ("#5 IMMATERIAL P&L-break -> watch", t["5"]["tier"] == "watch"
+               and t["5"]["watch_reason"] == "immaterial identity residual")]
     for n, ok in checks:
         print(f"   {'PASS' if ok else 'FAIL'}  {n}")
     print(f"\n  SELFTEST: {'PASS' if all(o for _, o in checks) else 'FAIL'}")
