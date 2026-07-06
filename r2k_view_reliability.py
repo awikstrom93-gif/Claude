@@ -143,6 +143,14 @@ def write_sheet(wb):
                   "      clean = all three statements tie · watch = IS & BS tie; a cash-flow gap or a "
                   "growth-typical value · review = a real concern.   Index Wt % = the name's R2000G "
                   "weight in that fiscal year (blank = not an R2000G constituent then).").font = Font(size=9, italic=True, color="555555")
+    # staleness tripwire: tiers come from plausibility (FLAGS); if they predate the last accounting-engine
+    # run (FUND), they don't reflect the current classify -- surface it instead of shipping stale silently.
+    if FUND.exists() and FLAGS.stat().st_mtime < FUND.stat().st_mtime - 1:
+        print(f"  !! Data Reliability is STALE: {FLAGS.name} is older than {FUND.name} -- "
+              f"re-run r2k_plausibility.py before r2k_report.py so the tiers reflect the latest engine.")
+        ws.cell(4, 1, "⚠ STALE: these tiers were computed by an earlier plausibility run than the current "
+                      "fundamentals — re-run r2k_plausibility.py, then r2k_report.py, to refresh them."
+                ).font = Font(bold=True, color="C00000", size=10)
     for c, h in enumerate(HEADERS, 1):
         x = ws.cell(5, c, h); x.fill = HDR; x.font = HF
         x.alignment = Alignment(horizontal="center", wrap_text=True)
