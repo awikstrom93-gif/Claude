@@ -203,6 +203,27 @@ QUARTER_MONTHS = (3, 6, 9, 12)          # the consistent quarter-end spine acros
 PANEL_Q_CSV = BASE / "r2k_panel_q.csv"
 
 
+def quarterly_weight_conc(index, top_ns=(10, 25, 50)):
+    """[(quarter_end_date, weight_conc dict)] for the index at every quarter-end (Mar/Jun/Sep/Dec) in the
+    QUARTERLY holdings workbook. Weight concentration needs no fundamentals, so this covers both indices
+    fully regardless of DERA coverage -- the input for the intra-year run-up view in the concentration
+    tabs (top-N weight quarter by quarter, so a name/cohort ballooning within a calendar year is visible
+    between the annual June snapshots). Returns [] if the index has no quarterly holdings file."""
+    from r2k_calc import weight_conc
+    p = find_quarterly(index)
+    if not p:
+        return []
+    hold = load_monthly_holdings(p, verbose=False)
+    snaps = sorted(d for d in hold if d.month in QUARTER_MONTHS)
+    return [(d, weight_conc(hold[d], top_ns=list(top_ns))) for d in snaps]
+
+
+def quarter_label(d):
+    """A datetime/date quarter-end -> 'YYYY Qn' (month 3->Q1 ... 12->Q4; other months fall back to YYYY-MM)."""
+    q = {3: 1, 6: 2, 9: 3, 12: 4}.get(d.month)
+    return f"{d.year} Q{q}" if q else f"{d.year}-{d.month:02d}"
+
+
 # ============================ the panel (one row per snapshot x constituent) ============================
 # identity columns first, then every company_metrics field.
 ID_COLS = ["index", "year", "snapshot", "ticker", "nt", "name", "cik", "fy0", "weight",

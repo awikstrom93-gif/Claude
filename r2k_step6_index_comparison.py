@@ -255,13 +255,32 @@ def build():
     # ---- Concentration ----
     wcn = wb.create_sheet("Concentration")
     wcn.cell(row=1, column=1, value="Breadth & concentration -- R2000G vs S&P 600 Growth").font = TITLE
-    head = ["Year"] + [f"R2KG Top{n}" for n in TOP_NS] + ["R2KG HHI", "R2KG EffN"] + \
-           [f"600G Top{n}" for n in TOP_NS] + ["600G HHI", "600G EffN"]
-    _hdr(wcn, 3, head); rr = 4
+    idx_cols = lambda pfx: [f"{pfx} Top{n}" for n in TOP_NS] + [f"{pfx} HHI", f"{pfx} EffN"]
+    # ANNUAL (the June snapshot each year)
+    wcn.cell(row=3, column=1, value="Annual -- the June snapshot each year").font = Font(bold=True, size=11)
+    head = ["Year"] + idx_cols("R2KG") + idx_cols("600G")
+    _hdr(wcn, 4, head); rr = 5
     for y in years:
         a, b = qr[y], qs[y]
         row = [y] + [a["topn"][n] for n in TOP_NS] + [a["hhi"], a["effn"]] + \
               [b["topn"][n] for n in TOP_NS] + [b["hhi"], b["effn"]]
+        for c, v in enumerate(row, 1): wcn.cell(row=rr, column=c, value=v)
+        rr += 1
+    # QUARTERLY -- the top-N weight at each quarter-end (Mar/Jun/Sep/Dec), so the within-year run-up
+    # of the largest names (which the annual June snapshot misses) is visible. Weight-only, both indices.
+    from r2k_universe import quarterly_weight_conc, quarter_label
+    qcr = dict(quarterly_weight_conc("R2KG", top_ns=TOP_NS))
+    qcs = dict(quarterly_weight_conc("SP600G", top_ns=TOP_NS))
+    qdates = sorted(set(qcr) | set(qcs))
+    rr += 1
+    wcn.cell(row=rr, column=1, value="Quarterly -- top-N weight at each quarter-end (shows how much the "
+             "top names run up WITHIN a calendar year, between the annual snapshots above)").font = Font(bold=True, size=11)
+    rr += 1
+    _hdr(wcn, rr, ["Quarter"] + idx_cols("R2KG") + idx_cols("600G")); rr += 1
+    def qrow(c):
+        return ([c["top"][n] for n in TOP_NS] + [c["hhi"], c["effn"]]) if c else [None] * (len(TOP_NS) + 2)
+    for d in qdates:
+        row = [quarter_label(d)] + qrow(qcr.get(d)) + qrow(qcs.get(d))
         for c, v in enumerate(row, 1): wcn.cell(row=rr, column=c, value=v)
         rr += 1
 

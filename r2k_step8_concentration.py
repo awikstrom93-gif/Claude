@@ -90,20 +90,45 @@ def build():
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
     # ---- Weight Concentration ----
+    SHOW = (5, 10, 25, 50)                       # top-N weights the tab displays (weight_conc computes all)
+    def conc_cols(pfx):
+        return [f"{pfx} #"] + [f"{pfx} Top{k}%" for k in SHOW] + [f"{pfx} Max%", f"{pfx} HHI", f"{pfx} EffN"]
+    def conc_row(c):
+        return ([c["n"]] + [c["top"][k] for k in SHOW] + [c["max"], c["hhi"], c["effn"]]) if c else [None] * (len(SHOW) + 4)
+
     ww = wb.create_sheet("Weight Concentration")
     ww.cell(1, 1, "Weight concentration -- how top-heavy each benchmark is").font = TITLE
-    cols = ["Year", "R2KG #", "R2KG Top10%", "R2KG Top25%", "R2KG Max name%", "R2KG HHI", "R2KG EffN",
-            "600G #", "600G Top10%", "600G Top25%", "600G Max name%", "600G HHI", "600G EffN"]
-    _hdr(ww, 3, cols); r = 4
+    # ANNUAL (the June spine snapshot each year)
+    ww.cell(3, 1, "Annual -- the June snapshot each year").font = Font(bold=True, size=11, color="1F4E5F")
+    cols = ["Year"] + conc_cols("R2KG") + conc_cols("600G")
+    _hdr(ww, 4, cols); r = 5
     for y in years:
         a = weight_conc(hold_r[spine_r[y]])
         b = weight_conc(hold_s[spine_s[y]]) if (hold_s and y in spine_s) else None
-        row = [y, a["n"], a["top"][10], a["top"][25], a["max"], a["hhi"], a["effn"]]
-        row += ([b["n"], b["top"][10], b["top"][25], b["max"], b["hhi"], b["effn"]] if b else [None]*6)
-        for c, v in enumerate(row, 1): ww.cell(r, c, v)
+        for c, v in enumerate([y] + conc_row(a) + conc_row(b), 1):
+            ww.cell(r, c, v)
+        r += 1
+    # QUARTERLY -- intra-year run-up: a name/cohort can balloon between the annual June snapshots, and
+    # the quarter-end (Mar/Jun/Sep/Dec) top-N weight makes that visible. Weight-only, so both indices
+    # are fully covered regardless of fundamentals coverage.
+    from r2k_universe import quarterly_weight_conc, quarter_label
+    qr_ = dict(quarterly_weight_conc("R2KG", top_ns=SHOW))
+    qs_ = dict(quarterly_weight_conc("SP600G", top_ns=SHOW))
+    qdates = sorted(set(qr_) | set(qs_))
+    r += 1
+    ww.cell(r, 1, "Quarterly -- top-N weight at each quarter-end (Mar/Jun/Sep/Dec); shows how much the "
+            "top names run up WITHIN a calendar year, between the annual snapshots above").font = Font(bold=True, size=11, color="7A3B2E")
+    r += 1
+    _hdr(ww, r, ["Quarter"] + conc_cols("R2KG") + conc_cols("600G"), fill=HDR2); r += 1
+    for d in qdates:
+        for c, v in enumerate([quarter_label(d)] + conc_row(qr_.get(d)) + conc_row(qs_.get(d)), 1):
+            ww.cell(r, c, v)
         r += 1
     ww.cell(r + 1, 1, "HHI = sum of squared % weights (higher = more concentrated). "
-            "Effective N = 1/sum(share^2) = how many equal-weight names give the same concentration.")
+            "Effective N = 1/sum(share^2) = how many equal-weight names give the same concentration. "
+            "Top-N% = combined index weight of the N largest names. Quarterly rows use the quarter-end "
+            "holdings; annual rows use the June snapshot the rest of the workbook is built on.")
+    ww.freeze_panes = "B5"
 
     # ---- Return Breadth (R2000G) ----
     wb2 = wb.create_sheet("Return Breadth")
@@ -203,7 +228,9 @@ def build():
     for i, ln in enumerate([
         "R2000G concentration & breadth deep-dive.",
         "Weight Concentration: from index weights only (both benchmarks). HHI and effective-N are standard",
-        "   concentration measures; Max name% is the single largest constituent's weight.",
+        "   concentration measures; Max name% is the single largest constituent's weight. Shows Top 5/10/25/50%.",
+        "   ANNUAL rows use the June snapshot; QUARTERLY rows add every quarter-end (Mar/Jun/Sep/Dec) so the",
+        "   within-year run-up of the top names -- which the annual snapshot misses -- is visible.",
         "Return Breadth: per calendar year, joins constituent monthly returns to beginning-of-year membership.",
         "   % Beat index and the cap-wtd-vs-median spread show how concentrated the year's leadership was.",
         "Return Concentration: over the manager window, the share of the index's return from the top 10/25/50 names.",
