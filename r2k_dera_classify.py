@@ -1055,7 +1055,7 @@ def run(facts_rows, sic_of=None, name_of=None, sic_by_key=None):
         sector = detect_sector(by[key])
         rec, prov, ident = classify_filing(by[key], sector)
         # COMMODITY/SECURITIES BROKER-DEALER GROSS-UP. A physical-commodity dealer reports "Revenues"
-        # grossed up by pass-through commodity sales -- StoneX (SIC 6200) FY2025: $132B gross vs ~$4B net
+        # grossed up by pass-through commodity sales -- StoneX FY2025: $132B gross vs ~$4B net
         # operating revenue -- so its top line is not comparable to an operating company's and would swamp
         # any index revenue/margin/valuation aggregate. Adopt NET operating revenue (Revenues - cost of
         # physical commodities = the filer's own GROSS PROFIT) as the top line and mark COGS/GP n/a -- the
@@ -1064,19 +1064,21 @@ def run(facts_rows, sic_of=None, name_of=None, sic_by_key=None):
         #   cost-of-revenue line the engine recognizes ~FY2019, so from then on only GrossProfit survives
         #   (cost_of_revenue is blank) -- a cost-only test would silently miss exactly the recent years.
         #   Fall back to Revenues-COGS when GrossProfit is absent.
-        #   SIC set is DELIBERATELY {6200, 6221} (security & commodity brokers / commodity-contract
-        #   dealers), NOT 6199 -- 6199 also holds BITCOIN MINERS (RIOT/MARA/Bitfarms) whose mining
-        #   cost-of-revenue can exceed revenue in a bad year; netting those down would zero out real
-        #   mining revenue.
+        #   SIC gate is {6200, 6211, 6221} (security & commodity brokers / dealers), NOT 6199 -- 6199 also
+        #   holds BITCOIN MINERS (RIOT/MARA/Bitfarms) whose mining cost-of-revenue can exceed revenue in a
+        #   bad year; netting those down would zero out real mining revenue. 6211 IS included: it is only a
+        #   coarse pre-filter -- the matched-book test below is what actually discriminates, and StoneX
+        #   filed under 6211 for FY2011-13 (grossing up all along). Verified against the full filing
+        #   universe: across all 25 filers ever tagged 6200/6211/6221, only StoneX passes the test.
         #   SIC LOOKUP IS FISCAL-YEAR-SPECIFIC (point-in-time). A filer's SIC can drift over time --
         #   StoneX was 6211 (2011-13) -> 6221 (2014-15) -> 6200 (2016+) -- and a per-CIK map built with
-        #   setdefault() keeps only the FIRST SIC seen (6211), which our set excludes, so the rule would
-        #   never fire on its later 6200/6221 years. Key on (cik, fiscal_year) with the as-filed SIC for
-        #   that year; fall back to the per-CIK map only when a year has no index SIC.
+        #   setdefault() keeps only the FIRST SIC seen, so keying per-CIK could miss later years if the
+        #   first SIC were outside the gate. Key on (cik, fiscal_year) with the as-filed SIC for that
+        #   year; fall back to the per-CIK map only when a year has no index SIC.
         #   MATCHED-BOOK SIGNATURE, not SIC alone: require BOTH a tiny gross margin (<6%) AND a tiny
         #   net-income margin (<1%). A matched-book dealer's "Revenues" are pass-through, so it earns a
         #   sliver of net income on huge sales (StoneX: gross 0.6-4.8%, net 0.02-0.39%). This EXCLUDES a
-        #   real operating company that merely carries a 6200/6221 SIC -- e.g. Seaboard, a diversified
+        #   real operating company that merely carries such a SIC -- e.g. Seaboard, a diversified
         #   agribusiness/commodity-trading/shipping conglomerate, runs 6-11% gross and 3-6% NET margins,
         #   so it keeps its gross revenue. (Net margin is the decisive test; the gross-margin ceiling
         #   catches a real company's occasional loss year, which alone would pass a net-margin filter.)
@@ -1084,7 +1086,7 @@ def run(facts_rows, sic_of=None, name_of=None, sic_by_key=None):
         _rev, _cogs = rec.get("revenue"), rec.get("cost_of_revenue")
         _gp, _ni = rec.get("gross_profit"), rec.get("net_income")
         _net = _gp if _gp is not None else ((_rev - _cogs) if (_rev is not None and _cogs is not None) else None)
-        if (_sic in ("6200", "6221") and _rev and _rev > 0
+        if (_sic in ("6200", "6211", "6221") and _rev and _rev > 0
                 and _net is not None and 0 <= _net < 0.06 * _rev
                 and _ni is not None and abs(_ni) < 0.01 * _rev):
             rec["revenue"] = _net
@@ -1554,9 +1556,10 @@ def selftest():
     bro = run(mk("BRK"), {"BRK": "6200"})[0][0]        # StoneX-type commodity dealer -> net down
     mnr = run(mk("MNR"), {"MNR": "6199"})[0][0]        # bitcoin miner -> must KEEP gross revenue
     nonb = run(mk("MFR"), {"MFR": "3550"})[0][0]       # manufacturer -> keeps gross revenue
-    # SIC-drift regression: per-CIK map (setdefault) locks the FIRST SIC (6211, excluded), but the
-    # fiscal-year map has the as-filed 6200 for this year -> fy-specific SIC must win and net it down.
-    drift = run(mk("DRF"), {"DRF": "6211"}, None, {("DRF", "2024"): "6200"})[0][0]
+    # SIC-drift regression: per-CIK map (setdefault) locks a FIRST SIC outside the gate (6199, a miner
+    # SIC), but the fiscal-year map has the as-filed 6200 for this year -> fy-specific SIC must win and
+    # net it down (proving the point-in-time lookup overrides a stale per-CIK SIC).
+    drift = run(mk("DRF"), {"DRF": "6199"}, None, {("DRF", "2024"): "6200"})[0][0]
     # GP-ONLY: StoneX stops tagging a recognizable cost line ~FY2019 -> only GrossProfit survives (no
     # cost_of_revenue). The rule must still fire off GrossProfit, else the recent (largest) years leak.
     _shape_gp = {"Revenues": 100000, "GrossProfit": 3000, "OperatingIncomeLoss": 500,
