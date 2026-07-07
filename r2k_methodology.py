@@ -88,6 +88,10 @@ feed, so each number is traceable to an as-filed 10-K.
   a filer is carried on a **net operating-revenue** basis (revenue net of the pass-through cost), the
   same convention banks and insurers already use, and only where a strict matched-book signature holds
   (tiny gross margin *and* tiny net margin), so genuine low-margin operating companies are untouched.
+- **Consolidated registrant only.** Filers with public debt file Rule 3-10 *guarantor consolidating
+  schedules* — a parent-only and a subsidiary column carrying the same XBRL tags as the consolidated
+  company. Only the consolidated registrant's facts (no co-registrant, no segment dimension) are kept,
+  so a parent holdco's tiny stand-alone figure can never overwrite the consolidated total.
 - **Reliability is measured, not assumed.** The `Data Reliability` tab reports, by index weight, how
   much of the reconstruction ties out cleanly versus is flagged for review, so the reader can weight
   the conclusions. Headline results are dominated by the high-confidence core.
@@ -124,6 +128,11 @@ shape what a *blank* top line means:
   convention (sum of numerators / sum of denominators — the index treated as one big company), which is
   the index-representative measure and is validated against FactSet. Per-name distribution views also
   show weight-weighted-average and median, because tiny-revenue loss-makers distort a simple average.
+- **Each company counted once in dollar totals.** A name can sit in the index under two share classes
+  (e.g. `CENTA`/`CENT`) or appear twice in a holdings file; both rows carry the same company's identical
+  fundamentals. Dollar-level totals (index revenue, net income, the $-aggregate margins) **de-duplicate
+  by company** so a dual-listed name's financials are not double-counted, while the weight-based quality
+  percentages keep every row (the split weights correctly sum to the company's true index weight).
 - **Profitability cohorts are point-in-time labels** from each name's as-filed net-income history:
   *Profitable* (net income > 0 in the latest filed year), *Fallen* (was profitable, now not),
   *Never-profitable* (no profitable year on record), *Unknown* (net income not reported). The

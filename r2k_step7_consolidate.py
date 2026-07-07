@@ -363,7 +363,10 @@ GLOSSARY = [
      "Never-profitable = no profitable year on record; Unknown = NI not reported."),
     ("Unprofitable by weight", "Index weight in names with negative net income (or operating income).",
      "The headline structural difference; OI version strips below-the-line items."),
-    ("No-revenue weight", "Index weight in names reporting no/zero revenue.", "Pre-commercial / development-stage companies."),
+    ("No-revenue weight", "Index weight in GENUINELY pre-commercial names (no/zero revenue). Financial-sector "
+     "filers (banks/insurers/mortgage REITs/asset managers) report net-interest/premium/fee top lines, not a "
+     "'Revenue' tag, so their blank revenue is definitional and they are EXCLUDED from this cohort.",
+     "Pre-commercial / development-stage companies -- overwhelmingly biotech."),
     ("Point-in-time (no look-ahead)", "Each name's fiscal year = the latest 10-K FILED before the snapshot.",
      "Avoids using financials that weren't yet public; survivorship-free membership."),
     ("As-filed", "Values as originally reported in each 10-K (by original accession).", "No restatement/vintage blending."),

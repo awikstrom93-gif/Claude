@@ -260,16 +260,32 @@ exposed to a single fiscal year's outlier than the annual forward-12m cut.
 
 ## Quick reference — a normal data refresh (after the one-time PHASE 1)
 
+**One command (recommended).** `r2k_recover_all.py --full` runs the whole chain in the correct order
+and stops on the first failure — classify → revenue_recover → metric_recover → to_fundamentals →
+plausibility → report → crosscheck. It sequences classify *before* the recover steps so the resolved
+file is refreshed after a classify change (a stale resolved file would otherwise shadow the new run):
+
+```
+python r2k_dera_extract.py             # ONLY when the DERA engine changed (CI/UN/coreg capture) — LONG
+python r2k_recover_all.py --full       # classify -> recover -> to_fundamentals -> plausibility -> report -> crosscheck
+python r2k_refresh_charts_data.py
+python r2k_memo.py                      # regenerate R2000G_SCG_Benchmark_Review_Memo.md from the workbook
+python r2k_methodology.py               # regenerate METHODOLOGY.md (reader's guide) from the workbook
+```
+
+Equivalent manual chain (if you want to run stages individually):
+
 ```
 python r2k_dera_classify.py            # back up edgar_annual_fundamentals_ASFILED.csv first
 python r2k_metric_recover.py           # recover blank revenue/op-inc/equity/cash/GP/FCF (identity-first) -> fundamentals_dera_resolved.csv
 python r2k_dera_to_fundamentals.py
 python r2k_plausibility.py
-python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
-python r2k_refresh_charts_data.py
-python r2k_memo.py                      # regenerate R2000G_SCG_Benchmark_Review_Memo.md from the workbook
-python r2k_methodology.py               # regenerate METHODOLOGY.md (reader's guide) from the workbook
+python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard (incl. duplicate-cik tripwire)
 ```
+
+Note: `r2k_dera_extract.py` (PHASE 1 step 4) only needs re-running when the extraction engine itself
+changes — e.g. the combined-CI / uncategorized-statement capture or the consolidated-registrant
+(coreg) filter — since those alter `dera_facts.csv`. A pure classify/tag change does not need it.
 
 ---
 
@@ -290,6 +306,14 @@ Use these to see exactly what a change moved before assembling the full report.
 
 These are the probe-first toolkit. Each reads the cached outputs (no pipeline re-run) and writes a
 focused report; you then make one precise fix in `r2k_dera_classify.py`, re-run phase 2, and measure.
+
+- `python extract_probe.py` — for a chosen set of `(cik, fiscal_year)` filings, dumps the RAW DERA
+  `num.txt`/`pre.txt` (with the segment dimension the extract drops) to pin WHY a revenue value was
+  lost: `SEG-DROP` (total only segment-dimensioned), `DDATE!=PER`, a combined-CI / uncategorized (UN)
+  presentation the gate dropped, or genuinely not tagged. This is the tool that found the CI/UN drops.
+- `python audit_probe.py` — dumps the raw balance-sheet / revenue facts (with segment + co-registrant)
+  for a target set, to distinguish a missing/segment-only total, a guarantor-schedule (coreg) overwrite
+  (Griffon), and a legitimate Up-C parent-equity artifact from a real capture error.
 
 - `python r2k_metric_gaps.py` — the revenue-gap audit generalized to EVERY fundamental: for each
   panel metric, the index-weighted `blank%` (missing among covered names) and `recoverable%` (of that,
