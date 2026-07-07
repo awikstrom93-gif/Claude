@@ -92,6 +92,32 @@ feed, so each number is traceable to an as-filed 10-K.
   much of the reconstruction ties out cleanly versus is flagged for review, so the reader can weight
   the conclusions. Headline results are dominated by the high-confidence core.
 
+## Revenue capture — what "no revenue" means, and one bounded limitation
+
+The top line is captured from the as-filed consolidated figure under a broad tag set — the standard
+`Revenues` / `RevenueFromContractWithCustomer` concepts plus industry-specific operating lines
+(homebuilding, hospital patient-service, marine, mining, fitness, franchisor) — and regardless of
+whether the filer presents its income statement as a standalone statement, a **combined statement of
+operations and comprehensive income**, or an **uncategorized presentation**. Two deliberate rules
+shape what a *blank* top line means:
+
+- **Financial-sector filers are not "no-revenue."** Banks, insurers, mortgage REITs, asset managers and
+  BDCs report a net-interest / premium / fee top line, not a `Revenue` tag, so a blank revenue is
+  *definitional*, not a sign of a pre-commercial company. These names are carried without a revenue
+  figure and are **excluded from the "no-revenue" cohort** — otherwise a bank would masquerade as a
+  clinical-stage biotech. The no-revenue weight therefore reads as *genuinely pre-commercial* names,
+  which are overwhelmingly biotech (the driver of the 2026 step-up).
+- **Bounded limitation — segment-only revenue totals.** A small number of filers tag their consolidated
+  revenue total *only* with a business-segment dimension and never file an undimensioned company-level
+  figure (e.g. **M.D.C. Holdings 2012–2017**, **Meritage Homes 2018+**, and a few others). Because the
+  pipeline adopts only the as-filed consolidated value and does **not** reconstruct a total by summing
+  segment members — which would risk double-counting nested sub-tiers or omitting inter-segment
+  eliminations — these company-years are left blank rather than filled with an inferred number. The
+  effect is bounded and immaterial: it is **under ~1 percentage point of index weight in any year**, is
+  confined to historical years (mostly names no longer in the index), and does **not** touch the current
+  2026 reading. This is a conscious accuracy-over-coverage choice: a blank is more honest than a
+  reconstructed total that could be wrong.
+
 ## How the analysis was done (conventions)
 
 - **Two aggregation lenses, stated explicitly.** Index-level figures use the **dollar-aggregate**
