@@ -109,6 +109,10 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "HealthCareOrganizationRevenue", "NetRevenueLessProvisionForUncollectibles",
        "HealthCareOrganizationPatientServiceRevenue", "MarineServicesRevenue",
        "RevenueFromSaleOfGoods", "TotalCenterRevenue", "FranchiseRevenue",
+       # franchisor total (RE/MAX -- the sum of continuing-franchise-fee/broker/brokerage lines) and
+       # the E&P "revenues and other operating income" top line (BKV) -- both verified as-filed as the
+       # undimensioned current-period total that classify was leaving blank for lack of the tag.
+       "FranchisorRevenue", "RevenuesAndOtherOperatingIncome",
        # sector top-line tags verified as-filed vs the target (r2k_gap_tags.py), LOW priority so the
        # canonical tags above always win: lessor lease income, insurance-broker commissions, asset-
        # manager advisory fees, financial interest+dividend income -- fill names the standard list missed.

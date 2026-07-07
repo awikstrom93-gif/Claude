@@ -142,17 +142,24 @@ def process_quarter(quarter, targets):
             # while NI survived off the cash-flow top line). Treat CI like IS: emit its lines and let the
             # tag-role classifier pick what it needs. The extra OCI lines carry tags no role list adopts,
             # and a duplicate NetIncomeLoss (also on IS/CF) is the identical value -> no double count.
-            if stmt not in ("IS", "BS", "CF", "CI"):
+            # UN = a face-statement line the filer's presentation linkbase never role-tagged (Life Time,
+            # Select Medical post-2019: their whole income statement is emitted under stmt=UN). The value
+            # is still a real consolidated current-period fact -- but UN also covers footnote/schedule
+            # lines, so keep a UN row ONLY when it JOINS a kept num value below (undimensioned, current
+            # period, qtrs 0/4). That rescues the dropped revenue without emitting UN noise.
+            if stmt not in ("IS", "BS", "CF", "CI", "UN"):
                 continue
             tag = p[ctag] if ctag < len(p) else ""
             ver = p[cver] if cver < len(p) else ""
-            # pick the value: prefer qtrs 4 for IS/CI/CF, 0 for BS; fall back to the other
+            # pick the value: prefer qtrs 4 for IS/CI/CF/UN, 0 for BS; fall back to the other
             qpref = ("0", "4") if stmt == "BS" else ("4", "0")
             val = uom = None
             for q in qpref:
                 hit = vals[adsh].get((tag, ver, q))
                 if hit:
                     val, uom = hit; break
+            if stmt == "UN" and val is None:
+                continue                                    # UN kept only when it carries a joined value
             if val is not None and ver.startswith(("us-gaap", "ifrs")):
                 tax_versions[adsh].append(ver)
             rowsbuf[adsh].append([stmt,
@@ -206,7 +213,13 @@ def selftest():
         # ONLY under stmt=CI (see pre.txt), NI reappears on the cash flow. Undimensioned totals exist.
         "0002\tSalesRevenueNet\tus-gaap/2024\t20241231\t4\tUSD\t\t\t2000\t\n"
         "0002\tNetIncomeLoss\tus-gaap/2024\t20241231\t4\tUSD\t\t\t150\t\n"
-        "0002\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t8000\t\n", encoding="utf-8")
+        "0002\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t8000\t\n"
+        # 0003 = a filer whose income statement is emitted under stmt=UN (Life Time / Select Medical
+        # post-2019). Revenue total joins a kept num value (rescued); the UN 'disaggregation' line has
+        # NO undimensioned current-period num value (only a segment one, dropped) -> must stay dropped.
+        "0003\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\t\t\t3000\t\n"
+        "0003\tDisaggRevenue\tus-gaap/2024\t20241231\t4\tUSD\tProduct\t\t3000\t\n"
+        "0003\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t9000\t\n", encoding="utf-8")
     (zips / "2025q1" / "pre.txt").write_text(
         "adsh\treport\tline\tstmt\tinpth\trfile\ttag\tversion\tplabel\tnegating\n"
         "0001\t2\t1\tIS\t0\tR\tRevenues\tus-gaap/2024\tTotal revenue\t0\n"
@@ -215,12 +228,16 @@ def selftest():
         "0001\t9\t1\tCP\t0\tR\tDocumentType\tdei/2024\tdoc\t0\n"             # non-statement (drop)
         "0002\t2\t1\tCI\t0\tR\tSalesRevenueNet\tus-gaap/2024\tNet sales\t0\n"   # revenue on the CI statement
         "0002\t3\t1\tCF\t0\tR\tNetIncomeLoss\tus-gaap/2024\tNet income\t0\n"
-        "0002\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n", encoding="utf-8")
+        "0002\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n"
+        "0003\t2\t1\tUN\t0\tR\tRevenues\tus-gaap/2024\tRevenues\t0\n"            # revenue under stmt=UN -> rescued (joins)
+        "0003\t2\t2\tUN\t0\tR\tDisaggRevenue\tus-gaap/2024\tDisaggregation\t0\n"  # UN, no undimensioned num -> dropped
+        "0003\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n", encoding="utf-8")
     idx = d / "dera_filing_index.csv"
     idx.write_text("adsh,cik,name,sic,countryba,form,fye,period,fy,fp,filed,accepted,prevrpt,detail,"
                    "quarter,is_ifrs,is_original\n"
                    "0001,1664703,BLOOM,3690,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
-                   "0002,1664704,COMBO,2000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
+                   "0002,1664704,COMBO,2000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
+                   "0003,1664705,UNCAT,8000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
                    encoding="utf-8")
     global DERA_DIR, INDEX, OUT
     DERA_DIR = zips; INDEX = idx; OUT = d / "facts.csv"
@@ -237,12 +254,19 @@ def selftest():
     ci = byt.get(("1664704", "SalesRevenueNet"))
     ok_ci = (ci is not None and ci["value"] == "2000" and ci["stmt"] == "CI"
              and byt[("1664704", "NetIncomeLoss")]["value"] == "150")
+    # UN rescue: the stmt=UN revenue that joins a kept num value must come through; the UN disaggregation
+    # line (segment-only, no undimensioned num) must stay dropped.
+    un = byt.get(("1664705", "Revenues"))
+    ok_un = (un is not None and un["value"] == "3000"
+             and ("1664705", "DisaggRevenue") not in byt)
     for r in got:
         print(f"   cik {r['cik']} {r['stmt']:<3} {r['tag']:<16} = {r['value']:<6} tax={r['taxonomy']}")
     print(f"\n  SELFTEST: comparative+segment+nonstatement excluded, current-period kept -> "
           f"{'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST: combined-CI-statement revenue captured (SalesRevenueNet=2000 via stmt=CI) -> "
           f"{'PASS' if ok_ci else 'FAIL'}")
+    print(f"  SELFTEST: stmt=UN revenue rescued when it joins a value (Revenues=3000), UN noise dropped -> "
+          f"{'PASS' if ok_un else 'FAIL'}")
 
 
 if __name__ == "__main__":
