@@ -35,7 +35,7 @@ from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import (load_fundamentals, company_metrics, pick_fy0,
-                                 aggregate, dollar_agg, load_maps)
+                                 aggregate, dollar_agg, load_maps, dedup_cik)
 
 OUT = BASE / "R2000G_vs_SP600G_Quality.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))     # annual spine: snapshot nearest this month
@@ -89,7 +89,9 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         if not cf: continue
         fy0 = pick_fy0(cf, snap_dt)
         if fy0 is None: continue
-        cov.append((company_metrics(cf, fy0), h["weight"]))
+        m = company_metrics(cf, fy0)
+        m["_cik"] = _cik or ""                # for dedup of dual share classes in the dollar totals
+        cov.append((m, h["weight"]))
     out = {"n_members": len(rows), "n_cov": len(cov), "wt_all": wt_all,
            "wt_cov": sum(w for _, w in cov), "sectors": sect}
     # concentration (membership-only -- always available, even with no fundamental coverage)
@@ -106,6 +108,8 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         cls = [(m, w) for m, w in cov if m[flag] is not None]
         if not cls: return None
         return 100 * sum(w for m, w in cls if m[flag] is False) / sum(w for _, w in cls)
+    # one row per company for the dollar totals (dual share classes share a cik + identical fundamentals)
+    covd = dedup_cik([m for m, _ in cov], key="_cik")
     out.update(
         unprof_ni=upct("prof_ni"), unprof_oi=upct("prof_oi"),
         # no-revenue = genuinely pre-commercial only: exclude financials (bank/insurer/mREIT/asset-
@@ -118,17 +122,17 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         gross_m=ag("gross_margin")["wavg"], op_m=ag("op_margin")["wavg"], net_m=ag("net_margin")["wavg"],
         # dollar-aggregate margins (sum income / sum revenue) -- the index-level convention; matches
         # FactSet/published index fundamentals. wavg-of-ratios is distorted by tiny-revenue/huge-loss names.
-        op_da=dollar_agg([(m["operating_income"], m["revenue"]) for m, _ in cov]),
-        net_da=dollar_agg([(m["net_income"], m["revenue"]) for m, _ in cov]),
-        gross_da=dollar_agg([(m["gross_profit"], m["revenue"]) for m, _ in cov]),
+        op_da=dollar_agg([(m["operating_income"], m["revenue"]) for m in covd]),
+        net_da=dollar_agg([(m["net_income"], m["revenue"]) for m in covd]),
+        gross_da=dollar_agg([(m["gross_profit"], m["revenue"]) for m in covd]),
         roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, and the views)
-        roe_da=dollar_agg([(m["net_income"], m["_aeq"] if m.get("_aeq") is not None else m["equity"]) for m, _ in cov]),
-        roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(m["_nopat"], m["_ic"]) for m, _ in cov]),
+        roe_da=dollar_agg([(m["net_income"], m["_aeq"] if m.get("_aeq") is not None else m["equity"]) for m in covd]),
+        roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(m["_nopat"], m["_ic"]) for m in covd]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],
         rev_yoy=ag("rev_yoy")["wavg"], rev_cagr3=ag("rev_cagr3")["median"], rule40=ag("rule_of_40")["median"],
         de_w=ag("d_to_equity")["wavg"], dcap_w=ag("d_to_capital")["wavg"],
-        tot_rev=sum(m["revenue"] for m, _ in cov if m["revenue"]) / 1e9,
+        tot_rev=sum(m["revenue"] for m in covd if m["revenue"]) / 1e9,
     )
     return out
 

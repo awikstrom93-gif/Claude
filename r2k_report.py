@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 from r2k_universe import BASE, get_panel, by_index_year
+from r2k_step3_analytics import dedup_cik
 
 WORKBOOK = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
 PIPELINE = [
@@ -54,7 +55,9 @@ def _panel_headline():
     grp = by_index_year(get_panel(index="R2KG"))
     out = {}
     for (ix, y), members in grp.items():
-        cov = [r for r in members if r["covered"]]
+        # dedupe by cik so dual share classes / repeated holdings count each company's dollars once --
+        # matches the deduped totals the workbook tabs now report (index_quality / quality-trends).
+        cov = dedup_cik([r for r in members if r["covered"]])
         rev = sum(r["revenue"] for r in cov if r["revenue"]) / 1e9
         ni = sum(r["net_income"] for r in cov if r["net_income"] is not None) / 1e9
         out[y] = (round(rev, 1), round(ni, 1))
@@ -83,8 +86,25 @@ def _tab_headline(ws, rev_col, ni_col=None):
     return out
 
 
+def _dup_double_count():
+    """{year: naive$B - deduped$B} for R2000G revenue: how much a per-row sum would double-count
+    duplicate constituents (dual share classes / repeated holdings). Non-zero means duplicates exist and
+    the reported tabs MUST dedupe -- the guard below then checks the tabs match the DEDUPED headline, so
+    a tab that ever reverts to naive summing diverges and fails."""
+    grp = by_index_year(get_panel(index="R2KG"))
+    out = {}
+    for (ix, y), members in grp.items():
+        cov = [r for r in members if r["covered"]]
+        naive = sum(r["revenue"] for r in cov if r["revenue"]) / 1e9
+        ded = sum(r["revenue"] for r in dedup_cik(cov) if r["revenue"]) / 1e9
+        out[y] = round(naive - ded, 2)
+    return out
+
+
 def guard():
-    """Cross-check: panel headline == R2KG Quality Trends (panel-sourced) == Qual R2000G (step6)."""
+    """Cross-check: panel headline == R2KG Quality Trends (panel-sourced) == Qual R2000G (step6).
+    The panel headline and both tabs dedupe by cik, so a duplicate constituent's dollars count once and
+    a tab that ever reverts to per-row summing would diverge from the deduped headline and FAIL here."""
     if not WORKBOOK.exists():
         print(f"  !! {WORKBOOK.name} not found -- run the full build first.")
         return False
@@ -92,6 +112,14 @@ def guard():
     wb = openpyxl.load_workbook(WORKBOOK, data_only=True)
     panel = _panel_headline()
     ok = True
+
+    dup = _dup_double_count()
+    dup_years = {y: v for y, v in dup.items() if abs(v) > GUARD_TOL}
+    if dup_years:
+        worst = max(dup_years.items(), key=lambda kv: abs(kv[1]))
+        print(f"  note: {len(dup_years)} year(s) carry duplicate constituents (dual share classes / repeated "
+              f"holdings); deduped headline counts each company once (worst {worst[0]}: ${worst[1]:.1f}B "
+              f"would be double-counted). Tabs are checked against the DEDUPED headline below.")
 
     # R2KG Quality Trends: col B = Total Rev $B, col C = Total NI $B
     if "R2KG Quality Trends" in wb.sheetnames:

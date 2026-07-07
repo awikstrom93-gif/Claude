@@ -95,6 +95,25 @@ def dollar_agg(nd):
     return safe_div(sn, sd)
 
 
+def dedup_cik(rows, key="cik"):
+    """Collapse duplicate constituents to ONE row per company for DOLLAR-LEVEL aggregation.
+
+    A company can appear twice in the same index-snapshot -- dual share classes (Central Garden
+    CENTA/CENT, Rush RUSHA/RUSHB) or a repeated holdings row (same ticker twice). Both rows carry the
+    SAME cik and therefore IDENTICAL as-filed fundamentals, so summing per row double-counts that
+    company's revenue / net income / etc. in any dollar total (Total Rev $B, dollar-aggregate margins).
+
+    Use this ONLY for dollar sums and dollar_agg(); do NOT use it for weight-based percentages -- there
+    the split weights of the two rows correctly sum to the company's true index weight, so every row
+    must be kept. Rows with a blank/missing cik are never merged (kept distinct via a unique fallback).
+    """
+    seen = {}
+    for r in rows:
+        k = (r.get(key) or "").strip()
+        seen[k if k else ("__nocik__", id(r))] = r     # first row per cik wins; fundamentals are identical
+    return list(seen.values())
+
+
 # ---------- loaders ----------
 def load_fundamentals():
     facts = {}

@@ -29,7 +29,7 @@ from pathlib import Path
 
 # --- reuse the proven heavy logic verbatim (no reimplementation of the accounting/metrics math) ---
 from r2k_step3_analytics import (load_fundamentals, load_maps, pick_fy0, company_metrics,
-                                  find_holdings, aggregate, dollar_agg)
+                                  find_holdings, aggregate, dollar_agg, dedup_cik)
 from r2k_perf_io import load_monthly_holdings, ntk
 
 BASE = Path(os.environ.get("R2KG_BASE", "."))
@@ -450,6 +450,9 @@ def index_quality(members, tops=(10, 25, 50)):
     colk = lambda k: [(r[k], r["weight"]) for r in cov]
     ag = lambda k: aggregate(colk(k), winsor=True)
     wtot = sum(r["weight"] for r in cov) or 1.0
+    # dollar-level totals must count each company ONCE -- dual share classes / repeated holdings share a
+    # cik and identical fundamentals, so summing per row double-counts them. Weight-% metrics keep `cov`.
+    covd = dedup_cik(cov)
 
     def upct(flag):
         cls = [r for r in cov if r[flag] is not None]
@@ -468,17 +471,17 @@ def index_quality(members, tops=(10, 25, 50)):
         w_fallen=100 * sum(r["weight"] for r in cov if r["cohort"] == "fallen") / wtot,
         w_never=100 * sum(r["weight"] for r in cov if r["cohort"] == "never_profitable") / wtot,
         gross_m=ag("gross_margin")["wavg"], op_m=ag("op_margin")["wavg"], net_m=ag("net_margin")["wavg"],
-        op_da=dollar_agg([(r["operating_income"], r["revenue"]) for r in cov]),
-        net_da=dollar_agg([(r["net_income"], r["revenue"]) for r in cov]),
-        gross_da=dollar_agg([(r["gross_profit"], r["revenue"]) for r in cov]),
+        op_da=dollar_agg([(r["operating_income"], r["revenue"]) for r in covd]),
+        net_da=dollar_agg([(r["net_income"], r["revenue"]) for r in covd]),
+        gross_da=dollar_agg([(r["gross_profit"], r["revenue"]) for r in covd]),
         roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, the views)
-        roe_da=dollar_agg([(r["net_income"], r["_aeq"] if r.get("_aeq") is not None else r["equity"]) for r in cov]),
-        roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(r["_nopat"], r["_ic"]) for r in cov]),
+        roe_da=dollar_agg([(r["net_income"], r["_aeq"] if r.get("_aeq") is not None else r["equity"]) for r in covd]),
+        roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(r["_nopat"], r["_ic"]) for r in covd]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],
         rev_yoy=ag("rev_yoy")["wavg"], rev_cagr3=ag("rev_cagr3")["median"], rule40=ag("rule_of_40")["median"],
         de_w=ag("d_to_equity")["wavg"], dcap_w=ag("d_to_capital")["wavg"],
-        tot_rev=sum(r["revenue"] for r in cov if r["revenue"]) / 1e9,
+        tot_rev=sum(r["revenue"] for r in covd if r["revenue"]) / 1e9,
     )
     return out
 

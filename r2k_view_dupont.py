@@ -6,7 +6,7 @@ Leverage, all dollar-aggregated over the covered constituents.
 RUN:  python r2k_view_dupont.py
 """
 from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
-from r2k_step3_analytics import dollar_agg, _p, _x
+from r2k_step3_analytics import dollar_agg, _p, _x, dedup_cik
 
 SHEET = "DuPont"
 TITLE_TEXT = "DuPont: index ROE = Net margin x Asset turnover x Leverage (dollar-aggregate)"
@@ -35,7 +35,7 @@ def dupont_rows(panel):
         # implied ROE == ROE $agg by construction. NOTE: this common universe can be slightly narrower
         # than the headline ROE $agg on Index Quality Trends (which keeps any name with NI+equity), so
         # the check column here is the ROE *of the DuPont universe*, not necessarily the headline ROE.
-        common = [r for r in cov if all(r[k] is not None for k in DUPONT_INPUTS)]
+        common = dedup_cik([r for r in cov if all(r[k] is not None for k in DUPONT_INPUTS)])  # one row/company
         # Use AVERAGE assets/equity (opening+closing) so the DuPont ROE matches the per-name ROE and the
         # ROIC $agg convention; fall back to ending only for an old cached panel without _aeq/_ata. The
         # identity still telescopes: NM x (Rev/avgAssets) x (avgAssets/avgEquity) = NI/avgEquity = ROE.

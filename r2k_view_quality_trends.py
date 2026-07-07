@@ -12,7 +12,7 @@ the existing Russell2000Growth_Analytics.xlsx so you can confirm nothing else mo
 RUN:  python r2k_view_quality_trends.py        # builds the sheet from the panel + diffs vs current
 """
 from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
-from r2k_step3_analytics import aggregate, dollar_agg, _p, _x
+from r2k_step3_analytics import aggregate, dollar_agg, _p, _x, dedup_cik
 
 SHEET = "Index Quality Trends"
 TITLE_TEXT = "Russell 2000 Growth -- Index Quality Trends (weight-weighted / median / dollar-aggregate)"
@@ -44,10 +44,11 @@ def quality_trends_rows(panel):
     out = []
     for yr in years:
         cov = [r for r in panel if int(r["year"]) == yr and r["covered"]]
+        covd = dedup_cik(cov)   # one row per company for dollar totals (dual share classes double-count)
         def col(k): return [(r[k], r["weight"]) for r in cov]
         ag = lambda k: aggregate(col(k), winsor=True)
-        tot_rev = sum(r["revenue"] for r in cov if r["revenue"]) / 1e9
-        tot_ni = sum(r["net_income"] for r in cov if r["net_income"] is not None) / 1e9
+        tot_rev = sum(r["revenue"] for r in covd if r["revenue"]) / 1e9
+        tot_ni = sum(r["net_income"] for r in covd if r["net_income"] is not None) / 1e9
         wtot = sum(r["weight"] for r in cov) or 1
         pct_rev = 100 * sum(r["weight"] for r in cov if r["has_rev"]) / wtot
         ni_cls = [r for r in cov if r["prof_ni"] is not None]
@@ -56,14 +57,14 @@ def quality_trends_rows(panel):
         oi_cls = [r for r in cov if r["prof_oi"] is not None]
         up_oi = (100 * sum(r["weight"] for r in oi_cls if r["prof_oi"] is False) /
                  (sum(r["weight"] for r in oi_cls) or 1)) if oi_cls else None
-        opm_da = dollar_agg([(r["operating_income"], r["revenue"]) for r in cov])
+        opm_da = dollar_agg([(r["operating_income"], r["revenue"]) for r in covd])
         # ROE $agg on AVERAGE equity (matches per-name ROE and ROIC $agg); fall back to ending equity
         # only for an old cached panel that predates the _aeq column.
         aeq = lambda r: r["_aeq"] if r.get("_aeq") is not None else r["equity"]
-        roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in cov])
-        roic_da = dollar_agg([(r["_nopat"], r["_ic"]) for r in cov])
+        roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in covd])
+        roic_da = dollar_agg([(r["_nopat"], r["_ic"]) for r in covd])
         dcap_da = dollar_agg([(r["debt"], (r["debt"] + r["equity"])
-                              if (r["debt"] is not None and r["equity"] is not None) else None) for r in cov])
+                              if (r["debt"] is not None and r["equity"] is not None) else None) for r in covd])
         out.append([snap_of.get(yr, f"{yr}-06-30"), round(tot_rev, 1), round(tot_ni, 1), round(pct_rev, 1),
                     round(up_ni, 1) if up_ni is not None else None,
                     round(up_oi, 1) if up_oi is not None else None,
