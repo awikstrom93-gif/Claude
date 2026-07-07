@@ -22,12 +22,14 @@ from r2k_dera_extract import open_member, header_ix, load_targets
 # (cik, fiscal_year) pairs whose revenue is BLANK in the panel though NI is captured -- the extract-gap
 # suspects (contiguous blank runs with a recognized tag in neighboring years). Edit freely.
 TARGETS = [
-    ("107687", "2016"),   # Winnebago (52/53-wk Aug FYE) -- blank 2014-2020, SalesRevenueNet before/after
-    ("107687", "2018"),   # Winnebago, another blank year
-    ("773141", "2015"),   # MDC (calendar) -- blank 2012-2017, Revenues/RevenueFromContract before/after
-    ("1364099", "2014"),  # Innophos (calendar) -- blank 2012-2016, SalesRevenueNet before/after
-    ("809248", "2016"),   # Carrols (52/53-wk) -- blank 2013-2019
-    ("1320414", "2016"),  # Select Medical (calendar) -- blank 2014+
+    ("773141", "2015"),   # MDC -- SEG-DROP homebuilder (total only under BusinessSegments)
+    ("833079", "2019"),   # Meritage -- homebuilder, blank 2018+ (was captured 2011-17)
+    ("1320414", "2021"),  # Select Medical -- CI fix caught 2014-19 but NOT 2020-23: what changed?
+    ("1838406", "2025"),  # BKV -- nat-gas E&P, in the 2026 snapshot (touches the current headline)
+    ("1856236", "2023"),  # European Wax -- franchise, blank 2021-24
+    ("1856031", "2023"),  # Vivid Seats -- blank 2022-24
+    ("1581091", "2015"),  # RE/MAX -- franchise
+    ("1076195", "2013"),  # Life Time Fitness
 ]
 REVRE = re.compile(r"(revenu|sales|netinterestincome|homebuilding|realestaterevenue)", re.I)
 NIRE = re.compile(r"(netincomeloss|profitloss)$", re.I)
