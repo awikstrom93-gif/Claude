@@ -48,126 +48,137 @@ SUPPORT_TABS = {
 NARRATIVE = r"""
 ## What this review answers
 
-Active US Small-Cap Growth managers, benchmarked to the **Russell 2000 Growth (R2000G)**, lagged that
-index over the recent manager window. This review tests one explanation: that the shortfall is
-**structural** — a property of how the benchmark is built — rather than a loss of manager skill. It
-does so by comparing R2000G against the **S&P SmallCap 600 Growth (S&P600G)**, whose one decisive
-difference is an **earnings screen** (a company needs positive trailing GAAP earnings to enter the
-S&P 600). A quality- or earnings-disciplined manager's portfolio tends to resemble the S&P600G, so the
-gap between the two indices is a clean proxy for the cost — or benefit — of that discipline.
+Active US small-cap growth managers are measured against the Russell 2000 Growth index, and over the
+recent window they lagged it. The question here is whether that shortfall comes from how the benchmark
+is built rather than from weak stock selection.
 
-The argument runs in three moves, each with its own tabs: **(1)** R2000G carries a much larger tail of
-unprofitable, often pre-revenue companies; **(2)** that tail *led* the benchmark over the exact window
-managers were judged on, so avoiding it mechanically caused underperformance; **(3)** over the full
-cycle the same discipline *won* — more return at lower risk. The memo (`R2000G_SCG_Benchmark_Review_Memo.md`)
-states the current figures; this document explains how each was produced.
+The test compares the Russell 2000 Growth with the S&P SmallCap 600 Growth. The two are constructed
+alike but for one consequential difference: S&P requires positive trailing GAAP earnings before a
+company can enter the 600. A manager who applies any earnings or quality discipline ends up holding
+something closer to the S&P index, so the distance between the two benchmarks stands in for what that
+discipline costs, or earns.
 
-## How the fundamentals were built (the data foundation)
+The case is made in three steps, each with its own tabs. First, the Russell index carries a much larger
+tail of unprofitable, often pre-revenue companies. Second, that tail led the benchmark over exactly the
+window managers were judged on, so screening it out mechanically produced the underperformance. Third,
+across the full cycle the same discipline came out ahead — more return at lower risk. The companion memo
+carries the current figures; this document explains how they were produced.
 
-Every fundamental in this review is reconstructed from the SEC's own filings, not bought from a vendor
-feed, so each number is traceable to an as-filed 10-K.
+## How the fundamentals were built
 
-- **Source: SEC DERA / XBRL Financial Statement Data Sets.** Each quarter's structured facts from every
-  10-K, 20-F and 40-F are indexed and extracted, then a classification engine reconstructs all three
-  statements (income statement, balance sheet, cash flow) for each company-year.
-- **As-filed, by original accession.** Values are taken as *originally* reported in each 10-K — no
-  restatement or vintage blending. What the market saw at the time is what the analysis uses.
-- **Point-in-time, no look-ahead.** A constituent's fiscal year at any snapshot is the **latest 10-K
-  filed before that snapshot** — never financials that were not yet public. Index membership is
-  historical (survivorship-free): a name is in a year only if it was actually in the index then.
-- **Identity-checked reconstruction.** The engine doesn't just copy tags; it enforces accounting
-  identities (the income statement foots to net income, the balance sheet foots, cash-flow D&A ties to
-  the income statement) and only accepts a value when the statement ties out. Blanks left by
-  non-standard XBRL tags are recovered **identity-first** (reconstruct from what must be true), then
-  from validated as-filed tags — a closed loop that shrinks the gap at the source rather than plugging
-  numbers.
-- **Deliberate, documented adjustments** for cases where the raw filing would mislead an index
-  aggregate. The clearest example: a **commodity/securities broker-dealer** (e.g. StoneX) reports
-  "Revenues" grossed up by pass-through physical-commodity sales — tens of billions that are not
-  comparable to an operating company's revenue and would swamp any index revenue or margin total. Such
-  a filer is carried on a **net operating-revenue** basis (revenue net of the pass-through cost), the
-  same convention banks and insurers already use, and only where a strict matched-book signature holds
-  (tiny gross margin *and* tiny net margin), so genuine low-margin operating companies are untouched.
-- **Consolidated registrant only.** Filers with public debt file Rule 3-10 *guarantor consolidating
-  schedules* — a parent-only and a subsidiary column carrying the same XBRL tags as the consolidated
-  company. Only the consolidated registrant's facts (no co-registrant, no segment dimension) are kept,
-  so a parent holdco's tiny stand-alone figure can never overwrite the consolidated total.
-- **Reliability is measured, not assumed.** The `Data Reliability` tab reports, by index weight, how
-  much of the reconstruction ties out cleanly versus is flagged for review, so the reader can weight
-  the conclusions. Headline results are dominated by the high-confidence core.
+Every fundamental here is rebuilt from the SEC filings themselves rather than pulled from a vendor feed,
+so each figure traces back to a specific as-filed 10-K.
 
-## Revenue capture — what "no revenue" means, and one bounded limitation
+The source is the SEC's DERA (XBRL Financial Statement) data sets. For each quarter, the structured
+facts from every 10-K, 20-F, and 40-F are indexed and extracted, and a classification engine reassembles
+the income statement, balance sheet, and cash flow for each company-year.
 
-The top line is captured from the as-filed consolidated figure under a broad tag set — the standard
-`Revenues` / `RevenueFromContractWithCustomer` concepts plus industry-specific operating lines
-(homebuilding, hospital patient-service, marine, mining, fitness, franchisor) — and regardless of
-whether the filer presents its income statement as a standalone statement, a **combined statement of
-operations and comprehensive income**, or an **uncategorized presentation**. Two deliberate rules
-shape what a *blank* top line means:
+Values are read as originally reported in each 10-K, with no restatement or blending of vintages — what
+the market saw at the time is what the analysis uses. Selection is point-in-time: a constituent's fiscal
+year at any snapshot is the latest 10-K filed before that date, never numbers that were not yet public.
+Membership is historical and survivorship-free, so a name appears in a given year only if it was actually
+in the index then.
 
-- **Financial-sector filers are not "no-revenue."** Banks, insurers, mortgage REITs, asset managers and
-  BDCs report a net-interest / premium / fee top line, not a `Revenue` tag, so a blank revenue is
-  *definitional*, not a sign of a pre-commercial company. These names are carried without a revenue
-  figure and are **excluded from the "no-revenue" cohort** — otherwise a bank would masquerade as a
-  clinical-stage biotech. The no-revenue weight therefore reads as *genuinely pre-commercial* names,
-  which are overwhelmingly biotech (the driver of the 2026 step-up).
-- **Bounded limitation — segment-only revenue totals.** A small number of filers tag their consolidated
-  revenue total *only* with a business-segment dimension and never file an undimensioned company-level
-  figure (e.g. **M.D.C. Holdings 2012–2017**, **Meritage Homes 2018+**, and a few others). Because the
-  pipeline adopts only the as-filed consolidated value and does **not** reconstruct a total by summing
-  segment members — which would risk double-counting nested sub-tiers or omitting inter-segment
-  eliminations — these company-years are left blank rather than filled with an inferred number. The
-  effect is bounded and immaterial: it is **under ~1 percentage point of index weight in any year**, is
-  confined to historical years (mostly names no longer in the index), and does **not** touch the current
-  2026 reading. This is a conscious accuracy-over-coverage choice: a blank is more honest than a
-  reconstructed total that could be wrong.
+The engine does more than copy tags across. It enforces the accounting identities — the income statement
+has to foot to net income, the balance sheet has to balance, cash-flow D&A has to tie to the income
+statement — and accepts a value only once the statement ties out. Where a non-standard XBRL tag leaves a
+blank, the gap is filled first from the identities (reconstructing what must be true) and only then from
+validated as-filed tags, which closes the hole at the source instead of patching in a number.
 
-## How the analysis was done (conventions)
+A few adjustments are made deliberately, in the cases where the raw filing would distort an index
+aggregate. A commodity or securities broker-dealer such as StoneX reports "revenue" grossed up by
+pass-through physical-commodity sales — tens of billions that bear no relation to an operating company's
+revenue and would swamp any index total. Those filers are carried on a net operating-revenue basis, the
+treatment banks and insurers already get, and only where a strict matched-book signature holds (gross and
+net margins both near zero), so ordinary low-margin businesses are left alone.
 
-- **Two aggregation lenses, stated explicitly.** Index-level figures use the **dollar-aggregate**
-  convention (sum of numerators / sum of denominators — the index treated as one big company), which is
-  the index-representative measure and is validated against FactSet. Per-name distribution views also
-  show weight-weighted-average and median, because tiny-revenue loss-makers distort a simple average.
-- **Each company counted once in dollar totals.** A name can sit in the index under two share classes
-  (e.g. `CENTA`/`CENT`) or appear twice in a holdings file; both rows carry the same company's identical
-  fundamentals. Dollar-level totals (index revenue, net income, the $-aggregate margins) **de-duplicate
-  by company** so a dual-listed name's financials are not double-counted, while the weight-based quality
-  percentages keep every row (the split weights correctly sum to the company's true index weight).
-- **Profitability cohorts are point-in-time labels** from each name's as-filed net-income history:
-  *Profitable* (net income > 0 in the latest filed year), *Fallen* (was profitable, now not),
-  *Never-profitable* (no profitable year on record), *Unknown* (net income not reported). The
-  *never-profitable* weight is the cleanest expression of the earnings-screen gap.
-- **Attribution is Carino-linked** so that single-period cohort contributions sum *exactly* to the
-  index's multi-period cumulative return — cohort contributions add up to the whole, with a small
-  explicitly-labelled reconstruction residual (coverage + weight drift between snapshots).
-- **The counterfactual is the cleanest test.** Rather than compare two different indices, it rebuilds
-  R2000G's **own** constituents as a "profitable-only" (or ex-biotech) portfolio, reweighted monthly.
-  The gap between the real index path and the screened path *is* the realized cost (or benefit) of the
-  screen, holding the universe fixed. Its full-period result independently lands near the actual
-  S&P600G return — two constructions agreeing that the earnings screen is the mechanism.
-- **The manager window is data-driven, not chosen.** The `Perf Window Proof` tab finds when R2000G's
-  cumulative excess over S&P600G troughed and began a persistent run, and shows a table of candidate
-  windows so the conclusion doesn't hinge on the exact start month.
-- **Ratios use average (opening + closing) denominators** (CFA convention); per-name ratios are
-  winsorized before any averaging.
+Only the consolidated registrant is kept. Filers with public debt include Rule 3-10 guarantor schedules,
+where a parent-only and a subsidiary column carry the same tags as the consolidated company; dropping the
+co-registrant columns stops a parent holding company's small stand-alone figure from overwriting the
+consolidated total.
+
+Reliability is measured, not assumed. The Data Reliability tab reports, by index weight, how much of the
+reconstruction ties out cleanly against how much is flagged for review, so a reader can weigh the
+conclusions accordingly. The headline results rest on the high-confidence core.
+
+## What "no revenue" means
+
+The top line is taken from the consolidated figure as filed, under a broad set of tags — the standard
+Revenues and RevenueFromContractWithCustomer concepts plus industry lines such as homebuilding, hospital
+patient-service, marine, mining, fitness, and franchisor revenue — and it is read wherever the filer puts
+it: on a standalone income statement, on a combined statement of operations and comprehensive income, or
+on an uncategorized one. Two rules then govern what a blank top line actually means.
+
+The first is that financial-sector filers are not counted as having no revenue. Banks, insurers, mortgage
+REITs, asset managers, and BDCs lead with net interest income, premiums, or fees rather than a revenue
+tag, so a blank there is a matter of definition, not a sign of a pre-commercial business. These names are
+carried without a revenue figure and left out of the no-revenue cohort; otherwise a bank would sit
+alongside a clinical-stage biotech. What remains in the cohort is genuinely pre-commercial weight, which
+is overwhelmingly biotech and drives the step-up in 2026.
+
+The second is a bounded limitation. A handful of filers tag their consolidated revenue only with a
+business-segment dimension and never report an undimensioned company total — M.D.C. Holdings from 2012 to
+2017 and Meritage Homes from 2018 on, among a few others. Rather than sum segment members into a total,
+which risks double-counting nested sub-tiers or dropping inter-segment eliminations, these company-years
+are left blank. The effect stays under about one percentage point of index weight in any year, sits
+entirely in historical periods (mostly names no longer in the index), and does not touch the current 2026
+reading. It is a deliberate call to favor accuracy over coverage: a blank says less than a reconstructed
+total that might be wrong.
+
+## Conventions in the analysis
+
+Index-level figures are reported as dollar aggregates — the sum of numerators over the sum of
+denominators, as though the index were one large company — which is the index-representative measure and
+reconciles to FactSet. The per-name distribution views also carry a weight-weighted average and a median,
+because a simple average is thrown off by tiny-revenue names posting large losses.
+
+Each company is counted once in the dollar totals. A name can sit in the index under two share classes
+(Central Garden's CENTA and CENT, for instance) or appear twice in a holdings file, and both rows carry
+the same fundamentals. The dollar totals — index revenue, net income, the dollar-aggregate margins —
+de-duplicate by company so nothing is counted twice, while the weight-based percentages keep every row,
+since the split weights already add up to the company's true index weight.
+
+Profitability cohorts are point-in-time labels drawn from each name's as-filed net-income history:
+profitable (positive net income in the latest filed year), fallen (once profitable, no longer),
+never-profitable (no profitable year on record), and unknown (net income not reported). The
+never-profitable weight is the sharpest single expression of the earnings-screen gap.
+
+Attribution is Carino-linked, so single-period cohort contributions sum exactly to the index's cumulative
+multi-period return, leaving only a small, explicitly labeled residual for coverage and weight drift
+between snapshots.
+
+The counterfactual is the cleanest of the tests. Instead of comparing two different indices, it rebuilds
+the Russell index's own constituents as a profitable-only (or ex-biotech) portfolio, reweighted monthly.
+The distance between the real index path and this screened path is the realized cost or benefit of the
+screen with the universe held fixed, and its full-period result lands close to the actual S&P 600 Growth
+return — two independent constructions pointing at the same mechanism.
+
+The manager window is taken from the data, not chosen. The Perf Window Proof tab locates where the
+Russell index's cumulative excess over the S&P index troughed and began a sustained run, and lays out a
+range of candidate windows so the conclusion does not rest on a single start month.
+
+Ratios use average (opening and closing) denominators, following the CFA convention, and per-name ratios
+are winsorized before any averaging.
 """.strip("\n")
 
 NARRATIVE_ARC = r"""
-## Talking through it in one minute
+## Reading it in a minute
 
-1. **Start with `Qual Comparison` (the "why").** One rule — the S&P 600 earnings screen — creates a
-   persistent gap: R2000G runs many more points of unprofitable and never-profitable weight every year.
-   `Bio Weight & Quality` shows biotech is the embodiment of that gap.
-2. **Move to `Attr Contribution` + `Attr Counterfactual` (the "cost").** Decompose R2000G's return by
-   quality cohort: over the manager window the unprofitable tail led. The counterfactual rebuilds
-   R2000G's own names profitable-only — the sign flips vs. the full cycle, and that flip *is* the
-   manager's shortfall.
-3. **Close with `Perf Summary` + `Perf Window Proof` (the "context").** Over the full cycle the
-   screened index delivered more return at lower risk; the recent window is the cost of the discipline
-   during a low-quality rally, and the window dates are justified from the data, not picked.
+Start with Qual Comparison, the "why." The one rule that separates the indices — S&P's earnings screen —
+opens a gap that persists: the Russell index carries many more points of unprofitable and
+never-profitable weight in every year. Bio Weight & Quality shows that gap made concrete, in biotech.
 
-**Bottom line:** the underperformance is a benchmark-construction effect, not lost skill — which is why
-the S&P SmallCap 600 Growth is often the more representative yardstick for a quality-disciplined mandate.
+Then Attr Contribution and Attr Counterfactual, the "cost." Decomposing the Russell index's return by
+quality cohort shows the unprofitable tail leading over the manager window. The counterfactual rebuilds
+the index's own names profitable-only, and the sign flips against the full cycle; that flip is the
+manager's shortfall.
+
+Finish with Perf Summary and Perf Window Proof, the "context." Over the full cycle the screened index
+returned more at lower risk. The recent window is what the discipline cost during a low-quality rally,
+and the dates come from the data rather than being chosen to fit.
+
+The through-line is that the underperformance reflects how the benchmark is built, not lost skill — which
+is why the S&P SmallCap 600 Growth is often the better yardstick for a quality-disciplined mandate.
 """.strip("\n")
 
 

@@ -108,24 +108,24 @@ revenue / net sales — standardized across filer types (Compustat `REVT` analog
 - **No‑revenue companies** (e.g. clinical‑stage biotech with no product sales): revenue is
   **blank**, and "% of index with revenue" is reported as its own series.
 
-*Presentation independence & consolidated registrant.* The top line is captured wherever the filer
-presents it — a standalone income statement, a **combined statement of operations and comprehensive
-income** (`stmt=CI`), or an **uncategorized presentation** (`stmt=UN`) — and only from the
-**consolidated registrant** (Rule 3‑10 guarantor / parent‑only co‑registrant columns are dropped so a
-parent holdco's stand‑alone figure cannot overwrite the consolidated total). A revenue total that a
-filer tags **only** with a business‑segment dimension (no undimensioned company‑level figure) is left
-**blank** rather than reconstructed from segment members — bounded (§7).
+*Presentation and registrant.* The top line is read wherever the filer presents it — a standalone
+income statement, a combined statement of operations and comprehensive income (`stmt=CI`), or an
+uncategorized presentation (`stmt=UN`) — and only from the consolidated registrant. Rule 3‑10 guarantor
+and parent‑only co‑registrant columns are dropped, so a parent holdco's stand‑alone figure cannot
+overwrite the consolidated total. Where a filer tags its revenue only with a business‑segment dimension
+and never reports an undimensioned company total, revenue is left blank rather than reconstructed from
+the segment members (bounded; see §7).
 
-*"No‑revenue" cohort ≠ blank revenue.* The reported **no‑revenue weight** counts only *genuinely
-pre‑commercial* names. **Financial‑sector filers** (banks, insurers, mortgage REITs, asset managers,
-BDCs — flagged `is_financial`) report a net‑interest / premium / fee top line, not a `Revenue` tag, so
-their blank revenue is *definitional* and they are **excluded from the no‑revenue cohort** (they remain
-in the denominator). The result reads as *pre‑commercial* weight, which is overwhelmingly biotech.
+*The "no‑revenue" cohort is narrower than blank revenue.* The reported no‑revenue weight counts only
+genuinely pre‑commercial names. Financial‑sector filers — banks, insurers, mortgage REITs, asset
+managers, and BDCs, flagged `is_financial` — lead with net interest income, premiums, or fees rather
+than a revenue tag, so their blank revenue is definitional; they are excluded from the cohort but remain
+in the denominator. What is left is pre‑commercial weight, overwhelmingly biotech.
 
-*One company, counted once.* For **dollar‑level totals** (index revenue, net income, $‑aggregate
-margins) a company that sits in the index under two share classes (`CENTA`/`CENT`) or a repeated
-holdings row is **de‑duplicated by CIK** so its identical fundamentals are not double‑counted;
-weight‑based percentages keep every row (the split weights sum to the true index weight).
+*Each company counted once in dollar totals.* When a name sits in the index under two share classes
+(`CENTA`/`CENT`) or appears twice in a holdings file, the dollar‑level totals (index revenue, net income,
+the $‑aggregate margins) de‑duplicate by CIK so its identical fundamentals are not counted twice.
+Weight‑based percentages keep every row, since the split weights already sum to the true index weight.
 
 **2.2 Net Income (Net Income Attributable to Parent).**
 *Definition:* consolidated net income **attributable to the controlling (parent) interest,
@@ -300,13 +300,13 @@ disagreements. Only bucket 3 reaches a human.
 - **Foreign filers / IFRS** mapped parent‑first to mirror these definitions; reconciled
   against the same standard.
 - **Segment‑only revenue totals** — a few filers (e.g. M.D.C. Holdings 2012–17, Meritage 2018+)
-  tag their consolidated revenue *only* with a business‑segment dimension and never file an
-  undimensioned company total, so revenue is left **blank** rather than reconstructed by summing
-  segment members (which would risk double‑counting nested sub‑tiers or omitting inter‑segment
-  eliminations). Bounded: **< ~1 pp of index weight in any year**, historical, does not touch the
-  current reading. Conscious accuracy‑over‑coverage choice.
-- **Parent vs. total equity for Up‑Cs** — the panel carries **parent** stockholders' equity
-  (matching vendor book‑value convention, §3.1). In umbrella‑partnership (Up‑C) structures with a
-  deeply negative noncontrolling interest (RE/MAX, NuScale, Zevia), parent equity can *exceed* total
-  assets; this is a correct artifact — `total_equity` (parent + NCI) still foots Assets − Liabilities
-  and is what the plausibility gate checks — not a capture error.
+  tag their consolidated revenue only with a business‑segment dimension and never file an undimensioned
+  company total, so revenue is left blank rather than reconstructed by summing segment members (which
+  would risk double‑counting nested sub‑tiers or omitting inter‑segment eliminations). The effect stays
+  under about one point of index weight in any year, is historical, and does not touch the current
+  reading — a deliberate choice to favor accuracy over coverage.
+- **Parent vs. total equity for Up‑Cs** — the panel carries parent stockholders' equity, matching the
+  vendor book‑value convention (§3.1). In umbrella‑partnership structures with a deeply negative
+  noncontrolling interest (RE/MAX, NuScale, Zevia), parent equity can exceed total assets. That is a
+  correct artifact rather than a capture error: `total_equity` (parent + NCI) still foots Assets −
+  Liabilities, and it is `total_equity` that the plausibility gate checks.
