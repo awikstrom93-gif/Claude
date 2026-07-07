@@ -1055,26 +1055,39 @@ def run(facts_rows, sic_of=None, name_of=None, sic_by_key=None):
         sector = detect_sector(by[key])
         rec, prov, ident = classify_filing(by[key], sector)
         # COMMODITY/SECURITIES BROKER-DEALER GROSS-UP. A physical-commodity dealer reports "Revenues"
-        # grossed up by pass-through commodity sales -- StoneX (SIC 6200) FY2026: $132B gross vs ~$4B net
+        # grossed up by pass-through commodity sales -- StoneX (SIC 6200) FY2025: $132B gross vs ~$4B net
         # operating revenue -- so its top line is not comparable to an operating company's and would swamp
-        # any index revenue/margin/valuation aggregate. When COGS (cost of physical commodities) is
-        # essentially all of revenue, adopt NET operating revenue (Revenues - COGS) as the top line and
-        # mark COGS/GP n/a -- the same net-revenue basis banks/insurers already use.
+        # any index revenue/margin/valuation aggregate. Adopt NET operating revenue (Revenues - cost of
+        # physical commodities = the filer's own GROSS PROFIT) as the top line and mark COGS/GP n/a -- the
+        # same net-revenue basis banks/insurers already use.
+        #   NET REVENUE = GROSS PROFIT. Prefer the filer's tagged GrossProfit: StoneX stops tagging a
+        #   cost-of-revenue line the engine recognizes ~FY2019, so from then on only GrossProfit survives
+        #   (cost_of_revenue is blank) -- a cost-only test would silently miss exactly the recent years.
+        #   Fall back to Revenues-COGS when GrossProfit is absent.
         #   SIC set is DELIBERATELY {6200, 6221} (security & commodity brokers / commodity-contract
         #   dealers), NOT 6199 -- 6199 also holds BITCOIN MINERS (RIOT/MARA/Bitfarms) whose mining
         #   cost-of-revenue can exceed revenue in a bad year; netting those down would zero out real
-        #   mining revenue. Legit brokers/asset managers (6211, net-revenue reporters, no physical COGS)
-        #   also never trip the >90% test, so only true gross-up dealers (StoneX) are affected.
+        #   mining revenue.
         #   SIC LOOKUP IS FISCAL-YEAR-SPECIFIC (point-in-time). A filer's SIC can drift over time --
         #   StoneX was 6211 (2011-13) -> 6221 (2014-15) -> 6200 (2016+) -- and a per-CIK map built with
         #   setdefault() keeps only the FIRST SIC seen (6211), which our set excludes, so the rule would
         #   never fire on its later 6200/6221 years. Key on (cik, fiscal_year) with the as-filed SIC for
         #   that year; fall back to the per-CIK map only when a year has no index SIC.
+        #   MATCHED-BOOK SIGNATURE, not SIC alone: require BOTH a tiny gross margin (<6%) AND a tiny
+        #   net-income margin (<1%). A matched-book dealer's "Revenues" are pass-through, so it earns a
+        #   sliver of net income on huge sales (StoneX: gross 0.6-4.8%, net 0.02-0.39%). This EXCLUDES a
+        #   real operating company that merely carries a 6200/6221 SIC -- e.g. Seaboard, a diversified
+        #   agribusiness/commodity-trading/shipping conglomerate, runs 6-11% gross and 3-6% NET margins,
+        #   so it keeps its gross revenue. (Net margin is the decisive test; the gross-margin ceiling
+        #   catches a real company's occasional loss year, which alone would pass a net-margin filter.)
         _sic = str((sic_by_key or {}).get(key) or (sic_of or {}).get(cik) or "")[:4]
         _rev, _cogs = rec.get("revenue"), rec.get("cost_of_revenue")
-        if (_sic in ("6200", "6221")
-                and _rev and _rev > 0 and _cogs and _cogs > 0.90 * _rev):
-            rec["revenue"] = _rev - _cogs
+        _gp, _ni = rec.get("gross_profit"), rec.get("net_income")
+        _net = _gp if _gp is not None else ((_rev - _cogs) if (_rev is not None and _cogs is not None) else None)
+        if (_sic in ("6200", "6221") and _rev and _rev > 0
+                and _net is not None and 0 <= _net < 0.06 * _rev
+                and _ni is not None and abs(_ni) < 0.01 * _rev):
+            rec["revenue"] = _net
             rec["cost_of_revenue"] = None
             rec["gross_profit"] = None
             prov["revenue"] = "NetOperatingRevenue(broker gross-up: Revenues-CostOfPhysicalCommodities)"
@@ -1531,10 +1544,11 @@ def selftest():
                and all(r["entity_flag"] == "" for r in div)
                and all(r["entity_flag"] == "" for r in ren))
     # commodity broker-dealer gross-up (StoneX, SIC 6200): $100k gross Revenues, $97k cost of physical
-    # commodities -> adopt $3k NET operating revenue. A bitcoin MINER (SIC 6199) with the SAME shape must
-    # NOT net down (mining cost>revenue is a bad year, not a gross-up); a non-financial (3550) keeps gross.
-    _shape = {"Revenues": 100000, "CostOfGoodsAndServicesSold": 97000, "OperatingIncomeLoss": 1500,
-              "NetIncomeLoss": 1200, "Assets": 8000, "Liabilities": 6000, "StockholdersEquity": 2000}
+    # commodities, $0.3k net income (matched-book: sliver of net on gross pass-through) -> adopt $3k NET
+    # operating revenue. A bitcoin MINER (SIC 6199) with the SAME shape must NOT net down (mining
+    # cost>revenue is a bad year, not a gross-up); a non-financial (3550) keeps gross.
+    _shape = {"Revenues": 100000, "CostOfGoodsAndServicesSold": 97000, "OperatingIncomeLoss": 500,
+              "NetIncomeLoss": 300, "Assets": 8000, "Liabilities": 6000, "StockholdersEquity": 2000}
     mk = lambda c: [dict(cik=c, fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
                     for t, v in _shape.items()]
     bro = run(mk("BRK"), {"BRK": "6200"})[0][0]        # StoneX-type commodity dealer -> net down
@@ -1543,12 +1557,26 @@ def selftest():
     # SIC-drift regression: per-CIK map (setdefault) locks the FIRST SIC (6211, excluded), but the
     # fiscal-year map has the as-filed 6200 for this year -> fy-specific SIC must win and net it down.
     drift = run(mk("DRF"), {"DRF": "6211"}, None, {("DRF", "2024"): "6200"})[0][0]
+    # GP-ONLY: StoneX stops tagging a recognizable cost line ~FY2019 -> only GrossProfit survives (no
+    # cost_of_revenue). The rule must still fire off GrossProfit, else the recent (largest) years leak.
+    _shape_gp = {"Revenues": 100000, "GrossProfit": 3000, "OperatingIncomeLoss": 500,
+                 "NetIncomeLoss": 300, "Assets": 8000, "Liabilities": 6000, "StockholdersEquity": 2000}
+    gponly = run([dict(cik="GPB", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                  for t, v in _shape_gp.items()], {"GPB": "6200"})[0][0]
+    # SEABOARD guard: a real diversified operating company that merely carries a 6221 SIC, with a THIN
+    # gross margin year (3.3%) but a real 2.36% NET margin -> the net-margin test must keep it gross.
+    _shape_op = {"Revenues": 100000, "GrossProfit": 3300, "OperatingIncomeLoss": 2800,
+                 "NetIncomeLoss": 2360, "Assets": 55000, "Liabilities": 30000, "StockholdersEquity": 25000}
+    opco = run([dict(cik="SEA", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                for t, v in _shape_op.items()], {"SEA": "6221"})[0][0]
     ok_broker = (bro["revenue"] == 3000 and bro["cost_of_revenue"] is None and bro["gross_profit"] is None
                  and mnr["revenue"] == 100000 and nonb["revenue"] == 100000
-                 and drift["revenue"] == 3000)
+                 and drift["revenue"] == 3000 and gponly["revenue"] == 3000
+                 and opco["revenue"] == 100000)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST broker gross-up (dealer nets to {bro['revenue']}; miner keeps {mnr['revenue']}; "
-          f"mfr keeps {nonb['revenue']}; sic-drift nets to {drift['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
+          f"mfr keeps {nonb['revenue']}; sic-drift nets to {drift['revenue']}; gp-only nets to "
+          f"{gponly['revenue']}; op-co keeps {opco['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
