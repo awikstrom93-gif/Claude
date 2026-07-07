@@ -17,6 +17,7 @@ RUN:  python r2k_report.py            # full build + guard
 """
 import sys
 import subprocess
+import re
 from pathlib import Path
 
 from r2k_universe import BASE, get_panel, by_index_year
@@ -61,15 +62,20 @@ def _panel_headline():
 
 
 def _tab_headline(ws, rev_col, ni_col=None):
-    """{year: (rev, ni)} read from a consolidated tab; ni_col=None if the tab has no NI column."""
+    """{year: (rev, ni)} read from the ANNUAL block of a consolidated tab; ni_col=None if the tab has no
+    NI column. Reads ONLY rows whose first column is a bare 4-digit year -- the quality tabs now carry a
+    QUARTERLY companion block below the annual one (labels like '2012 Q1'), and parsing those as year
+    2012 would let the last quarter silently overwrite the annual headline (a false guard failure)."""
     out = {}
     for r in range(4, ws.max_row + 1):
         snap = ws.cell(r, 1).value
-        if not snap:
+        if snap is None:
             continue
-        try:
-            y = int(str(snap)[:4])
-        except ValueError:
+        s = str(snap).strip()
+        if not re.fullmatch(r"\d{4}(\.0)?", s):   # bare year only; reject 'YYYY Qn' and dates
+            continue
+        y = int(float(s))
+        if y in out:                              # keep the first (annual) occurrence
             continue
         rev = ws.cell(r, rev_col).value
         ni = ws.cell(r, ni_col).value if ni_col else None
