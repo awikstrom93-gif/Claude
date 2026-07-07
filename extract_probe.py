@@ -70,20 +70,48 @@ for q in sorted(by_quarter):
             facts[p[0]].append((tag, p[dd_i] if dd_i < len(p) else "",
                                 p[q_i] if q_i < len(p) else "", seg,
                                 p[val_i] if val_i < len(p) else ""))
+    # ---- pre.txt pass: the PRESENTATION join is where a kept num value can still be dropped. Record,
+    # per adsh, every revenue/NI presentation line's STMT + (tag,version). extract.py:138 keeps only
+    # stmt in {IS,BS,CF}; a revenue line filed under a combined 'CI' (comprehensive income) statement or
+    # left uncategorized is dropped here even though its value survived num.txt -- while NI still comes
+    # through because it reappears as the top line of the CF statement (stmt=CF). This pass proves it.
+    pfh = open_member(q, "pre.txt")
+    pre = defaultdict(list)   # adsh -> [(stmt, tag, ver)]
+    if pfh is not None:
+        with pfh:
+            pix = header_ix(pfh)
+            pstmt, ptag, pver = pix.get("stmt"), pix["tag"], pix["version"]
+            for line in pfh:
+                cut = line.find("\t")
+                if cut < 0 or line[:cut] not in adsh_set:
+                    continue
+                p = line.rstrip("\n").split("\t")
+                tag = p[ptag] if ptag < len(p) else ""
+                if not (REVRE.search(tag) or NIRE.search(tag)):
+                    continue
+                pre[p[0]].append((p[pstmt] if pstmt is not None and pstmt < len(p) else "",
+                                  tag, p[pver] if pver < len(p) else ""))
     for key, adsh, per in by_quarter[q]:
         print(f"  === cik {key[0]}  FY{key[1]}  (period={per}, adsh={adsh}, {q}) ===")
+        # NUM: is the undimensioned current-period total present & KEPT for any revenue tag?
         rev = [f for f in facts.get(adsh, []) if REVRE.search(f[0])]
-        ni = [f for f in facts.get(adsh, []) if NIRE.search(f[0])]
-        if not rev:
-            print("     REVENUE: (no revenue/sales fact of any kind in num.txt)")
-        for tag, dd, qt, seg, val in sorted(rev):
-            drop = []
-            if seg: drop.append("SEG-DROP")
-            if dd != per: drop.append(f"DDATE!=PER({dd})")
-            if qt not in ("0", "4"): drop.append(f"QTRS={qt}")
-            flag = ("  <-- " + ",".join(drop)) if drop else "  <-- KEPT"
-            print(f"     REV  {tag:52s} ddate={dd} qtrs={qt} seg={'Y:'+seg[:30] if seg else '-'} val={val}{flag}")
-        for tag, dd, qt, seg, val in sorted(ni)[:3]:
-            drop = "SEG" if seg else ("DDATE!=PER" if dd != per else ("QTRS" if qt not in ("0","4") else "KEPT"))
-            print(f"     NI   {tag:52s} ddate={dd} qtrs={qt} seg={'Y' if seg else '-'} val={val}  <-- {drop}")
+        kept = sorted({(t, val) for (t, dd, qt, seg, val) in rev
+                       if not seg and dd == per and qt in ("0", "4")})
+        segonly = sorted({t for (t, dd, qt, seg, val) in rev if seg and dd == per and qt in ("0", "4")}
+                         - {t for (t, _v) in kept})
+        print("    NUM kept undimensioned current-period totals:",
+              (", ".join(f"{t}={v}" for t, v in kept) if kept else "(none)"))
+        if segonly:
+            print(f"    NUM segment-ONLY totals (no undimensioned version -> SEG-DROP): {segonly}")
+        # PRE: what statement are the revenue lines presented under? (the join gate)
+        prev = [x for x in pre.get(adsh, []) if REVRE.search(x[1])]
+        preni = [x for x in pre.get(adsh, []) if NIRE.search(x[1])]
+        if not prev:
+            print("    PRE revenue lines: (NONE presented) -> no row emitted at all")
+        for stmt, tag, ver in sorted(set(prev)):
+            gate = "KEPT(IS/BS/CF)" if stmt in ("IS", "BS", "CF") else f"DROPPED(stmt={stmt or 'blank'})"
+            joins = "joins-num" if (adsh in facts and any(t == tag and not sg and dd == per and qt in ("0", "4")
+                     for (t, dd, qt, sg, vv) in facts[adsh])) else "no-num-join"
+            print(f"    PRE  {tag:46s} stmt={stmt or 'blank':5s} ver={ver:14s} -> {gate}; {joins}")
+        print(f"    PRE  NetIncomeLoss statements present: {sorted({s for s, t, v in preni}) or '(none)'}")
         print()
