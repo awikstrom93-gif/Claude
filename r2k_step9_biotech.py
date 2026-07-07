@@ -308,6 +308,86 @@ def build():
     wc.cell(10, 1, "Biotech's contribution share vs its weight share shows whether biotech punched above its weight "
             "in driving the benchmark (a return an earnings-disciplined manager would have missed).")
 
+    # ---- Biotech Contribution Trend (both indices, calendar + rolling) ----
+    def bio_rows(hold, ikey):
+        """Monthly biotech contribution for one index: (Carino-linkable) bio pts and the index return,
+        beginning-of-month held weight x that month's return, summed over biotech names."""
+        if ikey not in idx or not hold:
+            return []
+        IX = idx[ikey]; hdz = sorted(hold)
+        out = []
+        for d in [d for d in pdates if IX["ret"].get(d) is not None and nearest_prior(hdz, d)]:
+            snap = hold[nearest_prior(hdz, d)]; traw = sum(h["weight"] for h in snap) or 1.0
+            bc = 0.0
+            for h in snap:
+                r_ = ret_for(h, d)
+                if r_ is not None and is_bio(h):
+                    bc += (h["weight"] / traw) * r_
+            out.append({"d": d, "actual": IX["ret"][d], "bio": bc})
+        return out
+
+    brows = {"R2KG": bio_rows(hold_r, "R2KG"), "SP600G": bio_rows(hold_s, "SP6G")}
+    have_s = bool(brows["SP600G"])
+    wtr = wb.create_sheet("Biotech Contribution Trend")
+    wtr.cell(1, 1, "Biotech contribution to the index return -- R2000G vs S&P600G, calendar-year and "
+             "rolling-12m (Carino-linked)").font = TITLE
+    lab = {"R2KG": "R2KG", "SP600G": "600G"}
+    idxs = ["R2KG"] + (["SP600G"] if have_s else [])
+    # calendar
+    wtr.cell(3, 1, "Calendar-year: biotech contribution (pts) to each index's total return").font = Font(bold=True, size=11)
+    chead = ["Year"]
+    for ix in idxs:
+        chead += [f"{lab[ix]} biotech pts", f"{lab[ix]} index %"]
+    if have_s:
+        chead += ["Biotech pts diff (R2KG-600G)"]
+    _hdr(wtr, 4, chead); r = 5
+    yrs = sorted({x["d"].year for x in brows["R2KG"]})
+    for y in yrs:
+        vals = {}
+        for ix in idxs:
+            sl = [x for x in brows[ix] if x["d"].year == y]
+            cum, bio = carino_link(sl, "bio")
+            vals[ix] = (bio, cum) if cum is not None else None
+        row = [y]
+        for ix in idxs:
+            row += [_p(vals[ix][0]), _p(vals[ix][1])] if vals.get(ix) else [None, None]
+        if have_s and vals.get("R2KG") and vals.get("SP600G"):
+            row += [_p(vals["R2KG"][0] - vals["SP600G"][0])]
+        elif have_s:
+            row += [None]
+        for c, v in enumerate(row, 1):
+            wtr.cell(r, c, v)
+        r += 1
+    # rolling 12m
+    r += 1
+    wtr.cell(r, 1, "Rolling 12-month: biotech contribution (pts) over the trailing year -- when biotech "
+             "drove each index, and the gap vs S&P600G").font = Font(bold=True, size=11)
+    r += 1
+    rhead = ["Month ending"] + [f"{lab[ix]} biotech pts" for ix in idxs] + (["Biotech pts diff (R2KG-600G)"] if have_s else [])
+    _hdr(wtr, r, rhead); r += 1
+    md = [x["d"] for x in brows["R2KG"]]
+    byd = {ix: {x["d"]: x for x in brows[ix]} for ix in idxs}
+    for i in range(11, len(md)):
+        win12 = md[i - 11:i + 1]
+        cur = {}
+        for ix in idxs:
+            sl = [byd[ix][d] for d in win12 if d in byd[ix]]
+            _, bio = carino_link(sl, "bio")
+            cur[ix] = bio if sl else None
+        row = [f"{md[i]:%Y-%m}"] + [_p(cur[ix]) for ix in idxs]
+        if have_s and cur.get("R2KG") is not None and cur.get("SP600G") is not None:
+            row += [_p(cur["R2KG"] - cur["SP600G"])]
+        elif have_s:
+            row += [None]
+        for c, v in enumerate(row, 1):
+            wtr.cell(r, c, v)
+        r += 1
+    wtr.cell(r + 1, 1, "Biotech contribution = Carino-linked sum of (held weight x monthly return) over biotech "
+             "names, so it is a share of the index's compounded return. A positive R2KG-minus-600G diff means "
+             "biotech drove R2000G harder than the earnings-screened S&P600G that period." + ("" if have_s else
+             "  (S&P600G holdings/returns unavailable -> R2000G only.)"))
+    wtr.freeze_panes = "B5"
+
     # ---- Biotech Counterfactual ----
     wcf = wb.create_sheet("Biotech Counterfactual")
     wcf.cell(1, 1, "Ex-biotech counterfactual on R2000G's own names (growth of $1)").font = TITLE

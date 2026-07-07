@@ -55,6 +55,7 @@ SHEETS = [
     (QUAL, "Sector Mix", "Qual Sector Mix"), (QUAL, "Concentration", "Qual Concentration"),
     (ATTR, "Cohort Contribution", "Attr Contribution"), (ATTR, "Cohort Weights", "Attr Cohort Wt"),
     (ATTR, "Cohort Returns", "Attr Cohort Ret"), (ATTR, "Counterfactual", "Attr Counterfactual"),
+    (ATTR, "Cohort Contribution Trend", "Attr Contribution Trend"),
     (ATTR, "Reconstruction", "Attr Reconstruction"),
     # ---- concentration deep-dive (step 8, optional) ----
     (CONC, "Weight Concentration", "Conc Weight"), (CONC, "Return Breadth", "Conc Breadth"),
@@ -62,7 +63,9 @@ SHEETS = [
     # ---- biotech deep-dive (step 9, optional) ----
     (BIO, "Biotech Weight & Quality", "Bio Weight & Quality"), (BIO, "Biotech in the Tail", "Bio In Tail"),
     (BIO, "Unprofitable by Theme", "Bio Unprof by Theme"), (BIO, "Unprofitable by Industry", "Bio Unprof by Industry"),
-    (BIO, "Biotech Contribution", "Bio Contribution"), (BIO, "Biotech Counterfactual", "Bio Counterfactual"),
+    (BIO, "Biotech Contribution", "Bio Contribution"),
+    (BIO, "Biotech Contribution Trend", "Bio Contribution Trend"),
+    (BIO, "Biotech Counterfactual", "Bio Counterfactual"),
     # ---- R2000G internal quality trends (step 3, optional appendix) ----
     (ANALYTICS, "Index Quality Trends", "R2KG Quality Trends"),
     (ANALYTICS, "Profitability Cohorts", "R2KG Prof Cohorts"),
@@ -283,6 +286,9 @@ TAB_GUIDE = [
     ("Attr Cohort Ret", "Month-by-month return of each cohort sub-portfolio vs the index.", ""),
     ("Attr Counterfactual", "R2000G's own names rebuilt as profitable-only / ex-never-profitable.",
      "The gap between 'R2000G index' and 'Profitable-only' is the realized cost (or benefit) of an earnings screen."),
+    ("Attr Contribution Trend", "Unprofitable-tail contribution to the return over time -- both indices.",
+     "Calendar-year AND rolling-12m contribution (pts) of the never-profitable cohort and the full unprofitable "
+     "tail, for R2000G and S&P600G, with the R2KG-minus-600G gap -- when the low-quality tail drove each index."),
     ("Attr Reconstruction", "Bottom-up vs actual index return — the coverage/accuracy check.",
      "Matched-weight ~95% and small monthly diffs confirm the attribution is trustworthy."),
     ("Concentration deep-dive (step 8)", None, None),
@@ -308,6 +314,9 @@ TAB_GUIDE = [
      "The detailed breakdown behind the themes; % of each year's unprofitable weight."),
     ("Bio Contribution", "Biotech vs non-biotech contribution to R2000G's return.",
      "Carino-linked; compare biotech's contribution share to its weight share."),
+    ("Bio Contribution Trend", "Biotech contribution to the return over time -- both indices.",
+     "Calendar-year AND rolling-12m biotech contribution (pts) for R2000G and S&P600G, with the R2KG-minus-600G "
+     "gap -- when biotech drove each index (e.g. +7 pts vs 600G in 2020, -5 pts in the 2021 biotech crash)."),
     ("Bio Counterfactual", "R2000G's own names with biotech removed vs the index.",
      "Ex-biotech and biotech-only growth-of-$1; the gap is biotech's realized swing on the benchmark."),
     ("R2000G internal trends (step 3 appendix)", None, None),

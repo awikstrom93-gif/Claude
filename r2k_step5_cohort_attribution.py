@@ -36,7 +36,7 @@ from openpyxl.chart import LineChart, Reference
 
 from r2k_perf_io import load_performance, load_monthly_holdings, find_holdings_file, BASE, ntk
 from r2k_step3_analytics import load_fundamentals, pick_fy0, company_metrics, load_maps
-from r2k_universe import norm_facts, fund_for, ticker_cik_map, find_quarterly   # consolidated: one definition
+from r2k_universe import norm_facts, fund_for, ticker_cik_map, find_quarterly, find_annual   # consolidated
 from r2k_calc import compound, nearest_prior, carino_K, carino_k   # shared calc primitives (one definition)
 
 OUT = BASE / "R2000G_Cohort_Attribution.xlsx"
@@ -222,6 +222,112 @@ def build():
             "concentrated in years with a fast-moving concentrated leader (2020, 2024) where a name's weight rose "
             "sharply within a quarter, faster than the snapshot cadence can track. It is a coverage/timing artifact, "
             "not an unattributed cohort return.")
+
+    # ---- Cohort Contribution Trend (both indices, calendar + rolling) ----
+    # The unprofitable tail's contribution to the RETURN, turned into a time series and set next to the
+    # earnings-screened S&P600G -- the direct realized-return proof of the memo's thesis (the tail led the
+    # window). S&P600G is decomposed with the SAME point-in-time cohort logic, on its own holdings/returns.
+    def _finest(index):
+        merged = {}
+        for finder in (lambda: find_annual(index), lambda: find_quarterly(index)):
+            try:
+                p = finder()
+            except Exception:
+                p = None
+            if p:
+                for dd, rr in load_monthly_holdings(p, verbose=False).items():
+                    merged[dd] = rr
+        return merged
+
+    def _clink(sl, key):
+        if not sl:
+            return None, 0.0
+        ac = compound([x["actual"] for x in sl]); K = carino_K(ac)
+        return ac, sum((carino_k(x["actual"]) / K) * x[key] for x in sl)
+
+    def coh_rows(hold, ikey):
+        """Monthly never-profitable and unprofitable-tail (never + fallen) contribution for one index."""
+        if ikey not in idx or not hold:
+            return []
+        IX = idx[ikey]; hdz = sorted(hold)
+        out = []
+        for d in [d for d in perf_dates if IX["ret"].get(d) is not None and nearest_prior(hdz, d)]:
+            snap = hold[nearest_prior(hdz, d)]; traw = sum(h["weight"] for h in snap) or 1.0
+            never = tail = 0.0
+            for h in snap:
+                r_ = ret_for(h, d)
+                if r_ is None:
+                    continue
+                coh = cohort_of(hcik(h), d); wf = h["weight"] / traw
+                if coh == "never_profitable":
+                    never += wf * r_
+                if coh in ("never_profitable", "fallen"):
+                    tail += wf * r_
+            out.append({"d": d, "actual": IX["ret"][d], "never": never, "tail": tail})
+        return out
+
+    hold_s5 = _finest("SP600G")
+    crows = {"R2KG": [{"d": r["d"], "actual": r["actual"],
+                       "never": r["contrib"]["never_profitable"],
+                       "tail": r["contrib"]["never_profitable"] + r["contrib"]["fallen"]} for r in rows],
+             "SP600G": coh_rows(hold_s5, "SP6G")}
+    have_s5 = bool(crows["SP600G"])
+    idxs5 = ["R2KG"] + (["SP600G"] if have_s5 else [])
+    lab5 = {"R2KG": "R2KG", "SP600G": "600G"}
+    wtr = wb.create_sheet("Cohort Contribution Trend")
+    wtr.cell(row=1, column=1, value="Unprofitable-tail contribution to the index return -- R2000G vs "
+             "S&P600G, calendar-year and rolling-12m (Carino-linked)").font = TITLE
+    wtr.cell(row=3, column=1, value="Calendar-year: never-profitable and full unprofitable-tail (never + "
+             "fallen) contribution (pts) to each index's total return").font = Font(bold=True, size=11)
+    chead = ["Year"]
+    for ix in idxs5:
+        chead += [f"{lab5[ix]} never-prof pts", f"{lab5[ix]} tail pts", f"{lab5[ix]} index %"]
+    if have_s5:
+        chead += ["Tail pts diff (R2KG-600G)"]
+    _hdr(wtr, 4, chead); rw = 5
+    yrs5 = sorted({x["d"].year for x in crows["R2KG"]})
+    for y in yrs5:
+        vals = {}
+        for ix in idxs5:
+            sl = [x for x in crows[ix] if x["d"].year == y]
+            ac, nv = _clink(sl, "never"); _, tl = _clink(sl, "tail")
+            vals[ix] = (nv, tl, ac) if ac is not None else None
+        row = [y]
+        for ix in idxs5:
+            row += [_p(vals[ix][0]), _p(vals[ix][1]), _p(vals[ix][2])] if vals.get(ix) else [None, None, None]
+        if have_s5 and vals.get("R2KG") and vals.get("SP600G"):
+            row += [_p(vals["R2KG"][1] - vals["SP600G"][1])]
+        elif have_s5:
+            row += [None]
+        for c, v in enumerate(row, 1):
+            wtr.cell(row=rw, column=c, value=v)
+        rw += 1
+    rw += 1
+    wtr.cell(row=rw, column=1, value="Rolling 12-month: unprofitable-tail contribution (pts) over the "
+             "trailing year -- when the low-quality tail drove each index, and the gap vs S&P600G").font = Font(bold=True, size=11)
+    rw += 1
+    rhead = ["Month ending"] + [f"{lab5[ix]} tail pts" for ix in idxs5] + (["Tail pts diff (R2KG-600G)"] if have_s5 else [])
+    _hdr(wtr, rw, rhead); rw += 1
+    md = [x["d"] for x in crows["R2KG"]]
+    byd = {ix: {x["d"]: x for x in crows[ix]} for ix in idxs5}
+    for i in range(11, len(md)):
+        win12 = md[i - 11:i + 1]; cur = {}
+        for ix in idxs5:
+            sl = [byd[ix][d] for d in win12 if d in byd[ix]]
+            _, tl = _clink(sl, "tail"); cur[ix] = tl if sl else None
+        row = [f"{md[i]:%Y-%m}"] + [_p(cur[ix]) for ix in idxs5]
+        if have_s5 and cur.get("R2KG") is not None and cur.get("SP600G") is not None:
+            row += [_p(cur["R2KG"] - cur["SP600G"])]
+        elif have_s5:
+            row += [None]
+        for c, v in enumerate(row, 1):
+            wtr.cell(row=rw, column=c, value=v)
+        rw += 1
+    wtr.cell(row=rw + 1, column=1, value="Contribution = Carino-linked sum of (held weight x monthly return) "
+             "over the cohort's names, a share of the index's compounded return. Positive R2KG-minus-600G = the "
+             "unprofitable tail drove R2000G harder than the earnings-screened S&P600G." + ("" if have_s5 else
+             "  (S&P600G holdings/returns unavailable -> R2000G only.)"))
+    wtr.freeze_panes = "B5"
 
     # ---- Cohort Weights (monthly) ----
     ww = wb.create_sheet("Cohort Weights")
