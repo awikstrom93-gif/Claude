@@ -452,6 +452,7 @@ Private Sub LoadSpecs()
     ' ---- Quality (fundamentals) -------------------------------------------
     S "Qual Comparison|L|Qual Comparison|3|1|2,3|% Unprofitable (NI) by weight|% of index weight"
     S "Qual Comparison|L|Qual Comparison|3|1|11,12|Never-profitable weight|% of index weight"
+    S "Qual Comparison|L|Qual Comparison|3|1|8,9|% No-revenue weight: R2KG vs 600G|% of index weight"
     S "Qual Comparison|L|Qual Comparison|3|1|17,18|Net margin ($agg)|Net margin %"
     S "Qual Comparison|L|Qual Comparison|3|1|20,21|ROIC ($agg)|ROIC %"
     S "Qual Comparison|L|Qual Comparison|3|1|26,27|Revenue YoY (wavg)|Rev YoY %"
@@ -467,6 +468,10 @@ Private Sub LoadSpecs()
     S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|4,7|Never-profitable weight: R2KG vs 600G|% of index weight"
     S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|2,5|Profitable weight: R2KG vs 600G|% of index weight"
     S "Qual Cohort Wt|C|Qual Cohort Wt|3|1|8|Never-profitable weight gap (R2KG - 600G)|Diff (pts)"
+    ' Stacked makeup-over-time: the full profitability composition of each index, year by year -- the
+    ' single clearest picture of how the makeup shifted (profitable vs fallen vs never-profitable weight).
+    S "Qual Cohort Wt|CS|Qual Cohort Wt|3|1|2,3,4|R2000G makeup by profitability cohort (stacked)|% of index weight"
+    S "Qual Cohort Wt|CS|Qual Cohort Wt|3|1|5,6,7|S&P 600 Growth makeup by profitability cohort (stacked)|% of index weight"
     S "Qual Sector Mix|B|Qual Sector Mix|3|1|2,3|Sector weights: R2000G vs S&P 600 Growth|% of index weight"
     S "Qual Sector Mix|B|Qual Sector Mix|3|1|4|Sector over / underweight (R2KG - 600G)|Diff (pts)"
     S "Qual Sector Mix|L|Qual Sector Mix|@Quarter|1|2,3,4|R2000G sector rotation -- quarterly (top sectors)|% of index weight"
@@ -583,9 +588,12 @@ Private Sub LoadSpecs()
     S "Key Charts|S|Perf Monthly|1|2|3|Monthly returns: SP6G vs R2000G (slope = beta)|S&P 600 Growth monthly %|R2000G monthly %"
     S "Key Charts|L|Qual Comparison|3|1|2,3|% Unprofitable by weight: R2KG vs 600G|% of index weight"
     S "Key Charts|L|Qual Cohort Wt|3|1|4,7|Never-profitable weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Qual Comparison|3|1|8,9|% No-revenue weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|CS|Qual Cohort Wt|3|1|2,3,4|R2000G makeup by profitability cohort|% of index weight"
     S "Key Charts|C|Attr Contribution|3|1|2,4|Cohort contribution: full period vs window|Contribution %"
     S "Key Charts|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
     S "Key Charts|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Bio Weight & Quality|3|1|4,5|R2000G biotech quality: % unprofitable & % no-revenue|% of biotech weight"
     S "Key Charts|L|Solvency Tail|4|1|3,10|% can't cover interest: R2KG vs 600G|% weight"
     S "Key Charts|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
     S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
