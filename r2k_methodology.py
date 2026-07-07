@@ -30,9 +30,11 @@ BASE = Path(os.environ.get("R2KG_BASE", "."))
 WB = BASE / os.environ.get("R2KG_WORKBOOK", "R2000G_SmallCapGrowth_Benchmark_Review.xlsx")
 OUT = BASE / os.environ.get("R2KG_METHODOLOGY_OUT", "METHODOLOGY.md")
 
-# Front-matter and panel-native exhibit tabs the workbook carries but the Reading Guide doesn't
-# describe. One-liners live here; the builder verifies each named tab is actually present and warns on
-# any workbook tab covered neither here nor in the Reading Guide.
+# Front-matter tabs the workbook carries but the Reading Guide doesn't describe. One-liners live here;
+# the builder verifies each named tab is actually present and warns on any workbook tab covered neither
+# here nor in the Reading Guide. (The panel-native exhibit tabs -- Quality Factor Spreads, Solvency
+# Tail, Cohort Persistence, Valuation of the Tail -- are documented in the Reading Guide itself, so they
+# are intentionally NOT repeated here.)
 SUPPORT_TABS = {
     "Executive Summary": "The one-page version of the whole review: the question, the three-part answer, and the bottom line, each pointing to the tabs that prove it.",
     "Reading Guide": "What each analytical tab shows and how to read it (the source of the tab guide below).",
@@ -40,10 +42,6 @@ SUPPORT_TABS = {
     "Contents": "The tab index, grouped by section.",
     "Key Charts": "The exhibit charts (Growth of $1, % unprofitable by weight, the earnings-screen counterfactual) in one place.",
     "Data Reliability": "How trustworthy the reconstructed fundamentals are, by weight: the share of index weight whose three statements tie out cleanly vs. flagged for review, so a reader can weight the conclusions accordingly.",
-    "Quality Factor Spreads": "R2000G-vs-S&P600G spread on each quality factor (profitability, accruals, gross-profitability, leverage) -- the factor view of the same quality gap.",
-    "Solvency Tail": "The distressed/low-solvency tail of each index (interest coverage, leverage, cash burn) -- the balance-sheet counterpart to the earnings tail.",
-    "Cohort Persistence": "Whether a name's profitability label sticks year to year -- how much of the never-profitable tail is structurally, not transiently, unprofitable.",
-    "Valuation of the Tail": "What the market pays for the unprofitable tail (sales multiples, price/book) -- context for whether the tail's leadership was a re-rating.",
 }
 
 # The methodology narrative -- static process knowledge. (Markdown; headings are '## ...'.)

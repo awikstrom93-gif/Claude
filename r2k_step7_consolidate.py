@@ -23,7 +23,7 @@ RUN: python r2k_step7_consolidate.py
 """
 from pathlib import Path
 from copy import copy
-import os
+import os, re
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -87,6 +87,48 @@ def n(x, d=1):
     except (TypeError, ValueError): return None
 
 
+_MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _pretty_month(ym):
+    """'2023-07' -> 'Jul 2023' (leaves anything unparseable untouched)."""
+    m = re.match(r"^(\d{4})-(\d{2})$", str(ym or ""))
+    return f"{_MON[int(m.group(2))]} {m.group(1)}" if m else str(ym or "")
+
+
+def window_span(srcs):
+    """Derive the sample + manager-window dates from the performance tabs, so the front matter never
+    hardcodes them. Reads them from text the perf step already writes:
+      Perf 'Summary'         -> 'Full window: 2011-01 to 2026-06 (186 months)'  (full_start, data_end)
+      Perf 'Trailing Returns'-> 'Manager window from 2023-07 (cumulative)'      (win_start)
+                                'trailing 36 months unless WINDOW_START set'    (win_months)
+    Every field has a fallback so a layout tweak degrades to generic wording, never a crash."""
+    d = dict(full_start=None, data_end=None, win_start=None, win_months=None, win_years=None)
+    p = srcs.get("perf") if isinstance(srcs, dict) else None
+    ps = p["Summary"] if p and "Summary" in p.sheetnames else None
+    pt = p["Trailing Returns"] if p and "Trailing Returns" in p.sheetnames else None
+    if ps is not None:
+        fw = label_row(ps, "Full window")
+        ms = re.findall(r"(\d{4}-\d{2})", str(ps.cell(fw, 1).value) if fw else "")
+        if len(ms) >= 2:
+            d["full_start"], d["data_end"] = ms[0], ms[-1]
+    if pt is not None:
+        mw = label_row(pt, "Manager window")
+        mm = re.search(r"(\d{4}-\d{2})", str(pt.cell(mw, 1).value) if mw else "")
+        if mm:
+            d["win_start"] = mm.group(1)
+        for r in range(1, (pt.max_row or 0) + 1):
+            m = re.search(r"trailing (\d+) months", str(pt.cell(r, 1).value or ""))
+            if m:
+                d["win_months"] = int(m.group(1)); break
+    if d["win_months"] is None and d["win_start"] and d["data_end"]:
+        y0, m0 = map(int, d["win_start"].split("-"))
+        y1, m1 = map(int, d["data_end"].split("-"))
+        d["win_months"] = (y1 - y0) * 12 + (m1 - m0)
+    d["win_years"] = round(d["win_months"] / 12) if d["win_months"] else 3
+    return d
+
+
 def copy_sheet(src_ws, dst_ws):
     widths = {}
     for row in src_ws.iter_rows():
@@ -102,7 +144,9 @@ def copy_sheet(src_ws, dst_ws):
     if src_ws.freeze_panes: dst_ws.freeze_panes = src_ws.freeze_panes
 
 
-def exec_summary(wb, srcs):
+def exec_summary(wb, srcs, span=None):
+    span = span or window_span(srcs)
+    win_years = span["win_years"]
     p, q, a = srcs["perf"], srcs["qual"], srcs["attr"]
     ps = p["Summary"]; pt = p["Trailing Returns"]
     qc = q["Comparison"]; qr = q["R2000G Quality"]; qsx = q["SP600G Quality"]
@@ -146,9 +190,9 @@ def exec_summary(wb, srcs):
     line("Why active managers underperformed the Russell 2000 Growth", H)
     line("")
     line("THE QUESTION", H)
-    line("Active US Small Cap Growth managers, benched to the Russell 2000 Growth (R2000G), lagged the "
-         "benchmark over the trailing ~2.5 years. This review uses as-filed 10-K fundamentals for both "
-         "R2000G and the earnings-screened S&P SmallCap 600 Growth (S&P600G) to explain why.")
+    line(f"Active US Small Cap Growth managers, benched to the Russell 2000 Growth (R2000G), lagged the "
+         f"benchmark over the trailing {win_years} years. This review uses as-filed 10-K fundamentals for "
+         f"both R2000G and the earnings-screened S&P SmallCap 600 Growth (S&P600G) to explain why.")
     line("")
     line("1. THE STRUCTURAL DIFFERENCE  ->  tab 'Qual Comparison'", H)
     line(f"The S&P 600 requires positive trailing GAAP earnings to enter; R2000G does not. As a result "
@@ -209,7 +253,7 @@ TAB_GUIDE = [
     ("Perf Trailing", "Trailing-period returns plus the manager-underperformance window.",
      "Periods >1y are annualized; the manager window is shown CUMULATIVE (the lived gap, not annualized)."),
     ("Perf Calendar Yr", "Calendar-year total return for each index and the excess.",
-     "2015 (from May) and 2026 (through Apr) are partial years."),
+     "The first and last calendar years of the {full_start}-to-{data_end} sample may be partial."),
     ("Perf Monthly", "Monthly returns and growth-of-$1 paths; basis for the Growth-of-$1 chart.",
      "Cum excess = compounded R2000G-minus-600G monthly difference."),
     ("Perf Rolling 12m", "Rolling 12-month return for each index and the rolling excess.",
@@ -219,7 +263,7 @@ TAB_GUIDE = [
     ("Perf Drawdown", "Peak-to-trough drawdown path for each index.", ""),
     ("Perf Window Proof", "Data-driven justification for the manager-window dates.",
      "Finds when R2000G's cumulative excess over S&P 600 Growth troughed (its relative low) and began a "
-     "persistent run; a candidate-window table shows the choice isn't cherry-picked. The trailing-3-year "
+     "persistent run; a candidate-window table shows the choice isn't cherry-picked. The trailing-{win_years}-year "
      "window brackets that rising leg."),
     ("Quality & composition — the structural 'why'", None, None),
     ("Qual Comparison", "The earnings-screen gap, year by year, side by side.",
@@ -261,13 +305,22 @@ TAB_GUIDE = [
     ("Bio Counterfactual", "R2000G's own names with biotech removed vs the index.",
      "Ex-biotech and biotech-only growth-of-$1; the gap is biotech's realized swing on the benchmark."),
     ("R2000G internal trends (step 3 appendix)", None, None),
-    ("R2KG Quality Trends", "R2000G's own quality evolution 2015-2026 (three aggregation views).",
+    ("R2KG Quality Trends", "R2000G's own quality evolution across the {full_start}-{data_end} sample (three aggregation views).",
      "Weight-weighted, median, and dollar-aggregate views of margins, returns, growth, leverage."),
     ("R2KG Prof Cohorts", "R2000G unprofitable cohorts by count and weight over time.",
      "Never (confirmed vs limited-history) vs fallen; profitability persistence."),
     ("R2KG DuPont", "Index ROE decomposed: net margin x asset turnover x leverage.", "Dollar-aggregate DuPont identity."),
     ("R2KG Composition", "What moved the index's quality: within-name vs turnover vs reweighting.",
      "Brinson-style decomposition separating 'the index changed' from 'the same companies changed'."),
+    ("Panel-native exhibits", None, None),
+    ("Quality Factor Spreads", "R2000G-vs-S&P600G spread on each quality factor.",
+     "Profitability, accruals, gross-profitability, leverage -- the factor view of the same quality gap; the sign shows which index scores better on each factor."),
+    ("Solvency Tail", "The distressed / low-solvency tail of each index.",
+     "Interest coverage, leverage, cash burn -- the balance-sheet counterpart to the earnings tail (who is financially fragile, by weight)."),
+    ("Cohort Persistence", "Whether a name's profitability label sticks year to year.",
+     "How much of the never-profitable tail is structurally (not transiently) unprofitable."),
+    ("Valuation of the Tail", "What the market pays for the unprofitable tail.",
+     "Sales multiples and price/book of the tail -- context for whether its leadership was a re-rating rather than fundamentals."),
 ]
 
 GLOSSARY = [
@@ -304,13 +357,35 @@ GLOSSARY = [
      "Lets cohort contributions add up exactly to the index's cumulative return."),
     ("Up / Down capture", "Compounded portfolio return / compounded benchmark return in up / down benchmark months.",
      "R2000G is treated as the benchmark."),
-    ("Manager window", "The period over which active managers were measured -- trailing 3 years to 4/30/2026.",
-     "Default trailing 36 months (May 2023-Apr 2026); set WINDOW_START to pin an exact date. Shown cumulative. "
-     "See the 'Perf Window Proof' tab for the data-driven justification of these dates."),
+    ("Manager window", "The period over which active managers were measured -- trailing {win_years} years to {data_end_pretty}.",
+     "Default trailing {win_months} months ({win_start_pretty}-{data_end_pretty}); set WINDOW_START to pin an exact date. "
+     "Shown cumulative. See the 'Perf Window Proof' tab for the data-driven justification of these dates."),
 ]
 
 
-def reading_guide(wb):
+def _span_fmt(span):
+    """Named values for the {placeholders} in TAB_GUIDE / GLOSSARY, with generic fallbacks so a missing
+    date degrades to readable wording rather than a KeyError."""
+    return {"full_start": span.get("full_start") or "start",
+            "data_end": span.get("data_end") or "end",
+            "win_years": span.get("win_years") or 3,
+            "win_months": span.get("win_months") or 36,
+            "win_start_pretty": _pretty_month(span["win_start"]) if span.get("win_start") else "the window start",
+            "data_end_pretty": _pretty_month(span["data_end"]) if span.get("data_end") else "the latest month"}
+
+
+def _fill(s, fmt):
+    """Substitute {placeholders} only when present; never crash on an unexpected token."""
+    if s and "{" in s:
+        try:
+            return s.format(**fmt)
+        except (KeyError, IndexError, ValueError):
+            return s
+    return s
+
+
+def reading_guide(wb, span=None):
+    fmt = _span_fmt(span or {})
     ws = wb.create_sheet("Reading Guide")
     ws.column_dimensions["A"].width = 24; ws.column_dimensions["B"].width = 62; ws.column_dimensions["C"].width = 70
     ws.cell(1, 1, "Reading Guide — what each tab shows").font = TITLE
@@ -323,21 +398,22 @@ def reading_guide(wb):
             for cc in (2, 3): ws.cell(r, cc).fill = PatternFill("solid", fgColor="7A3B2E")
         else:
             ws.cell(r, 1, a).font = Font(bold=True, size=10)
-            ws.cell(r, 2, b).alignment = Alignment(wrap_text=True, vertical="top")
-            ws.cell(r, 3, c).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.cell(r, 2, _fill(b, fmt)).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.cell(r, 3, _fill(c, fmt)).alignment = Alignment(wrap_text=True, vertical="top")
         r += 1
     ws.freeze_panes = "A4"
 
 
-def glossary(wb):
+def glossary(wb, span=None):
+    fmt = _span_fmt(span or {})
     ws = wb.create_sheet("Glossary")
     ws.column_dimensions["A"].width = 28; ws.column_dimensions["B"].width = 60; ws.column_dimensions["C"].width = 64
     ws.cell(1, 1, "Glossary — metric definitions").font = TITLE
     _hdr_row(ws, 3, ["Metric", "Definition", "Notes"])
     for i, (a, b, c) in enumerate(GLOSSARY, 4):
         ws.cell(i, 1, a).font = Font(bold=True, size=10)
-        ws.cell(i, 2, b).alignment = Alignment(wrap_text=True, vertical="top")
-        ws.cell(i, 3, c).alignment = Alignment(wrap_text=True, vertical="top")
+        ws.cell(i, 2, _fill(b, fmt)).alignment = Alignment(wrap_text=True, vertical="top")
+        ws.cell(i, 3, _fill(c, fmt)).alignment = Alignment(wrap_text=True, vertical="top")
     ws.freeze_panes = "A4"
 
 
@@ -384,8 +460,9 @@ def main():
             print(f"  (optional source not found, skipping: {p.name})")
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
-    exec_summary(wb, srcwb)
-    reading_guide(wb); glossary(wb)
+    span = window_span(srcwb)               # sample + manager-window dates, derived once from the perf tabs
+    exec_summary(wb, srcwb, span)
+    reading_guide(wb, span); glossary(wb, span)
     rel_tab = data_reliability(wb)
     if rel_tab is None:
         print("  (Data Reliability tab skipped: plausibility_flags.csv not found -- run r2k_plausibility.py)")

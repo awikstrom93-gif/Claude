@@ -172,6 +172,14 @@ independently — the source of the 2016 CZR identity bug.)
 | Returns / performance | `r2k_step4/5/8/9` + the returns parts of step6 | unchanged math, now importing the shared helpers from `r2k_universe` (no duplicated `norm_facts`/`fund_for`/`ticker_cik_map`/`annual_spine`). |
 | Assembly + guard | `r2k_step7_consolidate.py`, **`r2k_report.py`** | step7 assembles the IC workbook (incl. the Data Reliability tab via `r2k_view_reliability`); `r2k_report.py` runs the whole chain + the guard. |
 
+**Front matter is data-driven.** step7's **Executive Summary** pulls every figure live from the built
+tabs (unprofitable weight, cohort contribution, counterfactual returns, performance), and the sample /
+manager-window dates are derived once by `window_span()` from the perf tabs — so the "trailing N years"
+phrasing, the **Reading Guide** date references, and the **Glossary** "Manager window" entry all track
+the data on every rebuild instead of being hand-typed. The Reading Guide also covers the four
+panel-native exhibits (Quality Factor Spreads / Solvency Tail / Cohort Persistence / Valuation of the
+Tail), which is why `r2k_methodology.py` no longer lists them separately.
+
 **Consistency guard** (`r2k_report.py --guard`): recomputes the R2000G headline straight off the
 panel and asserts that BOTH the panel-sourced `R2KG Quality Trends` tab AND the independently-built
 step6 `Qual R2000G` tab agree with it. This is the tripwire that makes the original step3-vs-step6
