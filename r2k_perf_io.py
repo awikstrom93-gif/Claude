@@ -90,10 +90,16 @@ def _eom(y, mo):
 
 
 def find_performance_file():
+    """The single monthly-performance workbook every step reads. PREFER the multi-index constituent
+    file (both R2000G AND S&P600G names -- e.g. Indexes_Constituents_Monthly_Performance): it is a
+    superset, so decomposing either index (contribution, breadth) uses the SAME universe everywhere and
+    steps can never diverge on which names exist. Then any constituent file, then a bare
+    performance/return file. Deterministic (sorted) so all callers resolve identically."""
+    pref = ["*[Ii]ndex*[Cc]onstituent*[Pp]erformance*.xlsx", "*[Ii]ndexes*[Pp]erformance*.xlsx"]
     pats = ["*[Cc]onstituent*[Pp]erformance*.xlsx", "*[Mm]onthly*[Pp]erformance*.xlsx",
             "*[Pp]erformance*.xlsx", "*[Rr]eturn*.xlsx"]
-    for p in pats:
-        c = list(BASE.glob(p))
+    for p in pref + pats:
+        c = sorted(BASE.glob(p))
         if c: return c[0]
     raise FileNotFoundError("monthly performance workbook not found in R2KG_BASE")
 

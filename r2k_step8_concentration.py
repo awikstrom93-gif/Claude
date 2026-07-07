@@ -67,17 +67,6 @@ def _hdr(ws, row, hs, fill=HDR):
 # default there ([1,5,10,25,50]), which matches this module's TOP_NS.
 
 
-def find_constituents():
-    """Prefer a constituent-return workbook that carries BOTH indices' names (so S&P600G can be
-    decomposed alongside R2000G), else fall back to the default finder inside load_performance."""
-    for pat in ("*[Ii]ndex*[Cc]onstituent*[Pp]erformance*.xlsx", "*[Cc]onstituent*[Pp]erformance*.xlsx",
-                "*[Mm]onthly*[Pp]erformance*.xlsx"):
-        c = sorted(BASE.glob(pat))
-        if c:
-            return c[0]
-    return None
-
-
 def finest_holdings(index):
     """Beginning-of-month weights at the finest cadence (annual + quarterly merged) for either index --
     the index-parameterized twin of step5's R2KG-only loader, so contribution can be reconstructed for
@@ -243,7 +232,7 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
 
 
 def build():
-    series, idx, pdates = load_performance(find_constituents())
+    series, idx, pdates = load_performance()      # unified finder prefers the multi-index constituent file
     from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
     hr = find_annual("R2KG")
     hs = find_annual("SP600G")
@@ -306,26 +295,19 @@ def build():
             "holdings; annual rows use the June snapshot the rest of the workbook is built on.")
     ww.freeze_panes = "B5"
 
-    # ---- Return Breadth (R2000G) ----
-    wb2 = wb.create_sheet("Return Breadth")
-    wb2.cell(1, 1, "R2000G return breadth -- how narrow was leadership (a direct active-manager headwind)").font = TITLE
-    bcols = ["Year", "Names w/ return", "% Positive", "% Beat index", "Cap-wtd return %",
-             "Median return %", "Cap-wtd minus median (pts)", "Top10 share of gains %", "Top25 share of gains %"]
-    _hdr(wb2, 3, bcols); r = 4
-    breadth_rows = []
-    for y in years:
-        snap = hold_r[spine_r[y]]
-        ym = [d for d in pdates if d.year == y]
-        if not ym: continue
-        idx_ret = compound([idx["R2KG"]["ret"].get(d) for d in ym]) if "R2KG" in idx else None
+    # ---- Return Breadth (BOTH indices) ----
+    def breadth(snap, ikey, ym):
+        """[names, %pos, %beat, capwtd, median, cap-minus-median, top10 share of gains, top25]
+        for one index-year, from beginning-of-year membership joined to constituent returns."""
+        idx_ret = compound([idx[ikey]["ret"].get(d) for d in ym]) if ikey in idx else None
         names = []
         for h in snap:
             rec = ret_rec(h)
-            if not rec: continue
-            yr_ret = compound([rec["ret"].get(d) for d in ym])
-            if all(rec["ret"].get(d) is None for d in ym): continue
-            names.append((h["weight"], yr_ret))
-        if not names: continue
+            if not rec or all(rec["ret"].get(d) is None for d in ym):
+                continue
+            names.append((h["weight"], compound([rec["ret"].get(d) for d in ym])))
+        if not names:
+            return None
         tw = sum(w for w, _ in names) or 1e-9
         npos = sum(1 for _, rr in names if rr > 0)
         nbeat = sum(1 for _, rr in names if idx_ret is not None and rr > idx_ret)
@@ -333,16 +315,36 @@ def build():
         med = median([rr for _, rr in names])
         contribs = sorted((w / tw * rr for w, rr in names), reverse=True)
         gains = sum(c for c in contribs if c > 0) or 1e-9
-        top10 = sum(c for c in contribs[:10] if c > 0) / gains * 100
-        top25 = sum(c for c in contribs[:25] if c > 0) / gains * 100
-        row = [y, len(names), round(100*npos/len(names), 1), round(100*nbeat/len(names), 1),
-               round(100*capw, 1), round(100*med, 1), round(100*(capw-med), 1),
-               round(top10, 1), round(top25, 1)]
-        for c, v in enumerate(row, 1): wb2.cell(r, c, v)
+        return [len(names), round(100 * npos / len(names), 1), round(100 * nbeat / len(names), 1),
+                round(100 * capw, 1), round(100 * med, 1), round(100 * (capw - med), 1),
+                round(sum(c for c in contribs[:10] if c > 0) / gains * 100, 1),
+                round(sum(c for c in contribs[:25] if c > 0) / gains * 100, 1)]
+
+    have_s = bool(hold_s and spine_s)
+    wb2 = wb.create_sheet("Return Breadth")
+    wb2.cell(1, 1, "Return breadth -- how narrow was leadership (a direct active-manager headwind): "
+             "R2000G vs S&P600G").font = TITLE
+    metric = ["Names", "% Positive", "% Beat index", "Cap-wtd ret%", "Median ret%",
+              "Cap-wtd - median (pts)", "Top10 % of gains", "Top25 % of gains"]
+    bcols = ["Year"] + [f"R2KG {m}" for m in metric] + ([f"600G {m}" for m in metric] if have_s else [])
+    _hdr(wb2, 3, bcols); r = 4
+    breadth_rows = []
+    for y in years:
+        ym = [d for d in pdates if d.year == y]
+        if not ym:
+            continue
+        a = breadth(hold_r[spine_r[y]], "R2KG", ym)
+        if a is None:
+            continue
+        b = breadth(hold_s[spine_s[y]], "SP6G", ym) if (have_s and y in spine_s) else None
+        row = [y] + a + (b if b else ([None] * len(metric) if have_s else []))
+        for c, v in enumerate(row, 1):
+            wb2.cell(r, c, v)
         breadth_rows.append((y, row)); r += 1
-    wb2.cell(r + 1, 1, "% Beat index = share of constituents whose calendar-year return exceeded the index's. "
-             "A positive cap-wtd-minus-median spread means a few big winners pulled the index above the typical stock.")
-    wb2.freeze_panes = "A4"
+    wb2.cell(r + 1, 1, "% Beat index = share of constituents whose calendar-year return exceeded THEIR OWN "
+             "index's. A positive cap-wtd-minus-median spread means a few big winners pulled the index above "
+             "the typical stock -- narrower in R2000G is the active-manager headwind; compare with S&P600G.")
+    wb2.freeze_panes = "B4"
 
     # ---- Return Concentration over the manager window ----
     wc = wb.create_sheet("Return Concentration")
@@ -384,16 +386,32 @@ def build():
     tot = sum(c for _, _, _, c in enriched)
     wc.cell(3, 1, f"Window: {win[0]:%Y-%m} to {win[-1]:%Y-%m}").font = Font(bold=True)
     wc.cell(3, 4, "Index return %"); wc.cell(3, 5, round(100 * idx_win, 1) if idx_win is not None else None)
-    wc.cell(5, 1, "Share of window return from top contributors (monthly-linked, held-period weights):").font = Font(bold=True)
+    # both-index top-N share of the window return + the R2KG-minus-600G gap (does R2000G lean harder on
+    # a few names than the earnings-screened S&P600G?). Reuse the shared contribution primitive.
+    holds_w = {ix: finest_holdings(ix) for ix in ("R2KG", "SP600G")}
+    hd_w = {ix: sorted(holds_w[ix]) for ix in holds_w}
+    share = {}
+    for ix in ("R2KG", "SP600G"):
+        iret, cc = period_contrib(ix, win, holds_w[ix], hd_w[ix], ret_rec, idx)
+        share[ix] = topn_pts(cc, [10, 25, 50]) if iret is not None else None
+    rel_w = share["R2KG"] and share["SP600G"]
+    wc.cell(5, 1, "Share of the window return from the top contributors (monthly-linked, held-period "
+            "weights) -- R2000G vs S&P600G:").font = Font(bold=True)
+    _hdr(wc, 6, ["", "R2KG share %", "600G share %", "R2KG - 600G (pts)"] if rel_w else ["", "R2KG share %"])
     for i, k in enumerate([10, 25, 50]):
-        sh = sum(c for _, _, _, c in enriched[:k]) / tot * 100 if tot else None
-        wc.cell(6 + i, 1, f"Top {k} names"); wc.cell(6 + i, 2, round(sh, 1) if sh is not None else None)
-    _hdr(wc, 11, ["Rank", "Name", "Avg weight (held) %", "Return while held %", "Contribution (pts)"])
+        rr = wc.cell(7 + i, 1, f"Top {k} names")
+        a = share["R2KG"][k][1] if share["R2KG"] else None
+        wc.cell(7 + i, 2, round(100 * a, 1) if a is not None else None)
+        if rel_w:
+            b = share["SP600G"][k][1]
+            wc.cell(7 + i, 3, round(100 * b, 1) if b is not None else None)
+            wc.cell(7 + i, 4, round(100 * (a - b), 1) if (a is not None and b is not None) else None)
+    _hdr(wc, 12, ["Rank", "Name (R2000G)", "Avg weight (held) %", "Return while held %", "Contribution (pts)"])
     for i, (nm, wf, hr, c) in enumerate(enriched[:15], 1):
-        wc.cell(11 + i, 1, i); wc.cell(11 + i, 2, nm)
-        wc.cell(11 + i, 3, round(100 * wf, 2)); wc.cell(11 + i, 4, round(100 * hr, 1))
-        wc.cell(11 + i, 5, round(100 * c, 2))
-    wc.cell(28, 1, "Contribution = sum over window months of (beginning-of-month weight x that month's return), "
+        wc.cell(12 + i, 1, i); wc.cell(12 + i, 2, nm)
+        wc.cell(12 + i, 3, round(100 * wf, 2)); wc.cell(12 + i, 4, round(100 * hr, 1))
+        wc.cell(12 + i, 5, round(100 * c, 2))
+    wc.cell(29, 1, "Contribution = sum over window months of (beginning-of-month weight x that month's return), "
             "Carino-linked so the parts sum to the compounded index window return. 'Return while held' compounds "
             "only the months the name was actually in the index -- a mid-window entrant is credited for its held "
             "period, not its entire multi-year run-up. Top-contributor share shows how much of the benchmark's "
