@@ -297,8 +297,8 @@ TAB_GUIDE = [
      "(Mar/Jun/Sep/Dec) shows how much the top names run up WITHIN a calendar year, between the annual June snapshots."),
     ("Conc Breadth", "How narrow R2000G's leadership was each year.",
      "% of names positive, % that BEAT the index, cap-weighted-minus-median spread, and the top-10/25 share of the year's gains."),
-    ("Conc Return", "Who actually drove R2000G over the manager window.",
-     "Share of the index's return from the top 10/25/50 names, plus the leading contributors."),
+    ("Conc Return", "Who actually drove each index over the manager window.",
+     "Top 10/25/50 share of the window return for R2000G AND S&P600G with the gap, plus R2000G's leading contributors."),
     ("Conc Contribution", "How much RETURN the top names delivered -- both indices, absolute and relative.",
      "Calendar-year AND rolling-12m contribution (pts) of the top-N return drivers for R2000G and S&P600G, "
      "with the R2KG-minus-600G difference -- turns the weight run-up into the return it produced and shows "

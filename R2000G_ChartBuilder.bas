@@ -131,7 +131,7 @@ Private Sub BuildSpec(p As Variant)
     Dim hdr As Long, catCol As Long
     Dim ttl As String, yT As String, xT As String, cols As Variant
     target = p(0): typ = UCase$(p(1)): srcN = p(2)
-    hdr = CLng(p(3)): catCol = CLng(p(4))
+    catCol = CLng(p(4))
     cols = Split(p(5), ",")
     ttl = p(6): yT = p(7)
     xT = ""                                 ' NOT IIf(): VBA's IIf evaluates BOTH args, so p(8) would
@@ -143,6 +143,15 @@ Private Sub BuildSpec(p As Variant)
 
     Dim sws As Worksheet: Set sws = SheetOrNothing(srcN)
     If sws Is Nothing Then Exit Sub
+    ' header row: a NUMBER, or "@Label" to locate the header of a SECOND table stacked in the same sheet
+    ' (e.g. the quarterly / rolling blocks below an annual table) by its exact first-column label, so its
+    ' row can shift as data grows without breaking the spec.
+    If Left$(CStr(p(3)), 1) = "@" Then
+        hdr = FindHeaderRow(sws, Mid$(CStr(p(3)), 2), catCol)
+        If hdr = 0 Then Exit Sub
+    Else
+        hdr = CLng(p(3))
+    End If
     Dim tws As Worksheet: Set tws = EnsureSheet(target)
     Dim lr As Long: lr = LastContig(sws, hdr, catCol)
     If lr <= hdr Then Exit Sub
@@ -338,6 +347,20 @@ Private Function LastContig(ws As Worksheet, hdr As Long, catCol As Long) As Lon
     LastContig = r
 End Function
 
+' locate a table's header row by an EXACT (trimmed, case-insensitive) match on its first-column label
+' -- lets a spec target a second table stacked below another whose row position isn't fixed. Exact match
+' so "Quarter" hits the header cell, not a "Quarterly ..." section-title cell above it. 0 = not found.
+Private Function FindHeaderRow(ws As Worksheet, kw As String, col As Long) As Long
+    Dim r As Long, lastR As Long
+    lastR = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+    For r = 1 To lastR
+        If StrComp(Trim$(CStr(ws.Cells(r, col).Value)), kw, vbTextCompare) = 0 Then
+            FindHeaderRow = r: Exit Function
+        End If
+    Next r
+    FindHeaderRow = 0
+End Function
+
 ' next chart position for a target: 2-col grid on Key Charts, else a vertical strip
 ' to the RIGHT of the data on the tab itself
 Private Sub NextPos(target As String, hdr As Long, tws As Worksheet, ByRef L As Double, ByRef T As Double)
@@ -444,9 +467,12 @@ Private Sub LoadSpecs()
     S "Qual Cohort Wt|C|Qual Cohort Wt|3|1|8|Never-profitable weight gap (R2KG - 600G)|Diff (pts)"
     S "Qual Sector Mix|B|Qual Sector Mix|3|1|2,3|Sector weights: R2000G vs S&P 600 Growth|% weight"
     S "Qual Sector Mix|B|Qual Sector Mix|3|1|4|Sector over / underweight (R2KG - 600G)|Diff (pts)"
-    S "Qual Concentration|L|Qual Concentration|3|1|2,7|Top-10 weight: R2KG vs 600G|% of index weight"
-    S "Qual Concentration|L|Qual Concentration|3|1|6,11|Effective N (diversification)|Eff. N"
-    S "Qual Concentration|L|Qual Concentration|3|1|5,10|HHI concentration|HHI"
+    ' Qual Concentration now leads with an "Annual" section header, so the table header is row 4 (was 3);
+    ' a "@Quarter" block below adds the within-year run-up (quarter-end top-N weight).
+    S "Qual Concentration|L|Qual Concentration|4|1|2,7|Top-10 weight (annual): R2KG vs 600G|% of index weight"
+    S "Qual Concentration|L|Qual Concentration|4|1|6,11|Effective N (diversification)|Eff. N"
+    S "Qual Concentration|L|Qual Concentration|4|1|5,10|HHI concentration|HHI"
+    S "Qual Concentration|L|Qual Concentration|@Quarter|1|2,7|Top-10 weight (quarterly): R2KG vs 600G|% of index weight"
 
     ' ---- Attribution ------------------------------------------------------
     S "Attr Contribution|C|Attr Contribution|3|1|2,4|Cohort contribution: full period vs window|Contribution %"
@@ -455,18 +481,34 @@ Private Sub LoadSpecs()
     S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|6,4|Unprofitable & never-profitable weight|% of index weight"
     S "Attr Cohort Ret|L|Attr Cohort Ret|1|1|2,3,5|Monthly return: index vs profitable vs never|Monthly return %"
     S "Attr Counterfactual|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
+    ' Attr Contribution Trend: unprofitable-tail contribution over time, both indices + the gap.
+    S "Attr Contribution Trend|C|Attr Contribution Trend|4|1|3,6|Unprofitable-tail contribution (pts): R2KG vs 600G|Contribution (pts)"
+    S "Attr Contribution Trend|C|Attr Contribution Trend|4|1|8|Tail contribution gap (R2KG - 600G)|Difference (pts)"
+    S "Attr Contribution Trend|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m tail contribution: R2KG vs 600G|Contribution (pts)"
     S "Attr Reconstruction|L|Attr Reconstruction|3|1|2,3|Reconstruction check: actual vs rebuilt|Cumulative %"
     S "Attr Reconstruction|L|Attr Reconstruction|3|1|4|Reconstruction error|Diff (bps)"
 
     ' ---- Concentration ----------------------------------------------------
-    S "Conc Weight|L|Conc Weight|3|1|3,9|Top-10 weight: R2KG vs 600G|% of index weight"
-    S "Conc Weight|L|Conc Weight|3|1|7,13|Effective N: R2KG vs 600G|Eff. N"
-    S "Conc Weight|L|Conc Weight|3|1|2,8|Number of names|# names"
-    S "Conc Breadth|L|Conc Breadth|3|1|3,4|% positive & % beating index|% of names"
-    S "Conc Breadth|L|Conc Breadth|3|1|5,6|Cap-weighted vs median return|Return %"
-    S "Conc Breadth|L|Conc Breadth|3|1|8,9|Top-10 & Top-25 share of gains|% of gains"
-    S "Conc Return|BR|Conc Return|11|2|5|Top contributors to the benchmark (window)|Contribution (pts)"
-    S "Conc Return|BR|Conc Return|11|2|4|Top contributors - window return|Window return %"
+    ' Conc Weight now leads with an "Annual" section header (table header row 4, was 3) and shows Top
+    ' 5/10/25/50 (so columns shifted: R2KG Top10 = col 4, 600G Top10 = col 12, EffN = 9 / 17, # = 2 / 10),
+    ' with a "@Quarter" run-up block below.
+    S "Conc Weight|L|Conc Weight|4|1|4,12|Top-10 weight (annual): R2KG vs 600G|% of index weight"
+    S "Conc Weight|L|Conc Weight|4|1|9,17|Effective N: R2KG vs 600G|Eff. N"
+    S "Conc Weight|L|Conc Weight|4|1|2,10|Number of names|# names"
+    S "Conc Weight|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
+    S "Conc Weight|L|Conc Weight|@Quarter|1|4,5,6|R2KG top 10/25/50 weight (quarterly)|% of index weight"
+    ' Conc Breadth is now both indices side by side (R2KG cols 2-9, 600G cols 10-17).
+    S "Conc Breadth|L|Conc Breadth|3|1|3,4|R2KG % positive & % beating index|% of names"
+    S "Conc Breadth|L|Conc Breadth|3|1|4,12|% beating own index: R2KG vs 600G|% of names"
+    S "Conc Breadth|L|Conc Breadth|3|1|7,15|Cap-wtd minus median spread: R2KG vs 600G|Spread (pts)"
+    S "Conc Breadth|L|Conc Breadth|3|1|8,9|R2KG top-10 & top-25 share of gains|% of gains"
+    S "Conc Return|BR|Conc Return|12|2|5|Top contributors to the benchmark (window)|Contribution (pts)"
+    S "Conc Return|BR|Conc Return|12|2|4|Top contributors - window return|Window return %"
+    ' Conc Contribution: the run-up turned into RETURN, both indices + the gap, calendar and rolling.
+    S "Conc Contribution|C|Conc Contribution|4|1|3,8|Top-10 return contribution (pts): R2KG vs 600G|Contribution (pts)"
+    S "Conc Contribution|C|Conc Contribution|4|1|12|Top-10 contribution gap (R2KG - 600G)|Difference (pts)"
+    S "Conc Contribution|L|Conc Contribution|@Month ending|1|2,4|Rolling-12m top-10 contribution: R2KG vs 600G|Contribution (pts)"
+    S "Conc Contribution|L|Conc Contribution|@Month ending|1|6|Rolling-12m top-10 contribution gap|Difference (pts)"
 
     ' ---- Biotech ----------------------------------------------------------
     S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
@@ -479,6 +521,10 @@ Private Sub LoadSpecs()
     S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5,6,7|Unprofitable industry composition|% of index weight"
     S "Bio Contribution|C|Bio Contribution|3|1|2,4|Biotech contribution: full vs window|Contribution %"
     S "Bio Contribution|C|Bio Contribution|3|1|3,5|Average weight: full vs window|Avg weight %"
+    ' Bio Contribution Trend: biotech contribution over time, both indices + the gap.
+    S "Bio Contribution Trend|C|Bio Contribution Trend|4|1|2,4|Biotech contribution (pts): R2KG vs 600G|Contribution (pts)"
+    S "Bio Contribution Trend|C|Bio Contribution Trend|4|1|6|Biotech contribution gap (R2KG - 600G)|Difference (pts)"
+    S "Bio Contribution Trend|L|Bio Contribution Trend|@Month ending|1|2,3|Rolling-12m biotech contribution: R2KG vs 600G|Contribution (pts)"
     S "Bio Counterfactual|L|Bio Counterfactual|3|1|2,3,4|Ex-biotech counterfactual (growth of $1)|Growth of $1"
 
     ' ---- R2KG deep-dive ---------------------------------------------------
@@ -523,5 +569,7 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Solvency Tail|4|1|3,10|% can't cover interest: R2KG vs 600G|% weight"
     S "Key Charts|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
     S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
-    S "Key Charts|L|Conc Breadth|3|1|8,9|Top-10 & Top-25 share of gains|% of gains"
+    S "Key Charts|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
+    S "Key Charts|C|Conc Contribution|4|1|3,8|Top-10 return contribution: R2KG vs 600G|Contribution (pts)"
+    S "Key Charts|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m unprofitable-tail contribution: R2KG vs 600G|Contribution (pts)"
 End Sub
