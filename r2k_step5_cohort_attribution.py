@@ -346,6 +346,35 @@ def build():
         for c, v in enumerate(vals, 1): wcr.cell(row=i, column=c, value=v)
     wcr.freeze_panes = "A2"
 
+    # ---- Risk by cohort (annualized, from the monthly sub-portfolio returns above) --------------------
+    # The makeup drives the risk: the never-profitable / unknown cohorts run at markedly higher volatility
+    # and deeper drawdowns than the profitable book, so the quality of the index's composition shows up
+    # directly as index risk. Computed from the same monthly cohort return series charted above.
+    def _risk(seq):
+        s = [v for v in seq if v is not None]
+        if len(s) < 3:
+            return (None, None, None, None)
+        n = len(s); mean = sum(s) / n
+        vol = (sum((v - mean) ** 2 for v in s) / (n - 1)) ** 0.5 * (12 ** 0.5) * 100   # annualized %, sample
+        g = 1.0
+        for v in s: g *= (1 + v)
+        aret = (g ** (12 / n) - 1) * 100                                                # annualized geometric %
+        pk = cum = 1.0; mdd = 0.0
+        for v in s:
+            cum *= (1 + v); pk = max(pk, cum); mdd = min(mdd, cum / pk - 1)
+        return (aret, vol, (aret / vol) if vol else None, mdd * 100)
+    rr = len(rows) + 4
+    wcr.cell(row=rr, column=1, value="Risk by cohort (annualized, full window)").font = TITLE
+    _hdr(wcr, rr + 1, ["Cohort", "Ann. return %", "Ann. volatility %", "Return / vol", "Max drawdown %"])
+    risk_seq = [("Index actual", [r["actual"] for r in rows])] + \
+               [(COH_LABEL[c], [r["coh_ret"][c] for r in rows]) for c in COHORTS]
+    for k, (label, seq) in enumerate(risk_seq):
+        aret, vol, rv, mdd = _risk(seq)
+        vals = [label, None if aret is None else round(aret, 1), None if vol is None else round(vol, 1),
+                None if rv is None else round(rv, 2), None if mdd is None else round(mdd, 1)]
+        for c, v in enumerate(vals, 1):
+            wcr.cell(row=rr + 2 + k, column=c, value=v)
+
     # ---- Counterfactual ----
     wcf = wb.create_sheet("Counterfactual")
     wcf.cell(row=1, column=1, value="Earnings-screen counterfactual on R2000G's OWN names (growth of $1)").font = TITLE

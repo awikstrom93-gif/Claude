@@ -499,6 +499,10 @@ Private Sub LoadSpecs()
     S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|2,3,4,5|Cohort weights over time|% of index weight"
     S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|6,4|Unprofitable & never-profitable weight|% of index weight"
     S "Attr Cohort Ret|L|Attr Cohort Ret|1|1|2,3,5|Monthly return: index vs profitable vs never|Monthly return %"
+    ' Risk-by-cohort summary block (anchored on the 'Cohort' header below the monthly series): the makeup
+    ' turned into risk -- the low-quality cohorts carry higher volatility and deeper drawdowns.
+    S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|3|Annualized volatility by cohort|Ann. vol %"
+    S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|5|Max drawdown by cohort|Max drawdown %"
     S "Attr Counterfactual|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
     ' Attr Contribution Trend: unprofitable-tail contribution over time, both indices + the gap.
     S "Attr Contribution Trend|C|Attr Contribution Trend|4|1|3,6|Unprofitable-tail contribution (pts): R2KG vs 600G|Contribution (pts)"
@@ -600,6 +604,7 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight (quarterly): R2KG vs 600G|% of index weight"
+    S "Key Charts|BR|Attr Cohort Ret|@Cohort|1|3|Volatility by profitability cohort (annualized)|Ann. vol %"
     S "Key Charts|C|Conc Contribution|4|1|3,8|Top-10 return contribution: R2KG vs 600G|Contribution (pts)"
     S "Key Charts|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m unprofitable-tail contribution: R2KG vs 600G|Contribution (pts)"
 End Sub
