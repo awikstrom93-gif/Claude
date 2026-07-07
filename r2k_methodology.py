@@ -46,23 +46,25 @@ SUPPORT_TABS = {
 
 # The methodology narrative -- static process knowledge. (Markdown; headings are '## ...'.)
 NARRATIVE = r"""
-## What this review answers
+## What this review covers
 
-Active US small-cap growth managers are measured against the Russell 2000 Growth index, and over the
-recent window they lagged it. The question here is whether that shortfall comes from how the benchmark
-is built rather than from weak stock selection.
+This is a study of what the Russell 2000 Growth index is actually made of, and how that composition has
+shifted since 2012, read against the S&P SmallCap 600 Growth as a foil. The two indices draw from the
+same asset class but part ways on one rule: the S&P 600 admits only companies with positive trailing
+GAAP earnings, while the Russell index screens for nothing. That single difference turns the pair into a
+natural experiment — hold them side by side and the effect of an earnings discipline on a small-cap
+growth portfolio comes into view.
 
-The test compares the Russell 2000 Growth with the S&P SmallCap 600 Growth. The two are constructed
-alike but for one consequential difference: S&P requires positive trailing GAAP earnings before a
-company can enter the 600. A manager who applies any earnings or quality discipline ends up holding
-something closer to the S&P index, so the distance between the two benchmarks stands in for what that
-discipline costs, or earns.
+The tabs build the portrait across four dimensions and follow each through the years. The profitability
+mix: how much of the index earns nothing, and how that tail has grown. The pre-commercial edge: the
+weight in companies with no revenue at all, and the biotech book that drives it. Concentration and
+breadth: how top-heavy the index has become and how narrow its leadership. And the return footprint of
+all three — what the makeup has meant for performance. The companion memo carries the current figures;
+this document explains how each is built and what each tab shows.
 
-The case is made in three steps, each with its own tabs. First, the Russell index carries a much larger
-tail of unprofitable, often pre-revenue companies. Second, that tail led the benchmark over exactly the
-window managers were judged on, so screening it out mechanically produced the underperformance. Third,
-across the full cycle the same discipline came out ahead — more return at lower risk. The companion memo
-carries the current figures; this document explains how they were produced.
+The work began with a practical question — why earnings-disciplined managers trail the Russell benchmark
+in certain windows — and that thread runs underneath what follows. But the subject here is the index
+itself: its makeup, and how it has changed.
 
 ## How the fundamentals were built
 
@@ -164,21 +166,24 @@ are winsorized before any averaging.
 NARRATIVE_ARC = r"""
 ## Reading it in a minute
 
-Start with Qual Comparison, the "why." The one rule that separates the indices — S&P's earnings screen —
-opens a gap that persists: the Russell index carries many more points of unprofitable and
-never-profitable weight in every year. Bio Weight & Quality shows that gap made concrete, in biotech.
+Start with Qual Comparison — the profitability mix. It sets the two indices side by side, year by year,
+and the picture is consistent: the Russell benchmark carries many more points of unprofitable and
+never-profitable weight in every year, and the gap has widened over the decade. Bio Weight & Quality
+shows where most of that low-quality weight lives, in biotech, and how much more pre-commercial that
+book has become.
 
-Then Attr Contribution and Attr Counterfactual, the "cost." Decomposing the Russell index's return by
-quality cohort shows the unprofitable tail leading over the manager window. The counterfactual rebuilds
-the index's own names profitable-only, and the sign flips against the full cycle; that flip is the
-manager's shortfall.
+Then Conc Weight and Conc Breadth — the shape of the index. A long stretch of unusually wide breadth
+gives way to a sharp concentration in the last few years, with market leadership narrowing to a handful
+of names.
 
-Finish with Perf Summary and Perf Window Proof, the "context." Over the full cycle the screened index
-returned more at lower risk. The recent window is what the discipline cost during a low-quality rally,
-and the dates come from the data rather than being chosen to fit.
+Finish with Attr Contribution and Attr Counterfactual — what the makeup has meant. Splitting the return
+by quality cohort shows the unprofitable tail carrying far more of it than its weight in the recent
+rally; the counterfactual reruns the index on its own profitable names to size that effect against the
+full cycle.
 
-The through-line is that the underperformance reflects how the benchmark is built, not lost skill — which
-is why the S&P SmallCap 600 Growth is often the better yardstick for a quality-disciplined mandate.
+The through-line is that the two benchmarks are structurally different portfolios and have grown more so
+— which is why the S&P SmallCap 600 Growth is often the better yardstick for a quality-disciplined
+mandate.
 """.strip("\n")
 
 

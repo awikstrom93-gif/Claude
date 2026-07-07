@@ -163,6 +163,27 @@ def bio_wt(wb):
     return out
 
 
+def conc(wb):
+    """Concentration (`Conc Weight`) and breadth (`Conc Breadth`) by June-snapshot year. Tolerant of a
+    missing tab so an older workbook still produces a memo (the concentration section then self-skips)."""
+    weight, breadth = {}, {}
+    if "Conc Weight" in wb.sheetnames:
+        R = _rows(wb["Conc Weight"]); hi = _hdr_row(R, "Year")
+        for r in R[hi + 1:]:
+            if r and str(r[0]).strip().isdigit():
+                weight[int(r[0])] = dict(n=_num(r[1]), top5=_num(r[2]), top10=_num(r[3]),
+                                         top25=_num(r[4]), top50=_num(r[5]), maxw=_num(r[6]),
+                                         hhi=_num(r[7]), effn=_num(r[8]))
+    if "Conc Breadth" in wb.sheetnames:
+        R = _rows(wb["Conc Breadth"]); hi = _hdr_row(R, "Year")
+        for r in R[hi + 1:]:
+            if r and str(r[0]).strip().isdigit():
+                breadth[int(r[0])] = dict(names=_num(r[1]), pos=_num(r[2]), beat=_num(r[3]),
+                                          capwtd=_num(r[4]), median=_num(r[5]), capmed=_num(r[6]),
+                                          top10g=_num(r[7]), top25g=_num(r[8]))
+    return dict(weight=weight, breadth=breadth)
+
+
 def series_returns(wb, sheet):
     """Full-period and trailing-3y returns for every value column of a growth-of-$1 sheet.
     Base is $1 at the month before the first row, so full = last-1. Window denominator is the row
@@ -212,8 +233,9 @@ def collect(wb):
     biocon = _label_table(wb, "Bio Contribution")
     cf, end_m = series_returns(wb, "Attr Counterfactual")
     bcf, _ = series_returns(wb, "Bio Counterfactual")
+    cn = conc(wb)
     return dict(ps=ps, cal=cal, q=q, wp=wp, attr=attr, bio=bio, biocon=biocon,
-                cf=cf, bcf=bcf, end_m=end_m)
+                cf=cf, bcf=bcf, end_m=end_m, cn=cn)
 
 
 def reconcile(D):
@@ -235,217 +257,210 @@ def reconcile(D):
 
 # --------------------------------------------------------------------------- the memo
 def build_memo(D):
-    ps, cal, q, wp, attr, bio, biocon, cf, bcf = (D["ps"], D["cal"], D["q"], D["wp"], D["attr"],
-                                                  D["bio"], D["biocon"], D["cf"], D["bcf"])
+    ps, cal, q, wp, attr, bio, biocon, cf, bcf, cn = (D["ps"], D["cal"], D["q"], D["wp"], D["attr"],
+                                                      D["bio"], D["biocon"], D["cf"], D["bcf"], D["cn"])
     years = sorted(q)
     y0, yL = years[0], years[-1]                    # first, latest snapshot years (fundamentals basis)
-    # overall return-scope years come from the performance window ("Full window: 2011-01 to 2026-06 ...")
-    yrs_in_text = re.findall(r"(\d{4})-\d{2}", ps.get("window_text", ""))
-    scope0 = yrs_in_text[0] if yrs_in_text else str(y0)
-    scopeL = yrs_in_text[-1] if yrs_in_text else str(yL)
-    ypk = max(years, key=lambda y: (q[y]["unprof_R"] or 0))   # peak-unprofitable year
-    # a mid-cycle reference year near 2019 if present, else the middle year
-    ymid = 2019 if 2019 in q else years[len(years) // 2]
-    diffs = [(q[y]["unprof_R"] or 0) - (q[y]["unprof_6"] or 0) for y in years]
-    dmin, dmax = min(diffs), max(diffs)
+    scope0, scopeL = str(y0), str(yL)               # composition scope = the June-snapshot range
+    win_mo = int(wp.get("used", {}).get("months") or 36)
 
-    # ---- performance (full + window) ----
-    cumR, cum6 = ps["cum"]
-    annR, ann6 = ps["ann"]
-    volR, vol6 = ps["vol"]
-    ddR, dd6 = ps["dd"]
-    used = wp.get("used", {})
-    win_R, win_6, win_x = used.get("r2kg"), used.get("sp6"), used.get("excess")
-    win_mo = int(used.get("months") or 36)
-    win_start = wp.get("window_start") or used.get("start")
-    all_pos = all((c["excess"] or 0) > 0 for c in wp["candidates"])
+    # ---- profitability composition over time ----
+    unpr_pk_y = max(years, key=lambda y: (q[y]["unprof_R"] or 0))
+    nev_pk_y = max(years, key=lambda y: (q[y]["never_R"] or 0))
+    gap_unpr = [(q[y]["unprof_R"] or 0) - (q[y]["unprof_6"] or 0) for y in years]
+    gmin, gmax = min(gap_unpr), max(gap_unpr)
 
-    # ---- counterfactual (reconstruction basis) ----
+    # ---- no-revenue composition over time ----
+    norev_pk_y = max(years, key=lambda y: (q[y]["norev_R"] or 0))
+
+    # ---- biotech composition over time ----
+    byrs = sorted(bio)
+    b0, bL = byrs[0], byrs[-1]
+    bio_pk_y = max(byrs, key=lambda y: (bio[y]["wt_R"] or 0))
+    bio_gap_pk = max(byrs, key=lambda y: (bio[y]["diff"] or 0))
+    bio_norev0 = bio[b0]["norev"]
+    bio_norev_pk_y = max(byrs, key=lambda y: (bio[y]["norev"] or 0))
+
+    # ---- concentration & breadth over time ----
+    cw, cb = cn["weight"], cn["breadth"]
+    cyrs = sorted(cw)
+    have_conc = len(cyrs) >= 3
+    if have_conc:
+        conc_pk_y = max(cyrs, key=lambda y: (cw[y]["hhi"] or 0))     # most top-heavy year
+        pre = [y for y in cyrs if y < conc_pk_y]                     # the calmer years before the spike
+        t10_pre = (sum(cw[y]["top10"] for y in pre) / len(pre)) if pre else None
+        effn_pre = (sum(cw[y]["effn"] for y in pre) / len(pre)) if pre else None
+        cLy = cyrs[-1]
+    byrs_cb = sorted(cb)
+    have_breadth = len(byrs_cb) >= 3
+
+    # ---- return footprint (kept brief; also drives the reconcile guard) ----
     idx_f, idx_w = cf["R2000G index"]
     pf_f, pf_w = cf["Profitable-only"]
     eff_f, eff_w = pf_f - idx_f, pf_w - idx_w
-    xb_f, xb_w = bcf["Ex-biotech"]
-    bxb_eff_w = xb_w - idx_w                          # ex-biotech window effect (negative = biotech helped)
-
-    # ---- cohort attribution (window) ----
+    cum6 = ps["cum"][1]
     tot_w = attr[next(k for k in attr if k.lower().startswith("total"))]["win_c"]
     nev = next(v for k, v in attr.items() if k.lower().startswith("never"))
-    fal = next(v for k, v in attr.items() if k.lower().startswith("fallen"))
-    nev_share = nev["win_c"] / tot_w * 100
-    nev_ratio = (nev["win_c"] / tot_w) / (nev["win_w"] / 100) if nev["win_w"] else None
-    tail_c = (nev["win_c"] or 0) + (fal["win_c"] or 0)
-    tail_w = (nev["win_w"] or 0) + (fal["win_w"] or 0)
-    tail_share = tail_c / tot_w * 100
-
-    # ---- biotech ----
-    bio_wts = [bio[y]["wt_R"] for y in bio if bio[y]["wt_R"] is not None]
-    bio_wt_lo, bio_wt_hi = min(bio_wts), max(bio_wts)
-    bio_pk_y = max(bio, key=lambda y: (bio[y]["wt_R"] or 0))
-    bio6_wts = [bio[y]["wt_6"] for y in bio if bio[y]["wt_6"] is not None]
-    bio6_lo, bio6_hi = min(bio6_wts), max(bio6_wts)
-    bio_gap_pk = max(bio, key=lambda y: (bio[y]["diff"] or 0))
-    bio_unprof = [bio[y]["unprof"] for y in bio if bio[y]["unprof"] is not None]
-    bio_norev = [bio[y]["norev"] for y in bio if bio[y]["norev"] is not None]
+    nev_share = nev["win_c"] / tot_w * 100 if tot_w else None
+    nev_ratio = (nev["win_c"] / tot_w) / (nev["win_w"] / 100) if (tot_w and nev["win_w"]) else None
     bio_win_c = next(v for k, v in biocon.items() if k.lower().startswith("biotech"))["win_c"]
     bio_win_w = next(v for k, v in biocon.items() if k.lower().startswith("biotech"))["win_w"]
-    bio_win_share = bio_win_c / tot_w * 100
+    bio_win_share = bio_win_c / tot_w * 100 if tot_w else None
 
-    P = []                                             # paragraphs
-    P.append("# US Small Cap Growth Benchmark Review")
-    P.append("### Why active managers underperformed the Russell 2000 Growth\n")
+    def anchor_years():
+        """first, a mid year, the peak-unprofitable year, and the latest — de-duplicated, in order."""
+        mid = 2019 if 2019 in q else years[len(years) // 2]
+        return sorted({y0, mid, unpr_pk_y, yL})
+
+    P = []
+    P.append("# US Small Cap Growth — Anatomy of the Benchmark")
+    P.append(f"### What the Russell 2000 Growth is made of, and how it has changed, {scope0}–{scopeL}\n")
     P.append("**Prepared for:** Investment Committee  ")
     P.append(f"**Scope:** Russell 2000 Growth (R2000G) vs. S&P SmallCap 600 Growth (S&P600G), "
-             f"{scope0}–{scopeL}  ")
-    P.append(f"**Manager window:** trailing {win_mo // 12} years, ending {D['end_m']} "
-             f"(start {win_start}; justified in the *Perf Window Proof* tab)  ")
+             f"{scope0}–{scopeL} (June snapshots)  ")
     P.append("**Basis:** As-filed 10-K fundamentals (original accession), point-in-time index "
-             "membership, monthly total returns\n")
-    P.append("*This memo is generated directly from `R2000G_SmallCapGrowth_Benchmark_Review.xlsx`; "
-             "every figure below is read or computed from the tab named at the end of each section.*\n")
+             "membership  ")
+    P.append("*Generated directly from `R2000G_SmallCapGrowth_Benchmark_Review.xlsx`; every figure is "
+             "read or computed from the tab named at the close of each section, so nothing drifts out of "
+             "sync with the analysis.*\n")
     P.append("---\n")
 
-    # Bottom line
-    P.append("## Bottom line\n")
-    P.append(f"Active US Small Cap Growth managers, benchmarked to the Russell 2000 Growth, lagged the "
-             f"index over the trailing {win_mo // 12} years (ending {D['end_m']}). **This was "
-             f"structural, not a loss of manager skill.** The Russell 2000 Growth carries a large tail "
-             f"of unprofitable, often pre-earnings companies that a quality- or earnings-disciplined "
-             f"manager (whose portfolio resembles the S&P SmallCap 600 Growth) systematically avoids. "
-             f"That tail led the benchmark over the window managers were measured on. The same "
-             f"discipline *added* value over the full cycle ({fmt(eff_f, 1, sign=True)} pts) and "
-             f"carried lower volatility and drawdown.\n")
+    # In brief
+    P.append("## In brief\n")
+    P.append(f"The Russell 2000 Growth and the S&P SmallCap 600 Growth are built from the same asset "
+             f"class but to different specifications, and over {scope0}–{scopeL} they have drifted "
+             f"further apart. The one rule that separates them — S&P admits only companies with positive "
+             f"trailing GAAP earnings, Russell screens for nothing — shows up in almost every line of "
+             f"what the two indices are made of. The Russell index carries a far heavier tail of "
+             f"companies that don't earn money, a widening sliver that book no revenue at all, a biotech "
+             f"book back near the top of its range and more pre-commercial than ever, and, most "
+             f"recently, a sharp bout of concentration. This note walks through those four features and "
+             f"how each has moved through the years. It is "
+             f"also, in the background, why a quality-disciplined manager measured against the Russell "
+             f"index tends to trail it when the low-quality tail runs — but the subject here is the "
+             f"composition itself.\n")
     P.append("---\n")
 
-    # Section 1
-    P.append("## 1. The structural difference: R2000G carries a much larger low-quality tail\n")
-    P.append("The S&P SmallCap 600 requires **positive trailing GAAP earnings** to enter the index; "
-             "the Russell 2000 Growth has **no profitability screen**. That single rule produces a "
-             "persistent quality gap:\n")
-    P.append("| Measure (by index weight) | R2000G | S&P600G | Gap |")
+    # 1. Profitability
+    P.append("## 1. Profitability: a widening non-earner tail\n")
+    P.append(f"The share of the Russell index sitting in companies with negative net income has climbed "
+             f"from **{fmt(q[y0]['unprof_R'],0,True)} in {y0}** to a peak of "
+             f"**{fmt(q[unpr_pk_y]['unprof_R'],0,True)} in {unpr_pk_y}**, and stands at "
+             f"**{fmt(q[yL]['unprof_R'],0,True)} in {yL}**. The earnings-screened S&P index never left a "
+             f"low single-digit-to-teens band. The gap is not occasional: in every year of the study the "
+             f"Russell index ran **{fmt(gmin,0)} to {fmt(gmax,0)} points** more unprofitable weight.\n")
+    P.append("| By index weight | R2000G | S&P600G | Gap |")
     P.append("|---|---|---|---|")
-    for y in (y0, ymid, ypk, yL):
-        tag = f"Unprofitable (net income < 0), {y}"
-        if y == ypk:
-            tag += " (peak)"
-        elif y == yL:
-            tag += " (latest)"
+    for y in anchor_years():
+        tag = f"Unprofitable, {y}" + (" (peak)" if y == unpr_pk_y else " (latest)" if y == yL else "")
         P.append(f"| {tag} | {fmt(q[y]['unprof_R'],1,True)} | {fmt(q[y]['unprof_6'],1,True)} | "
-                 f"**{fmt((q[y]['unprof_R'] or 0)-(q[y]['unprof_6'] or 0),1,sign=True)} pts** |")
-    P.append(f"| **Never-profitable** weight, {yL} | **{fmt(q[yL]['never_R'],1,True)}** | "
-             f"**{fmt(q[yL]['never_6'],1,True)}** | "
-             f"**{fmt((q[yL]['never_R'] or 0)-(q[yL]['never_6'] or 0),1,sign=True)} pts** |\n")
-    P.append(f"R2000G ran **{fmt(dmin,0)}–{fmt(dmax,0)} points more unprofitable weight than "
-             f"S&P600G in every single year**. The sharpest cut is the *never-profitable* cohort (no "
-             f"profitable year on record): **{fmt(q[yL]['never_R'],1,True)}** of R2000G by weight in "
-             f"{yL}, versus **{fmt(q[yL]['never_6'],1,True)}** in the earnings-screened S&P600G. "
-             f"R2000G's unprofitable weight peaked at **{fmt(q[ypk]['unprof_R'],1,True)} in {ypk}**, "
-             f"the height of the profitless-growth rally.\n")
-    P.append(f"**Biotech is the embodiment of the gap.** Clinical-stage biotech is "
-             f"**{fmt(min(bio_unprof),0)}–{fmt(max(bio_unprof),0)}% unprofitable** and carries "
-             f"**up to {fmt(max(bio_norev),0)}% with no revenue at all**, so it is largely "
-             f"uninvestable for the earnings-gated S&P 600. It has been "
-             f"**{fmt(bio_wt_lo,0)}–{fmt(bio_wt_hi,0)}% of R2000G** (peaking at "
-             f"{fmt(bio[bio_pk_y]['wt_R'],1,True)} in {bio_pk_y}) versus "
-             f"**{fmt(bio6_lo,0)}–{fmt(bio6_hi,0)}% of S&P600G** — a weight gap that widened "
-             f"to **~{fmt(bio[bio_gap_pk]['diff'],0)} points** ({bio_gap_pk}). Over the "
-             f"{win_mo // 12}-year window biotech contributed **{fmt(bio_win_c,1,sign=True)} of the "
-             f"index's {fmt(tot_w,1,sign=True)} points (~{fmt(bio_win_share,0)}% of the return) from "
-             f"~{fmt(bio_win_w,0)}% of the weight**, and removing it from R2000G's own names cuts the "
-             f"window return to **{fmt(xb_w,1,True)}** — roughly {fmt(-bxb_eff_w,0)} points an "
-             f"earnings-disciplined manager would largely have missed. See the *Bio* tabs.\n")
-    P.append("*Exhibit: workbook tabs `Qual Comparison`, `Bio Weight & Quality`; chart "
-             "\"% Unprofitable by weight\" on `Key Charts`.*\n")
+                 f"{fmt((q[y]['unprof_R'] or 0)-(q[y]['unprof_6'] or 0),1,sign=True)} pts |")
+    P.append(f"| Never-profitable, {yL} | {fmt(q[yL]['never_R'],1,True)} | {fmt(q[yL]['never_6'],1,True)} | "
+             f"{fmt((q[yL]['never_R'] or 0)-(q[yL]['never_6'] or 0),1,sign=True)} pts |\n")
+    P.append(f"The starkest cut is the *never-profitable* cohort — names with no profitable year on "
+             f"record at all. That weight roughly doubled from **{fmt(q[y0]['never_R'],0,True)} in {y0}** "
+             f"to a high of **{fmt(q[nev_pk_y]['never_R'],0,True)} in {nev_pk_y}**, and at "
+             f"**{fmt(q[yL]['never_R'],0,True)}** in {yL} it remains an order of magnitude above the "
+             f"**{fmt(q[yL]['never_6'],1,True)}** in the earnings-gated S&P index. This is the cleanest "
+             f"single read on how much of the Russell benchmark an earnings discipline sets aside.\n")
+    P.append("*Tabs: `Qual Comparison`, `Qual R2000G`; chart \"% unprofitable by weight\" on "
+             "`Key Charts`.*\n")
     P.append("---\n")
 
-    # Section 2
-    P.append("## 2. The realized cost: the unprofitable tail led the benchmark in the window\n")
-    P.append("Decomposing R2000G's realized return into quality cohorts (point-in-time, Carino-linked "
-             "so contributions sum to the index return):\n")
-    P.append(f"- Over the **trailing {win_mo // 12}-year window (ending {D['end_m']})**, the "
-             f"**never-profitable cohort was ~{fmt(nev['win_w'],0)}% of R2000G by weight but delivered "
-             f"~{fmt(nev_share,0)}% of the index's return** ({fmt(nev['win_c'],1,sign=True)} pts of the "
-             f"{fmt(tot_w,1,sign=True)}% total) — roughly **{fmt(nev_ratio,1)}× its weight**. "
-             f"The full unprofitable tail (fallen + never-profitable) drove ~{fmt(tail_share,0)}% of the "
-             f"window's return from ~{fmt(tail_w,0)}% of weight.")
-    P.append("- A manager applying an earnings discipline would not have held those names — and "
-             "would therefore mechanically lag the benchmark.\n")
-    P.append("**The cleanest evidence is the counterfactual.** We rebuilt R2000G's *own* constituents "
-             "as a \"profitable-only\" portfolio (the S&P 600-style screen, reweighted monthly):\n")
-    P.append(f"| | Full period | Manager window ({win_mo // 12} yr) |")
-    P.append("|---|---|---|")
-    P.append(f"| R2000G index (reconstruction) | {fmt(idx_f,1,True)} | {fmt(idx_w,1,True)} |")
-    P.append(f"| Profitable-only (R2000G's own names) | **{fmt(pf_f,1,True)}** | **{fmt(pf_w,1,True)}** |")
-    P.append(f"| Effect of screening for earnings | **{fmt(eff_f,1,sign=True)} pts "
-             f"({'helped' if eff_f > 0 else 'hurt'})** | **{fmt(eff_w,1,sign=True)} pts "
-             f"({'helped' if eff_w > 0 else 'hurt'})** |\n")
-    P.append(f"The sign flips. **Over the full cycle, screening for earnings "
-             f"*{'helped' if eff_f > 0 else 'hurt'}* by ~{fmt(abs(eff_f),0)} points; over the trailing "
-             f"{win_mo // 12}-year window it *{'helped' if eff_w > 0 else 'cost'}* "
-             f"~{fmt(abs(eff_w),0)} points.** That window is precisely when active managers were "
-             f"judged.\n")
-    P.append(f"A corroborating cross-check: the profitable-only rebuild's full-period return "
-             f"(**{fmt(pf_f,1,True)}**) lands close to the *actual* S&P600G index return over the cycle "
-             f"(**{fmt(cum6,1,True)}**) — two independent constructions (an earnings screen on "
-             f"R2000G's own names vs. the separately-built S&P600G) landing in the same place, evidence "
-             f"the earnings screen is the mechanism rather than an artifact.\n")
-    P.append("*Exhibit: workbook tabs `Attr Contribution`, `Attr Counterfactual`; chart "
-             "\"Earnings-screen counterfactual\" on `Key Charts`.*\n")
+    # 2. No revenue + biotech
+    P.append("## 2. No revenue at all — and the biotech engine behind it\n")
+    P.append(f"A step beyond unprofitable is *pre-revenue* — companies booking no top line whatsoever. "
+             f"In the Russell index that weight has run in the low single digits for most of the study "
+             f"and then jumped to **{fmt(q[norev_pk_y]['norev_R'],1,True)} in {norev_pk_y}**, its highest "
+             f"reading; the S&P index has sat essentially at zero throughout. The move is not broad. It "
+             f"is biotech.\n")
+    P.append(f"Clinical-stage biotech is the structural reason the two indices diverge here: it is "
+             f"heavily unprofitable, often has nothing to sell yet, and so is largely uninvestable for an "
+             f"earnings-gated index. Its weight in the Russell benchmark has swung between "
+             f"**{fmt(min(bio[y]['wt_R'] for y in byrs),0)}% and {fmt(max(bio[y]['wt_R'] for y in byrs),0)}%** "
+             f"— **{fmt(bio[b0]['wt_R'],1,True)} in {b0}**, a first peak of "
+             f"**{fmt(bio[bio_pk_y]['wt_R'],1,True)} in {bio_pk_y}**, and back to "
+             f"**{fmt(bio[bL]['wt_R'],1,True)} in {bL}** — against a low, stable **"
+             f"{fmt(bio[bL]['wt_6'],1,True)}** in the S&P index, a tilt that widened to as much as "
+             f"**{fmt(bio[bio_gap_pk]['diff'],0)} points** ({bio_gap_pk}).\n")
+    P.append(f"What has really changed is the *quality* of that biotech weight. The share of Russell "
+             f"biotech that reports no revenue at all has gone from **{fmt(bio_norev0,0)}% in {b0}** to "
+             f"**{fmt(bio[bio_norev_pk_y]['norev'],0)}% in {bio_norev_pk_y}** — the cohort is not just "
+             f"large, it is earlier-stage than it used to be. That is what sits behind the "
+             f"{norev_pk_y} no-revenue reading: a bigger, more pre-commercial biotech book, not a "
+             f"broad-based loss of revenue across the index.\n")
+    P.append("*Tabs: `Bio Weight & Quality`, `Bio Unprof by Industry`; charts on `Key Charts` and the "
+             "`Bio` tabs.*\n")
     P.append("---\n")
 
-    # Section 3
-    P.append("## 3. The long-run context: the discipline wins the cycle\n")
-    P.append(f"Over the full {scope0}–{scopeL} window the quality-screened index was the better "
-             f"asset:\n")
-    P.append("| | R2000G | S&P600G |")
-    P.append("|---|---|---|")
-    P.append(f"| Cumulative total return | {fmt(cumR,1,True)} | **{fmt(cum6,1,True)}** |")
-    P.append(f"| Annualized return | {fmt(annR,1,True)} | **{fmt(ann6,1,True)}** |")
-    P.append(f"| Annualized volatility | {fmt(volR,1,True)} | **{fmt(vol6,1,True)}** |")
-    P.append(f"| Max drawdown | {fmt(ddR,1,True)} | **{fmt(dd6,1,True)}** |\n")
-    P.append(f"S&P600G delivered more return with **less** risk across the cycle. Over the trailing "
-             f"{win_mo // 12}-year window R2000G outran S&P600G by **{fmt(win_x,1,sign=True)} points "
-             f"({fmt(win_R,1,True)} vs {fmt(win_6,1,True)})** on the back of its lower-quality tail "
-             f"— a reversal, not a durable regime change.")
-    # calendar highlights: two best and two worst excess years
-    ce = sorted(cal.items(), key=lambda kv: (kv[1]["excess"] or 0))
-    worst = [y for y, _ in ce[:2]]
-    best = [y for y, _ in ce[-2:]][::-1]
-    def cyr(y):
-        return f"{y} ({fmt(cal[y]['r2kg'],1,True)} vs {fmt(cal[y]['sp6'],1,True)})"
-    P.append(f" Calendar years make the pattern concrete: R2000G led hardest in "
-             f"{cyr(best[0])} and {cyr(best[1])}, but gave it back in {cyr(worst[0])} and "
-             f"{cyr(worst[1])}.\n")
-    rl, os_ = wp.get("rel_low"), wp.get("outperf_start")
-    P.append(f"**Why the window starts where it does — and a transparency note.** R2000G's "
-             f"cumulative excess over S&P600G bottomed in **{rl}** (its relative low); it has led the "
-             f"quality index since, and the trailing-{win_mo // 12}-year window sits within that "
-             f"recovery. The dates are not cherry-picked: the *Perf Window Proof* tab reports the gap "
-             f"across every candidate window, all ending {D['end_m']} — "
-             f"{'the benchmark’s lead is positive in each' if all_pos else 'see the tab for the full set'}"
-             f", so the conclusion does not depend on the exact start month.\n")
-    P.append("*Exhibit: workbook tabs `Perf Summary`, `Perf Calendar Yr`, `Perf Window Proof`; chart "
-             "\"Growth of $1\" on `Key Charts`.*\n")
+    # 3. Concentration & breadth
+    if have_conc:
+        P.append("## 3. Concentration: a recent top-heavy turn\n")
+        P.append(f"For most of the study the Russell index was strikingly diffuse — its top ten names "
+                 f"held only about **{fmt(t10_pre,0)}%** of the index and its effective breadth ran near "
+                 f"**{fmt(effn_pre,0)} names**. That changed abruptly in **{conc_pk_y}**, when the top "
+                 f"ten jumped to **{fmt(cw[conc_pk_y]['top10'],1,True)}**, the single largest name reached "
+                 f"**{fmt(cw[conc_pk_y]['maxw'],1,True)}**, the Herfindahl index roughly doubled to "
+                 f"**{fmt(cw[conc_pk_y]['hhi'],0)}**, and effective breadth fell to "
+                 f"**~{fmt(cw[conc_pk_y]['effn'],0)} names** — a handful of winners running well ahead of "
+                 f"the pack. By **{cLy}** it had eased (top ten {fmt(cw[cLy]['top10'],1,True)}, "
+                 f"effective breadth ~{fmt(cw[cLy]['effn'],0)}) but remained above the pre-{conc_pk_y} "
+                 f"norm.\n")
+        P.append("| June snapshot | Top-10 wt | Largest name | HHI | Eff. N |")
+        P.append("|---|---|---|---|---|")
+        show = sorted({cyrs[0], conc_pk_y, cLy})
+        for y in show:
+            P.append(f"| {y} | {fmt(cw[y]['top10'],1,True)} | {fmt(cw[y]['maxw'],1,True)} | "
+                     f"{fmt(cw[y]['hhi'],0)} | {fmt(cw[y]['effn'],0)} |")
+        P.append("")
+        if have_breadth:
+            yb = byrs_cb[-1]
+            P.append(f"Leadership narrowed alongside the weight. In {yb} the cap-weighted return ran "
+                     f"**{fmt(cb[yb]['capmed'],0)} points** ahead of the median name, and the top ten "
+                     f"names accounted for **{fmt(cb[yb]['top10g'],0)}%** of the index's gains — a market "
+                     f"carried by a few, which is a direct headwind for a diversified, "
+                     f"equal-conviction book.\n")
+        P.append("*Tabs: `Conc Weight`, `Conc Breadth`; charts on `Key Charts`.*\n")
+        P.append("---\n")
+
+    # 4. What the makeup has meant (brief return footprint)
+    P.append("## 4. What the composition has meant for returns\n")
+    P.append(f"The makeup is not just descriptive — it drives the index's returns. Over the trailing "
+             f"{win_mo // 12} years (ending {D['end_m']}), the never-profitable cohort carried "
+             f"~**{fmt(nev['win_w'],0)}%** of the Russell index by weight but produced "
+             f"~**{fmt(nev_share,0)}%** of its return, about **{fmt(nev_ratio,1)}× its weight**, and "
+             f"biotech alone accounted for ~**{fmt(bio_win_share,0)}%** of the return from "
+             f"~**{fmt(bio_win_w,0)}%** of the weight. Screening the Russell index down to only its "
+             f"profitable names — an S&P-600-style rule applied to its *own* constituents — would have "
+             f"changed the full-cycle return by **{fmt(eff_f,1,sign=True)} points** and the trailing "
+             f"window by **{fmt(eff_w,1,sign=True)} points**: the low-quality tail is a drag over the "
+             f"long run and a boost in the recent rally. As a check on the construction, that "
+             f"profitable-only rebuild lands close to the actual S&P600G return over the cycle "
+             f"(**{fmt(pf_f,1,True)}** vs **{fmt(cum6,1,True)}**).\n")
+    P.append("*Tabs: `Attr Contribution`, `Attr Counterfactual`, `Bio Contribution`.*\n")
     P.append("---\n")
 
-    # Implications
-    P.append("## Implications for the Committee\n")
-    P.append("1. **Reframe the underperformance.** Judged against R2000G, an earnings-disciplined SCG "
-             "manager will lag whenever the benchmark's unprofitable tail leads. That is a "
-             "benchmark-construction effect, not evidence of lost skill.")
-    P.append("2. **Benchmark fit.** Where mandates are quality/earnings-disciplined, the S&P SmallCap "
-             "600 Growth is the more representative yardstick; consider it as a primary or secondary "
-             "benchmark, or as context alongside R2000G.")
-    P.append("3. **Forward view.** The full-cycle and risk numbers favor the disciplined approach. The "
-             "recent window is the cost of that discipline during a low-quality rally, not a reason to "
-             "abandon it.\n")
+    # For the Committee
+    P.append("## For the Committee\n")
+    P.append(f"The two small-cap growth benchmarks are structurally different portfolios, and the gap "
+             f"has widened rather than closed. The Russell index today is **{fmt(q[yL]['unprof_R'],0,True)} "
+             f"unprofitable by weight, {fmt(q[yL]['norev_R'],1,True)} pre-revenue, and "
+             f"{fmt(bio[bL]['wt_R'],0,True)} biotech**, and it recently passed through its most "
+             f"concentrated episode of the study. None of that is present to the same degree in the "
+             f"earnings-screened S&P SmallCap 600 Growth.\n")
+    P.append("For a quality- or earnings-disciplined mandate, this is the practical takeaway: the "
+             "manager is being measured against a benchmark whose distinguishing features — the "
+             "non-earner tail, the pre-commercial biotech book, the bursts of concentration — are "
+             "precisely the exposures the mandate is designed to limit. Where that is the case, the "
+             "S&P SmallCap 600 Growth is the more representative yardstick, whether as a primary "
+             "benchmark or as standing context alongside the Russell index.\n")
     P.append("---\n")
     P.append("*Methodology: fundamentals are taken as originally filed in each 10-K (by original "
-             "accession, no restatement blending). Index membership is point-in-time with no "
-             "look-ahead (a constituent's fiscal year is the latest 10-K filed before each snapshot). "
-             "Commodity/securities broker-dealers that gross up pass-through sales are carried on a net "
-             "operating-revenue basis. Cohort attribution is Carino-linked so cohort contributions sum "
-             "exactly to the index's cumulative return. Full detail and per-tab notes in "
-             "`R2000G_SmallCapGrowth_Benchmark_Review.xlsx`.*")
+             "accession, no restatement blending). Index membership is point-in-time with no look-ahead "
+             "(a constituent's fiscal year is the latest 10-K filed before each June snapshot). "
+             "Financial-sector filers report interest/premium/fee top lines rather than revenue, so they "
+             "are not counted in the no-revenue figures. Dollar totals count each company once across "
+             "share classes. Full definitions and per-tab notes accompany the workbook.*")
     return "\n".join(P) + "\n"
 
 
