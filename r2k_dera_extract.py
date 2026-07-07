@@ -97,7 +97,7 @@ def process_quarter(quarter, targets):
     vals = defaultdict(dict)     # adsh -> {(tag,version,qtrs): value}
     with fh:
         ix = header_ix(fh)
-        seg_i = ix.get("segments"); uom_i = ix.get("uom")
+        seg_i = ix.get("segments"); uom_i = ix.get("uom"); cor_i = ix.get("coreg")
         tag_i, ver_i, dd_i, q_i, val_i = ix["tag"], ix["version"], ix["ddate"], ix["qtrs"], ix["value"]
         for line in fh:
             cut = line.find("\t")
@@ -106,6 +106,13 @@ def process_quarter(quarter, targets):
             p = line.rstrip("\n").split("\t")
             if seg_i is not None and seg_i < len(p) and p[seg_i]:
                 continue                                    # drop dimensional breakdowns
+            # co-registrant facts: guarantor/parent-only columns from a Rule 3-10 consolidating schedule
+            # carry the SAME undimensioned tag as the consolidated registrant (coreg="") but a different,
+            # often tiny value (e.g. Griffon's parent holdco $0.7M vs the $1.98B consolidated revenue).
+            # Keyed only by (tag,ver,qtrs), the last one silently overwrote the consolidated total. Keep
+            # ONLY the consolidated registrant (coreg empty).
+            if cor_i is not None and cor_i < len(p) and p[cor_i]:
+                continue
             adsh = p[0]; per = targets[adsh]["period"]
             if dd_i >= len(p) or p[dd_i] != per:
                 continue                                    # current period only
@@ -116,7 +123,19 @@ def process_quarter(quarter, targets):
             v = p[val_i] if val_i < len(p) else ""
             if v == "":
                 continue
-            vals[adsh][(p[tag_i], p[ver_i], q)] = (v, uom)
+            key = (p[tag_i], p[ver_i], q)
+            # belt-and-suspenders for any residual same-key collision (duplicate XBRL context that isn't a
+            # coreg): never let a smaller positive value overwrite a larger one -- a face-statement total's
+            # consolidated figure is the larger. Mixed/negative signs keep the first (no magnitude guess).
+            old = vals[adsh].get(key)
+            if old is not None:
+                try:
+                    ov, nv = float(old[0]), float(v)
+                    if ov > 0 and nv > 0 and nv <= ov:
+                        continue
+                except ValueError:
+                    pass
+            vals[adsh][key] = (v, uom)
     # ---- pre.txt: presentation; join to values ----
     fh = open_member(quarter, "pre.txt")
     if fh is None:
@@ -219,7 +238,13 @@ def selftest():
         # NO undimensioned current-period num value (only a segment one, dropped) -> must stay dropped.
         "0003\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\t\t\t3000\t\n"
         "0003\tDisaggRevenue\tus-gaap/2024\t20241231\t4\tUSD\tProduct\t\t3000\t\n"
-        "0003\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t9000\t\n", encoding="utf-8")
+        "0003\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t9000\t\n"
+        # 0004 = a Rule 3-10 guarantor filer (Griffon): the consolidated revenue total collides, on
+        # (tag,ver,qtrs), with a tiny PARENT-ONLY co-registrant value and a duplicate coreg="" stub.
+        "0004\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\t\t\t2000000000\t\n"          # consolidated total
+        "0004\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\t\tParentCo\t700000\t\n"      # coreg guarantor -> drop
+        "0004\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\t\t\t500000\t\n"              # coreg='' stub -> must not overwrite 2B
+        "0004\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t3000000000\t\n", encoding="utf-8")
     (zips / "2025q1" / "pre.txt").write_text(
         "adsh\treport\tline\tstmt\tinpth\trfile\ttag\tversion\tplabel\tnegating\n"
         "0001\t2\t1\tIS\t0\tR\tRevenues\tus-gaap/2024\tTotal revenue\t0\n"
@@ -231,13 +256,16 @@ def selftest():
         "0002\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n"
         "0003\t2\t1\tUN\t0\tR\tRevenues\tus-gaap/2024\tRevenues\t0\n"            # revenue under stmt=UN -> rescued (joins)
         "0003\t2\t2\tUN\t0\tR\tDisaggRevenue\tus-gaap/2024\tDisaggregation\t0\n"  # UN, no undimensioned num -> dropped
-        "0003\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n", encoding="utf-8")
+        "0003\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n"
+        "0004\t2\t1\tIS\t0\tR\tRevenues\tus-gaap/2024\tRevenue\t0\n"
+        "0004\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n", encoding="utf-8")
     idx = d / "dera_filing_index.csv"
     idx.write_text("adsh,cik,name,sic,countryba,form,fye,period,fy,fp,filed,accepted,prevrpt,detail,"
                    "quarter,is_ifrs,is_original\n"
                    "0001,1664703,BLOOM,3690,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
                    "0002,1664704,COMBO,2000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
-                   "0003,1664705,UNCAT,8000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
+                   "0003,1664705,UNCAT,8000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
+                   "0004,1664706,GUAR,3000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
                    encoding="utf-8")
     global DERA_DIR, INDEX, OUT
     DERA_DIR = zips; INDEX = idx; OUT = d / "facts.csv"
@@ -259,6 +287,9 @@ def selftest():
     un = byt.get(("1664705", "Revenues"))
     ok_un = (un is not None and un["value"] == "3000"
              and ("1664705", "DisaggRevenue") not in byt)
+    # coreg guarantor + duplicate stub must not overwrite the consolidated total (Griffon)
+    gr = byt.get(("1664706", "Revenues"))
+    ok_coreg = (gr is not None and gr["value"] == "2000000000")
     for r in got:
         print(f"   cik {r['cik']} {r['stmt']:<3} {r['tag']:<16} = {r['value']:<6} tax={r['taxonomy']}")
     print(f"\n  SELFTEST: comparative+segment+nonstatement excluded, current-period kept -> "
@@ -267,6 +298,8 @@ def selftest():
           f"{'PASS' if ok_ci else 'FAIL'}")
     print(f"  SELFTEST: stmt=UN revenue rescued when it joins a value (Revenues=3000), UN noise dropped -> "
           f"{'PASS' if ok_un else 'FAIL'}")
+    print(f"  SELFTEST: coreg guarantor + dup stub don't overwrite consolidated total (Revenues=2B, not "
+          f"700K/500K) -> {'PASS' if ok_coreg else 'FAIL'}")
 
 
 if __name__ == "__main__":
