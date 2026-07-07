@@ -102,7 +102,10 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        # canonical tags above always win: lessor lease income, insurance-broker commissions, asset-
        # manager advisory fees, financial interest+dividend income -- fill names the standard list missed.
        "OperatingLeaseLeaseIncome", "InsuranceCommissionsAndFees",
-       "InvestmentAdvisoryManagementAndAdministrativeFees", "InterestAndDividendIncomeOperating"]
+       "InvestmentAdvisoryManagementAndAdministrativeFees", "InterestAndDividendIncomeOperating",
+       # broker/dealer NET revenue (revenues net of interest expense) -- the top line Stifel-type
+       # capital-markets firms report; fills broker years the standard list left blank.
+       "RevenuesNetOfInterestExpense"]
 COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoods",
         "CostOfServices", "CostOfSales"]
 # curated operating-revenue lines (a GROSS top line, positive). Used only to recover a real revenue
