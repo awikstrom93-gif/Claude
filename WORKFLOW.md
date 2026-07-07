@@ -137,6 +137,16 @@ guard at the end. It orchestrates, in order: panel + analytics → performance �
 comparison → concentration → biotech → consolidate → guard. Flags: `--guard` re-runs only the
 consistency check on the existing workbook; `--skip step4_performance,…` omits named steps.
 
+**The IC memo is generated, never hand-typed** (`python r2k_memo.py`, after `r2k_report.py`):
+it reads the finished workbook and writes **`R2000G_SCG_Benchmark_Review_Memo.md`** with every figure
+in the prose pulled from a named tab or computed from that tab's own monthly growth-of-$1 series —
+the window dates, the peak-unprofitable year, the "latest" year, and the direction of every effect
+("helped"/"hurt") are all derived, so the narrative and the numbers move together on any re-run. A
+built-in reconciliation aborts the run if the index return it reconstructs from the counterfactual
+series disagrees with the `Attr Contribution` total the workbook already reports (i.e. a tab layout
+changed and an extractor needs updating), rather than emit a silently-wrong memo. `--selftest`
+extracts + reconciles and prints the headline figures without writing.
+
 ### The panel architecture (why there is now one command)
 
 Every fundamental figure in the workbook is a projection of **one** table, the *panel*, so the tabs
@@ -239,6 +249,7 @@ python r2k_dera_to_fundamentals.py
 python r2k_plausibility.py
 python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
 python r2k_refresh_charts_data.py
+python r2k_memo.py                      # regenerate R2000G_SCG_Benchmark_Review_Memo.md from the workbook
 ```
 
 ---
