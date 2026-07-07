@@ -34,10 +34,11 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from r2k_perf_io import load_performance, load_monthly_holdings, BASE
-from r2k_universe import annual_spine   # consolidated: one definition
+from r2k_universe import annual_spine, find_annual, find_quarterly   # consolidated: one definition
 from r2k_calc import compound, weight_conc, carino_K, carino_k   # shared calc primitives (one definition)
 
 OUT = BASE / "R2000G_Concentration.xlsx"
+IKEY = {"R2KG": "R2KG", "SP600G": "SP6G"}   # our index label -> the benchmark key in load_performance
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))
 WINDOW_MONTHS = int(os.environ.get("WINDOW_MONTHS", "36"))
 WINDOW_START = os.environ.get("WINDOW_START")
@@ -66,8 +67,183 @@ def _hdr(ws, row, hs, fill=HDR):
 # default there ([1,5,10,25,50]), which matches this module's TOP_NS.
 
 
+def find_constituents():
+    """Prefer a constituent-return workbook that carries BOTH indices' names (so S&P600G can be
+    decomposed alongside R2000G), else fall back to the default finder inside load_performance."""
+    for pat in ("*[Ii]ndex*[Cc]onstituent*[Pp]erformance*.xlsx", "*[Cc]onstituent*[Pp]erformance*.xlsx",
+                "*[Mm]onthly*[Pp]erformance*.xlsx"):
+        c = sorted(BASE.glob(pat))
+        if c:
+            return c[0]
+    return None
+
+
+def finest_holdings(index):
+    """Beginning-of-month weights at the finest cadence (annual + quarterly merged) for either index --
+    the index-parameterized twin of step5's R2KG-only loader, so contribution can be reconstructed for
+    both benchmarks with minimal weight-drift. Quarterly wins date collisions (finer). {date: [rows]}."""
+    merged = {}
+    for finder in (lambda: find_annual(index), lambda: find_quarterly(index)):
+        try:
+            path = finder()
+        except Exception:
+            path = None
+        if path:
+            for d, rows in load_monthly_holdings(path, verbose=False).items():
+                merged[d] = rows
+    return merged
+
+
+def _nearest_prior(dts, d):
+    p = [x for x in dts if x <= d]
+    return p[-1] if p else None
+
+
+def period_contrib(index, months, hold, hdates, ret_rec, idx):
+    """(index_return, {name: contribution}) over `months`, monthly-linked and Carino-scaled so the
+    per-name contributions sum to the compounded index return. Beginning-of-month (nearest-prior) held
+    weight x that month's return -- a name is credited only for months it was actually in the index."""
+    ikey = IKEY[index]
+    if ikey not in idx:
+        return None, {}
+    idx_ret = compound([idx[ikey]["ret"].get(d) for d in months])
+    if idx_ret is None:
+        return None, {}
+    Kt = carino_K(idx_ret)
+    contrib = defaultdict(float)
+    for d in months:
+        snap = hold.get(_nearest_prior(hdates, d))
+        if not snap:
+            continue
+        tw = sum(h["weight"] for h in snap) or 1.0
+        Rm = idx[ikey]["ret"].get(d)
+        if Rm is None:
+            continue
+        km = carino_k(Rm)
+        for h in snap:
+            rec = ret_rec(h)
+            if rec is None:
+                continue
+            rm = rec["ret"].get(d)
+            if rm is None:
+                continue
+            nm = h["nt"] or h["name"]
+            contrib[nm] += (km / Kt) * (h["weight"] / tw) * rm
+    return idx_ret, contrib
+
+
+def topn_pts(contrib, ns):
+    """{n: (contribution_pts, share_of_total)} for the top-n return contributors."""
+    ranked = sorted(contrib.values(), reverse=True)
+    tot = sum(contrib.values())
+    return {nn: (sum(ranked[:nn]), (sum(ranked[:nn]) / tot if tot else None)) for nn in ns}
+
+
+def return_contribution(wb, series, idx, pdates, ret_rec):
+    """New tab: how much of each index's return came from its top contributors -- the run-up in names,
+    turned into RETURN, both ABSOLUTE (each index) and RELATIVE (R2KG minus S&P600G). Calendar-year and
+    rolling-12m, so a concentrated run-up (top-N weight ballooning within a year, per the Weight
+    Concentration tab) is tied to the return it delivered."""
+    NS = [10, 25, 50]
+    holds = {ix: finest_holdings(ix) for ix in ("R2KG", "SP600G")}
+    hd = {ix: sorted(holds[ix]) for ix in holds}
+
+    def covered(ix):
+        if IKEY[ix] not in idx or not hd[ix]:
+            return False
+        snap = holds[ix][hd[ix][-1]]
+        return snap and sum(1 for h in snap if ret_rec(h)) / len(snap) > 0.5
+
+    idxs = [ix for ix in ("R2KG", "SP600G") if covered(ix)]
+    rel = len(idxs) == 2
+    lab = {"R2KG": "R2KG", "SP600G": "600G"}
+
+    ws = wb.create_sheet("Return Contribution")
+    ws.cell(1, 1, "Return contribution of the top names -- how the run-up in the largest names drove "
+            "each index (absolute), and R2000G vs S&P600G (relative)").font = TITLE
+
+    # ---- calendar-year ----
+    ws.cell(3, 1, "Calendar-year: contribution (pts) of the top-N return drivers to each index's total "
+            "return, and their share of it").font = Font(bold=True, size=11, color="1F4E5F")
+    head = ["Year"]
+    for ix in idxs:
+        head += [f"{lab[ix]} index%"] + [f"{lab[ix]} Top{n} pts" for n in NS] + [f"{lab[ix]} Top10 %ret"]
+    if rel:
+        head += ["Top10 pts diff (R2KG-600G)", "Top25 pts diff"]
+    _hdr(ws, 4, head); r = 5
+    years = sorted({d.year for d in pdates})
+    for y in years:
+        months = [d for d in pdates if d.year == y]
+        per = {}
+        for ix in idxs:
+            iret, contrib = period_contrib(ix, months, holds[ix], hd[ix], ret_rec, idx)
+            per[ix] = (iret, topn_pts(contrib, NS)) if iret is not None else None
+        if not any(per.get(ix) for ix in idxs):
+            continue
+        row = [y]
+        for ix in idxs:
+            if per.get(ix):
+                iret, tp = per[ix]
+                row += [round(100 * iret, 1)] + [round(100 * tp[n][0], 1) for n in NS] + \
+                       [round(100 * tp[10][1], 0) if tp[10][1] is not None else None]
+            else:
+                row += [None] * (len(NS) + 2)
+        if rel and per.get("R2KG") and per.get("SP600G"):
+            d10 = 100 * (per["R2KG"][1][10][0] - per["SP600G"][1][10][0])
+            d25 = 100 * (per["R2KG"][1][25][0] - per["SP600G"][1][25][0])
+            row += [round(d10, 1), round(d25, 1)]
+        elif rel:
+            row += [None, None]
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+        r += 1
+
+    # ---- rolling 12m ----
+    r += 1
+    ws.cell(r, 1, "Rolling 12-month: contribution (pts) of the top-N return drivers over the trailing "
+            "year -- when concentration drove each index, and the gap vs S&P600G").font = Font(bold=True, size=11, color="7A3B2E")
+    r += 1
+    rhead = ["Month ending"]
+    for ix in idxs:
+        rhead += [f"{lab[ix]} Top10 pts", f"{lab[ix]} Top25 pts"]
+    if rel:
+        rhead += ["Top10 pts diff (R2KG-600G)"]
+    _hdr(ws, r, rhead, fill=HDR2); r += 1
+    mdates = sorted(pdates)
+    for i in range(11, len(mdates)):
+        window = mdates[i - 11:i + 1]                      # trailing 12 months
+        d = mdates[i]
+        cell = {}
+        for ix in idxs:
+            iret, contrib = period_contrib(ix, window, holds[ix], hd[ix], ret_rec, idx)
+            cell[ix] = topn_pts(contrib, [10, 25]) if iret is not None else None
+        if not any(cell.values()):
+            continue
+        row = [f"{d:%Y-%m}"]
+        for ix in idxs:
+            tp = cell.get(ix)
+            row += [round(100 * tp[10][0], 1), round(100 * tp[25][0], 1)] if tp else [None, None]
+        if rel and cell.get("R2KG") and cell.get("SP600G"):
+            row += [round(100 * (cell["R2KG"][10][0] - cell["SP600G"][10][0]), 1)]
+        elif rel:
+            row += [None]
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+        r += 1
+
+    ws.cell(r + 1, 1, "Contribution = sum over the period's months of (beginning-of-month held weight x "
+            "that month's return), Carino-linked so the top-N contributions are a share of the index's "
+            "compounded return. 'Top-N' = the N largest RETURN contributors that period (concentration of "
+            "gains). A positive R2KG-minus-600G diff means R2000G's gains leaned harder on a few names than "
+            "the earnings-screened S&P600G did." + ("" if rel else "  (S&P600G constituent returns not "
+            "found in the performance file -- showing R2000G only; supply the multi-index constituent "
+            "workbook to add the relative columns.)"))
+    ws.freeze_panes = "B5"
+    return idxs
+
+
 def build():
-    series, idx, pdates = load_performance()
+    series, idx, pdates = load_performance(find_constituents())
     from r2k_universe import find_annual          # one shared holdings resolver (quarterly-aware)
     hr = find_annual("R2KG")
     hs = find_annual("SP600G")
@@ -223,6 +399,9 @@ def build():
             "period, not its entire multi-year run-up. Top-contributor share shows how much of the benchmark's "
             "gain came from a handful of names.")
 
+    # ---- Return Contribution (top-name contribution, both indices, absolute + relative) ----
+    rc_idxs = return_contribution(wb, series, idx, pdates, ret_rec)
+
     # ---- Notes ----
     nd = wb.create_sheet("Notes")
     for i, ln in enumerate([
@@ -234,6 +413,10 @@ def build():
         "Return Breadth: per calendar year, joins constituent monthly returns to beginning-of-year membership.",
         "   % Beat index and the cap-wtd-vs-median spread show how concentrated the year's leadership was.",
         "Return Concentration: over the manager window, the share of the index's return from the top 10/25/50 names.",
+        "Return Contribution: calendar-year AND rolling-12m contribution (pts) of the top-N return drivers for",
+        "   BOTH indices and the R2KG-minus-600G difference -- turns the weight run-up into the return it delivered,",
+        "   absolute and relative to the earnings-screened S&P600G." + ("" if len(rc_idxs) == 2 else
+        "  (S&P600G constituents absent from the perf file -> R2000G only.)"),
         "Calendar years 2015 (from May) and 2026 (through Apr) are partial.",
     ], 1): nd.cell(i, 1, ln)
     nd.column_dimensions["A"].width = 115

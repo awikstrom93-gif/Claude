@@ -58,7 +58,7 @@ SHEETS = [
     (ATTR, "Reconstruction", "Attr Reconstruction"),
     # ---- concentration deep-dive (step 8, optional) ----
     (CONC, "Weight Concentration", "Conc Weight"), (CONC, "Return Breadth", "Conc Breadth"),
-    (CONC, "Return Concentration", "Conc Return"),
+    (CONC, "Return Concentration", "Conc Return"), (CONC, "Return Contribution", "Conc Contribution"),
     # ---- biotech deep-dive (step 9, optional) ----
     (BIO, "Biotech Weight & Quality", "Bio Weight & Quality"), (BIO, "Biotech in the Tail", "Bio In Tail"),
     (BIO, "Unprofitable by Theme", "Bio Unprof by Theme"), (BIO, "Unprofitable by Industry", "Bio Unprof by Industry"),
@@ -293,6 +293,10 @@ TAB_GUIDE = [
      "% of names positive, % that BEAT the index, cap-weighted-minus-median spread, and the top-10/25 share of the year's gains."),
     ("Conc Return", "Who actually drove R2000G over the manager window.",
      "Share of the index's return from the top 10/25/50 names, plus the leading contributors."),
+    ("Conc Contribution", "How much RETURN the top names delivered -- both indices, absolute and relative.",
+     "Calendar-year AND rolling-12m contribution (pts) of the top-N return drivers for R2000G and S&P600G, "
+     "with the R2KG-minus-600G difference -- turns the weight run-up into the return it produced and shows "
+     "when concentration drove R2000G vs the earnings-screened S&P600G."),
     ("Biotech deep-dive (step 9)", None, None),
     ("Bio Weight & Quality", "Biotech weight in each index + its quality in R2000G.",
      "Biotech weight R2000G vs 600G over time, and %unprofitable / %no-revenue within R2000G biotech."),
