@@ -94,14 +94,39 @@ with open("dera_facts_revgaps.csv", "w", newline="", encoding="utf-8") as f:
     w = csv.DictWriter(f, fieldnames=cols)
     w.writeheader(); w.writerows(rows)
 
-# per-cik: the ANNUAL (qtrs=4) revenue-ish rows, so we can see the tag/period actually filed
+# DECISIVE per-cik/per-year breakdown: does an annual (qtrs=4) revenue-ish row exist, and does it
+# carry a VALUE?  That single fact separates the three failure modes:
+#   VALUE  -> row present + nonblank  => CLASSIFY did not adopt it (REV-list / priority / plausibility)
+#   BLANK  -> row present but value="" => EXTRACT dropped it (ddate!=period: 52/53-wk or period rounding)
+#   (none) -> no annual revenue-ish row at all => not in the IS presentation, or a financial-sector
+#             filer whose top line is interest/premium/fees (has_rev=False is then CORRECT, not a gap)
 from collections import defaultdict
-ann = defaultdict(list)
+per_cy = defaultdict(lambda: {"val": [], "blank": []})   # (cik, fy) -> tags with value / blank
+allq = defaultdict(set)                                    # cik -> set of qtrs seen on revenue-ish rows
 for r in rows:
+    cik = (r.get("cik") or "").lstrip("0")
+    allq[cik].add(str(r.get("qtrs")))
     if str(r.get("qtrs")) in ("4", "4.0"):
-        ann[(r.get("cik") or "").lstrip("0")].append((r.get("fiscal_year"), r.get("tag"), r.get("value")))
-print(f"  -> dera_facts_revgaps.csv : {len(rows)} rows for {len(set((r.get('cik') or '').lstrip('0') for r in rows))} CIKs")
-print(f"  annual (qtrs=4) revenue-ish rows present for {len(ann)}/{len(CIKS)} target CIKs:")
-for c in sorted(ann, key=lambda x:int(x)):
-    tags = sorted(set(t for _, t, _ in ann[c]))
-    print(f"     cik {c}: {tags[:5]}")
+        fy = r.get("fiscal_year")
+        tag = r.get("tag")
+        if (r.get("value") or "").strip():
+            per_cy[(cik, fy)]["val"].append(tag)
+        else:
+            per_cy[(cik, fy)]["blank"].append(tag)
+print(f"  -> dera_facts_revgaps.csv : {len(rows)} rows for "
+      f"{len(set((r.get('cik') or '').lstrip('0') for r in rows))} CIKs\n")
+ciks_seen = sorted(allq, key=lambda x: int(x))
+noann = sorted(str(int(c)) for c in CIKS if str(int(c)) not in {str(int(x)) for x in ciks_seen})
+for c in ciks_seen:
+    yrs = sorted(fy for (cc, fy) in per_cy if cc == c)
+    verdicts = []
+    for fy in yrs:
+        d = per_cy[(c, fy)]
+        if d["val"]:
+            verdicts.append(f"{fy}=VALUE({d['val'][0]})")
+        elif d["blank"]:
+            verdicts.append(f"{fy}=BLANK({d['blank'][0]})")
+    tail = f"  qtrs_seen={sorted(allq[c])}" if not per_cy else ""
+    print(f"     cik {c}: {'; '.join(verdicts) if verdicts else 'no annual revenue-ish row'}{tail}")
+if noann:
+    print(f"\n  CIKs with NO revenue-ish rows at all (financial-sector top line, or not indexed): {noann}")
