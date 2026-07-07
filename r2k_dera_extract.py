@@ -135,11 +135,18 @@ def process_quarter(quarter, targets):
             p = line.rstrip("\n").split("\t")
             adsh = p[0]
             stmt = p[cstmt] if cstmt is not None and cstmt < len(p) else ""
-            if stmt not in ("IS", "BS", "CF"):
+            # CI = combined "Statement of Operations AND Comprehensive Income". Filers who use that one
+            # combined statement (Winnebago, Select Medical, Carrols, Innophos, many packaged-food /
+            # hospital / retail names) present REVENUE and every operating line under stmt=CI, not IS --
+            # so excluding CI silently dropped their whole income statement (revenue came through blank
+            # while NI survived off the cash-flow top line). Treat CI like IS: emit its lines and let the
+            # tag-role classifier pick what it needs. The extra OCI lines carry tags no role list adopts,
+            # and a duplicate NetIncomeLoss (also on IS/CF) is the identical value -> no double count.
+            if stmt not in ("IS", "BS", "CF", "CI"):
                 continue
             tag = p[ctag] if ctag < len(p) else ""
             ver = p[cver] if cver < len(p) else ""
-            # pick the value: prefer qtrs 4 for IS/CF, 0 for BS; fall back to the other
+            # pick the value: prefer qtrs 4 for IS/CI/CF, 0 for BS; fall back to the other
             qpref = ("0", "4") if stmt == "BS" else ("4", "0")
             val = uom = None
             for q in qpref:
@@ -194,32 +201,48 @@ def selftest():
         "0001\tRevenues\tus-gaap/2024\t20231231\t4\tUSD\t\t\t900\t\n"          # prior-year comparative (drop)
         "0001\tRevenues\tus-gaap/2024\t20241231\t4\tUSD\tProduct\t\t600\t\n"   # segment (drop)
         "0001\tCostOfRevenue\tus-gaap/2024\t20241231\t4\tUSD\t\t\t700\t\n"
-        "0001\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t5000\t\n", encoding="utf-8")
+        "0001\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t5000\t\n"
+        # 0002 = a COMBINED statement-of-operations-and-comprehensive-income filer: revenue is filed
+        # ONLY under stmt=CI (see pre.txt), NI reappears on the cash flow. Undimensioned totals exist.
+        "0002\tSalesRevenueNet\tus-gaap/2024\t20241231\t4\tUSD\t\t\t2000\t\n"
+        "0002\tNetIncomeLoss\tus-gaap/2024\t20241231\t4\tUSD\t\t\t150\t\n"
+        "0002\tAssets\tus-gaap/2024\t20241231\t0\tUSD\t\t\t8000\t\n", encoding="utf-8")
     (zips / "2025q1" / "pre.txt").write_text(
         "adsh\treport\tline\tstmt\tinpth\trfile\ttag\tversion\tplabel\tnegating\n"
         "0001\t2\t1\tIS\t0\tR\tRevenues\tus-gaap/2024\tTotal revenue\t0\n"
         "0001\t2\t2\tIS\t0\tR\tCostOfRevenue\tus-gaap/2024\tCost of revenue\t0\n"
         "0001\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n"
-        "0001\t9\t1\tCP\t0\tR\tDocumentType\tdei/2024\tdoc\t0\n", encoding="utf-8")  # non-statement (drop)
+        "0001\t9\t1\tCP\t0\tR\tDocumentType\tdei/2024\tdoc\t0\n"             # non-statement (drop)
+        "0002\t2\t1\tCI\t0\tR\tSalesRevenueNet\tus-gaap/2024\tNet sales\t0\n"   # revenue on the CI statement
+        "0002\t3\t1\tCF\t0\tR\tNetIncomeLoss\tus-gaap/2024\tNet income\t0\n"
+        "0002\t4\t1\tBS\t0\tR\tAssets\tus-gaap/2024\tTotal assets\t0\n", encoding="utf-8")
     idx = d / "dera_filing_index.csv"
     idx.write_text("adsh,cik,name,sic,countryba,form,fye,period,fy,fp,filed,accepted,prevrpt,detail,"
                    "quarter,is_ifrs,is_original\n"
-                   "0001,1664703,BLOOM,3690,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
+                   "0001,1664703,BLOOM,3690,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n"
+                   "0002,1664704,COMBO,2000,US,10-K,1231,20241231,2024,FY,20250227,x,0,1,2025q1,,Y\n",
                    encoding="utf-8")
     global DERA_DIR, INDEX, OUT
     DERA_DIR = zips; INDEX = idx; OUT = d / "facts.csv"
     main()
     got = list(csv.DictReader(open(OUT, encoding="utf-8")))
-    byt = {r["tag"]: r for r in got}
-    ok = (len(got) == 3                                  # IS rev + cogs, BS assets; CP dropped
-          and byt["Revenues"]["value"] == "1000"         # current period, not 900 comparative, not 600 segment
-          and byt["CostOfRevenue"]["value"] == "700"
-          and byt["Assets"]["value"] == "5000" and byt["Assets"]["stmt"] == "BS"
-          and all(r["taxonomy"] == "usgaap" for r in got))
+    byt = {(r["cik"], r["tag"]): r for r in got}
+    g1 = [r for r in got if r["cik"] == "1664703"]
+    ok = (len(g1) == 3                                   # IS rev + cogs, BS assets; CP dropped
+          and byt[("1664703", "Revenues")]["value"] == "1000"   # current period, not 900 comparative, not 600 segment
+          and byt[("1664703", "CostOfRevenue")]["value"] == "700"
+          and byt[("1664703", "Assets")]["value"] == "5000" and byt[("1664703", "Assets")]["stmt"] == "BS"
+          and all(r["taxonomy"] == "usgaap" for r in g1))
+    # CI capture: the combined-statement filer's revenue (stmt=CI) must now come through
+    ci = byt.get(("1664704", "SalesRevenueNet"))
+    ok_ci = (ci is not None and ci["value"] == "2000" and ci["stmt"] == "CI"
+             and byt[("1664704", "NetIncomeLoss")]["value"] == "150")
     for r in got:
-        print(f"   {r['stmt']:<3} {r['tag']:<16} = {r['value']:<6} tax={r['taxonomy']}")
+        print(f"   cik {r['cik']} {r['stmt']:<3} {r['tag']:<16} = {r['value']:<6} tax={r['taxonomy']}")
     print(f"\n  SELFTEST: comparative+segment+nonstatement excluded, current-period kept -> "
           f"{'PASS' if ok else 'FAIL'}")
+    print(f"  SELFTEST: combined-CI-statement revenue captured (SalesRevenueNet=2000 via stmt=CI) -> "
+          f"{'PASS' if ok_ci else 'FAIL'}")
 
 
 if __name__ == "__main__":
