@@ -147,6 +147,16 @@ series disagrees with the `Attr Contribution` total the workbook already reports
 changed and an extractor needs updating), rather than emit a silently-wrong memo. `--selftest`
 extracts + reconciles and prints the headline figures without writing.
 
+**The methodology / reader's guide is generated too** (`python r2k_methodology.py`): it writes
+**`METHODOLOGY.md`** — a concise standalone companion that explains HOW the data was built (DERA/XBRL
+foundation, as-filed, point-in-time, identity-checked reconstruction, the broker-dealer net-revenue
+adjustment, measured reliability) and the analytical conventions (dollar-aggregate, profitability
+cohorts, Carino attribution, the counterfactual, the data-driven window), then a **tab-by-tab guide
+and glossary pulled LIVE from the workbook's own `Reading Guide` and `Glossary` tabs** so they can
+never drift from the actual tabs. It is deliberately figure-light (results live in the memo), and a
+coverage check warns if any workbook tab is documented nowhere. `--selftest` runs the parse + coverage
+check without writing.
+
 ### The panel architecture (why there is now one command)
 
 Every fundamental figure in the workbook is a projection of **one** table, the *panel*, so the tabs
@@ -250,6 +260,7 @@ python r2k_plausibility.py
 python r2k_report.py                   # panel + step4/5/6/8/9 + consolidate + consistency guard
 python r2k_refresh_charts_data.py
 python r2k_memo.py                      # regenerate R2000G_SCG_Benchmark_Review_Memo.md from the workbook
+python r2k_methodology.py               # regenerate METHODOLOGY.md (reader's guide) from the workbook
 ```
 
 ---
