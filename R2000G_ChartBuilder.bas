@@ -443,6 +443,7 @@ Private Sub LoadSpecs()
     S "Perf Monthly|S|Perf Monthly|1|2|3|Monthly returns: SP6G vs R2000G (slope = beta)|S&P 600 Growth monthly %|R2000G monthly %"
     S "Perf Rolling 12m|L|Perf Rolling 12m|1|1|2,3|Rolling 12-month return|12m total return %"
     S "Perf Rolling 12m|L|Perf Rolling 12m|1|1|4|Rolling 12-month excess (R2KG - SP6G)|Excess %"
+    S "Perf Rolling 12m|L|Perf Rolling 12m|1|1|5,6|Rolling 12-month volatility (annualized): R2KG vs 600G|Ann. vol %"
     S "Perf Capture|C|Perf Capture|3|1|2,3|Up / Down capture by window|Capture %"
     S "Perf Capture|C|Perf Capture|3|1|10,11|Cumulative return by window|Cumulative %"
     S "Perf Drawdown|L|Perf Drawdown|1|1|2,3|Drawdown: R2000G vs S&P 600 Growth|Drawdown %"
@@ -503,6 +504,7 @@ Private Sub LoadSpecs()
     ' turned into risk -- the low-quality cohorts carry higher volatility and deeper drawdowns.
     S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|3|Annualized volatility by cohort|Ann. vol %"
     S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|5|Max drawdown by cohort|Max drawdown %"
+    S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|6|Beta to index by cohort|Beta"
     S "Attr Counterfactual|L|Attr Counterfactual|3|1|2,3,4|Earnings-screen counterfactual (growth of $1)|Growth of $1"
     ' Attr Contribution Trend: unprofitable-tail contribution over time, both indices + the gap.
     S "Attr Contribution Trend|C|Attr Contribution Trend|4|1|3,6|Unprofitable-tail contribution (pts): R2KG vs 600G|Contribution (pts)"
@@ -605,6 +607,7 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|BR|Attr Cohort Ret|@Cohort|1|3|Volatility by profitability cohort (annualized)|Ann. vol %"
+    S "Key Charts|L|Perf Rolling 12m|1|1|5,6|Rolling 12-month volatility: R2KG vs 600G|Ann. vol %"
     S "Key Charts|C|Conc Contribution|4|1|3,8|Top-10 return contribution: R2KG vs 600G|Contribution (pts)"
     S "Key Charts|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m unprofitable-tail contribution: R2KG vs 600G|Contribution (pts)"
 End Sub

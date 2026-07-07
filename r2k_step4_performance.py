@@ -225,14 +225,25 @@ def build():
         for c, v in enumerate(vals, 1): wm.cell(row=i + 2, column=c, value=v)
     wm.freeze_panes = "A2"
 
-    # ---- Rolling 12m Excess ----
+    # ---- Rolling 12m Excess (+ rolling annualized volatility) ----
     wr = wb.create_sheet("Rolling 12m Excess")
-    _hdr(wr, 1, ["Month", "R2KG 12m %", "SP6G 12m %", "Excess 12m %"])
+    _hdr(wr, 1, ["Month", "R2KG 12m %", "SP6G 12m %", "Excess 12m %",
+                 "R2KG 12m vol %", "SP6G 12m vol %"])
+
+    def _rollvol(xs):
+        """annualized volatility of a 12-month return window (sample stdev x sqrt(12), in %)."""
+        s = [x for x in xs if x is not None]
+        if len(s) < 3:
+            return None
+        m = sum(s) / len(s)
+        return round((sum((x - m) ** 2 for x in s) / (len(s) - 1)) ** 0.5 * (12 ** 0.5) * 100, 1)
+
     rw = 2
     for i in range(11, n):
         seg = range(i - 11, i + 1)
-        tR, tS = compound([rr[j] for j in seg]), compound([sr[j] for j in seg])
-        vals = [f"{dts[i]:%Y-%m-%d}", _p(tR), _p(tS), _p(tR - tS)]
+        segR, segS = [rr[j] for j in seg], [sr[j] for j in seg]
+        tR, tS = compound(segR), compound(segS)
+        vals = [f"{dts[i]:%Y-%m-%d}", _p(tR), _p(tS), _p(tR - tS), _rollvol(segR), _rollvol(segS)]
         for c, v in enumerate(vals, 1): wr.cell(row=rw, column=c, value=v)
         rw += 1
     wr.freeze_panes = "A2"

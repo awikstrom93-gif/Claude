@@ -350,10 +350,12 @@ def build():
     # The makeup drives the risk: the never-profitable / unknown cohorts run at markedly higher volatility
     # and deeper drawdowns than the profitable book, so the quality of the index's composition shows up
     # directly as index risk. Computed from the same monthly cohort return series charted above.
+    idx_seq = [r["actual"] for r in rows]                          # index return series, for cohort beta
+
     def _risk(seq):
         s = [v for v in seq if v is not None]
         if len(s) < 3:
-            return (None, None, None, None)
+            return (None,) * 7
         n = len(s); mean = sum(s) / n
         vol = (sum((v - mean) ** 2 for v in s) / (n - 1)) ** 0.5 * (12 ** 0.5) * 100   # annualized %, sample
         g = 1.0
@@ -362,16 +364,33 @@ def build():
         pk = cum = 1.0; mdd = 0.0
         for v in s:
             cum *= (1 + v); pk = max(pk, cum); mdd = min(mdd, cum / pk - 1)
-        return (aret, vol, (aret / vol) if vol else None, mdd * 100)
+        # downside deviation (annualized, MAR = 0) and Sortino (annret / downside dev)
+        ddv = (sum(min(0.0, v) ** 2 for v in s) / n) ** 0.5 * (12 ** 0.5) * 100
+        sortino = (aret / ddv) if ddv else None
+        return (aret, vol, (aret / vol) if vol else None, mdd * 100, ddv, sortino)
+
+    def _beta(seq):
+        """cohort beta to the index, over months where both have a return (cov / var of index)."""
+        pairs = [(c, i) for c, i in zip(seq, idx_seq) if c is not None and i is not None]
+        if len(pairs) < 3:
+            return None
+        mc = sum(c for c, _ in pairs) / len(pairs); mi = sum(i for _, i in pairs) / len(pairs)
+        vi = sum((i - mi) ** 2 for _, i in pairs)
+        return (sum((c - mc) * (i - mi) for c, i in pairs) / vi) if vi else None
+
     rr = len(rows) + 4
     wcr.cell(row=rr, column=1, value="Risk by cohort (annualized, full window)").font = TITLE
-    _hdr(wcr, rr + 1, ["Cohort", "Ann. return %", "Ann. volatility %", "Return / vol", "Max drawdown %"])
-    risk_seq = [("Index actual", [r["actual"] for r in rows])] + \
+    _hdr(wcr, rr + 1, ["Cohort", "Ann. return %", "Ann. volatility %", "Return / vol", "Max drawdown %",
+                       "Beta to index", "Downside dev %", "Sortino"])
+    risk_seq = [("Index actual", idx_seq)] + \
                [(COH_LABEL[c], [r["coh_ret"][c] for r in rows]) for c in COHORTS]
     for k, (label, seq) in enumerate(risk_seq):
-        aret, vol, rv, mdd = _risk(seq)
+        aret, vol, rv, mdd, ddv, sortino = _risk(seq)
+        beta = _beta(seq) if label != "Index actual" else 1.0
         vals = [label, None if aret is None else round(aret, 1), None if vol is None else round(vol, 1),
-                None if rv is None else round(rv, 2), None if mdd is None else round(mdd, 1)]
+                None if rv is None else round(rv, 2), None if mdd is None else round(mdd, 1),
+                None if beta is None else round(beta, 2), None if ddv is None else round(ddv, 1),
+                None if sortino is None else round(sortino, 2)]
         for c, v in enumerate(vals, 1):
             wcr.cell(row=rr + 2 + k, column=c, value=v)
 
