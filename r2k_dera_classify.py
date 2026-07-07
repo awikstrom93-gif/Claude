@@ -1029,7 +1029,7 @@ def apply_validated_promotions(verbose=True):
     return added
 
 
-def run(facts_rows, sic_of=None, name_of=None):
+def run(facts_rows, sic_of=None, name_of=None, sic_by_key=None):
     apply_validated_promotions()                # fold in tags learned from prior recovery passes
     by = defaultdict(dict); bs = defaultdict(dict)
     isf = defaultdict(dict); cff = defaultdict(dict); meta = {}
@@ -1065,8 +1065,14 @@ def run(facts_rows, sic_of=None, name_of=None):
         #   cost-of-revenue can exceed revenue in a bad year; netting those down would zero out real
         #   mining revenue. Legit brokers/asset managers (6211, net-revenue reporters, no physical COGS)
         #   also never trip the >90% test, so only true gross-up dealers (StoneX) are affected.
+        #   SIC LOOKUP IS FISCAL-YEAR-SPECIFIC (point-in-time). A filer's SIC can drift over time --
+        #   StoneX was 6211 (2011-13) -> 6221 (2014-15) -> 6200 (2016+) -- and a per-CIK map built with
+        #   setdefault() keeps only the FIRST SIC seen (6211), which our set excludes, so the rule would
+        #   never fire on its later 6200/6221 years. Key on (cik, fiscal_year) with the as-filed SIC for
+        #   that year; fall back to the per-CIK map only when a year has no index SIC.
+        _sic = str((sic_by_key or {}).get(key) or (sic_of or {}).get(cik) or "")[:4]
         _rev, _cogs = rec.get("revenue"), rec.get("cost_of_revenue")
-        if (str((sic_of or {}).get(cik) or "")[:4] in ("6200", "6221")
+        if (_sic in ("6200", "6221")
                 and _rev and _rev > 0 and _cogs and _cogs > 0.90 * _rev):
             rec["revenue"] = _rev - _cogs
             rec["cost_of_revenue"] = None
@@ -1239,14 +1245,17 @@ def main():
                 f"r2k_dera_extract.py before classifying "
                 f"(set R2KG_ALLOW_STALE_FACTS=1 to override).")
     facts = list(csv.DictReader(open(FACTS, encoding="utf-8")))
-    sic_of, name_of = {}, {}
+    sic_of, name_of, sic_by_key = {}, {}, {}
     if INDEX.exists():
         for r in csv.DictReader(open(INDEX, encoding="utf-8")):
-            sic_of.setdefault(r.get("cik", ""), r.get("sic", ""))
+            cik = r.get("cik", ""); sic = r.get("sic", "")
+            sic_of.setdefault(cik, sic)               # per-CIK fallback (first SIC seen)
             fy = r.get("fy", "")
             if str(fy).isdigit():
-                name_of[(r.get("cik", ""), str(fy))] = r.get("name", "")
-    out_rows, tie_rows = run(facts, sic_of, name_of)
+                name_of[(cik, str(fy))] = r.get("name", "")
+                if sic:                                # point-in-time SIC as filed for that fiscal year
+                    sic_by_key[(cik, str(fy))] = sic
+    out_rows, tie_rows = run(facts, sic_of, name_of, sic_by_key)
     fields = ["cik", "fiscal_year", "sector", "taxonomy", "form", "n_identities", "n_tie",
               "confidence", "breaks", "provenance", "entity_flag", "revenue", "cost_of_revenue", "gross_profit",
               "operating_income", "ebitda", "depreciation_amortization", "interest_expense",
@@ -1531,11 +1540,15 @@ def selftest():
     bro = run(mk("BRK"), {"BRK": "6200"})[0][0]        # StoneX-type commodity dealer -> net down
     mnr = run(mk("MNR"), {"MNR": "6199"})[0][0]        # bitcoin miner -> must KEEP gross revenue
     nonb = run(mk("MFR"), {"MFR": "3550"})[0][0]       # manufacturer -> keeps gross revenue
+    # SIC-drift regression: per-CIK map (setdefault) locks the FIRST SIC (6211, excluded), but the
+    # fiscal-year map has the as-filed 6200 for this year -> fy-specific SIC must win and net it down.
+    drift = run(mk("DRF"), {"DRF": "6211"}, None, {("DRF", "2024"): "6200"})[0][0]
     ok_broker = (bro["revenue"] == 3000 and bro["cost_of_revenue"] is None and bro["gross_profit"] is None
-                 and mnr["revenue"] == 100000 and nonb["revenue"] == 100000)
+                 and mnr["revenue"] == 100000 and nonb["revenue"] == 100000
+                 and drift["revenue"] == 3000)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST broker gross-up (dealer nets to {bro['revenue']}; miner keeps {mnr['revenue']}; "
-          f"mfr keeps {nonb['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
+          f"mfr keeps {nonb['revenue']}; sic-drift nets to {drift['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
