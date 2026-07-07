@@ -97,12 +97,13 @@ def capture(bench, port, dates):
 
 # ---------- workbook styling ----------
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
+HDR2 = PatternFill("solid", fgColor="7A3B2E")   # quarterly-companion header fill
 TITLE = Font(bold=True, size=12)
 
 
-def _hdr(ws, row, headers):
+def _hdr(ws, row, headers, fill=HDR):
     for c, h in enumerate(headers, 1):
-        x = ws.cell(row=row, column=c, value=h); x.fill = HDR; x.font = HF
+        x = ws.cell(row=row, column=c, value=h); x.fill = fill; x.font = HF
         x.alignment = Alignment(horizontal="center", wrap_text=True)
 
 
@@ -193,6 +194,21 @@ def build():
         seg = [i for i, d in enumerate(dts) if d.year == y]
         cR, cS = compound([rr[i] for i in seg]), compound([sr[i] for i in seg])
         for c, v in enumerate([y, _p(cR), _p(cS), _p(cR - cS), len(seg)], 1): wc.cell(row=cr, column=c, value=v)
+        cr += 1
+    # quarterly total return -- the intra-year performance rhythm the calendar-year rows compress (e.g. a
+    # quarter where the low-quality tail rips shows up here, not in the annual figure).
+    cr += 1
+    wc.cell(row=cr, column=1, value="Quarterly total return -- each calendar quarter's total return for "
+            "both indices (%), with the R2KG-minus-SP6G excess").font = Font(bold=True, size=11, color="7A3B2E")
+    cr += 1
+    _hdr(wc, cr, ["Quarter", "R2000G", "S&P 600 Growth", "Excess", "Months"], fill=HDR2); cr += 1
+    qseg = {}
+    for i, d in enumerate(dts):
+        qseg.setdefault((d.year, (d.month - 1) // 3 + 1), []).append(i)
+    for (yy, qq) in sorted(qseg):
+        seg = qseg[(yy, qq)]
+        cR, cS = compound([rr[i] for i in seg]), compound([sr[i] for i in seg])
+        for c, v in enumerate([f"{yy} Q{qq}", _p(cR), _p(cS), _p(cR - cS), len(seg)], 1): wc.cell(row=cr, column=c, value=v)
         cr += 1
 
     # ---- Monthly & Cumulative ----
