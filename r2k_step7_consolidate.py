@@ -269,13 +269,15 @@ TAB_GUIDE = [
      "persistent run; a candidate-window table shows the choice isn't cherry-picked. The trailing-{win_years}-year "
      "window brackets that rising leg."),
     ("Quality & composition — the structural 'why'", None, None),
-    ("Qual Comparison", "The earnings-screen gap, year by year, side by side.",
-     "For each metric: R2000G | 600G | Diff (R2000G minus 600G). Positive %unprofitable/%no-revenue diffs = R2000G's larger low-quality tail."),
-    ("Qual R2000G", "Full as-filed quality profile of R2000G per year.",
-     "Coverage, profitability cohorts by weight, margins, ROE/ROIC, growth, leverage."),
-    ("Qual SP600G", "Same quality profile for the S&P 600 Growth.", "Directly comparable to Qual R2000G."),
-    ("Qual Cohort Wt", "Profitability-cohort weights for both indices side by side.",
-     "Profitable / Fallen / Never-profitable as % of index weight; the Never-weight diff is the cleanest screen effect."),
+    ("Qual Comparison", "The earnings-screen gap, side by side -- annual AND quarterly.",
+     "For each metric: R2000G | 600G | Diff (R2000G minus 600G). Positive %unprofitable/%no-revenue diffs = R2000G's "
+     "larger low-quality tail. The quarterly block (quarter-end weights, point-in-time annual financials) shows the intra-year shift."),
+    ("Qual R2000G", "Full as-filed quality profile of R2000G -- annual AND quarterly.",
+     "Coverage, profitability cohorts by weight, margins, ROE/ROIC, growth, leverage; the quarterly block tracks the intra-year evolution."),
+    ("Qual SP600G", "Same quality profile for the S&P 600 Growth -- annual AND quarterly.", "Directly comparable to Qual R2000G."),
+    ("Qual Cohort Wt", "Profitability-cohort weights for both indices -- annual AND quarterly.",
+     "Profitable / Fallen / Never-profitable as % of index weight; the Never-weight diff is the cleanest screen effect. "
+     "The quarterly block shows intra-year rotation into/out of the tail."),
     ("Qual Sector Mix", "GICS sector weights for both indices in the latest snapshot.", "With the R2000G-minus-600G difference."),
     ("Qual Concentration", "Top-N weight, HHI, effective-N for both indices -- annual AND quarterly.",
      "Top 10/25/50 weight by year (June snapshot) plus a quarter-end block showing the within-year run-up; see the Conc * tabs for the deeper breadth analysis."),
@@ -304,8 +306,9 @@ TAB_GUIDE = [
      "with the R2KG-minus-600G difference -- turns the weight run-up into the return it produced and shows "
      "when concentration drove R2000G vs the earnings-screened S&P600G."),
     ("Biotech deep-dive (step 9)", None, None),
-    ("Bio Weight & Quality", "Biotech weight in each index + its quality in R2000G.",
-     "Biotech weight R2000G vs 600G over time, and %unprofitable / %no-revenue within R2000G biotech."),
+    ("Bio Weight & Quality", "Biotech weight in each index + its quality -- annual AND quarterly.",
+     "Biotech weight R2000G vs 600G over time (with a quarter-end block for the intra-year swing), and "
+     "%unprofitable / %no-revenue within R2000G biotech."),
     ("Bio In Tail", "How much of R2000G's low-quality tail is biotech / life sciences.",
      "Strict biotech AND broad life-sciences share of the unprofitable and never-profitable weight, by year."),
     ("Bio Unprof by Theme", "What makes up the unprofitable tail, by theme, over time.",
@@ -339,6 +342,18 @@ TAB_GUIDE = [
 ]
 
 GLOSSARY = [
+    ("Units in this workbook", "Read every chart's axis title and column header for the unit -- they are "
+     "stated explicitly.",
+     "% = percent.  pts = PERCENTAGE POINTS (the difference between two percentages, e.g. a weight gap or a "
+     "return contribution).  bps = basis points (1 bp = 0.01%).  x = a multiple / ratio (e.g. leverage, "
+     "effective-N).  $B = US$ billions.  'Growth of $1' = cumulative wealth from $1 invested.  "
+     "'Contribution (pts)' = percentage points of the index's own total return."),
+    ("Annual vs quarterly rows", "Most quality/composition tabs now carry an ANNUAL block (the June "
+     "snapshot) and a QUARTERLY block (every quarter-end, Mar/Jun/Sep/Dec) below it.",
+     "Quarterly rows use quarter-end index WEIGHTS with each name's point-in-time ANNUAL financials (the "
+     "latest 10-K filed before that quarter). They reveal the intra-year shift the June-only view misses -- "
+     "e.g. after the June Russell reconstitution -- so you can see what is actually driving the benchmark "
+     "(biotech / unprofitable / never-profitable weight) as the year progresses."),
     ("Profitability cohort", "Point-in-time label from as-filed net income history.",
      "Profitable = NI>0 in the latest filed FY; Fallen = NI<=0 now but profitable in a prior year; "
      "Never-profitable = no profitable year on record; Unknown = NI not reported."),

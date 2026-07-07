@@ -182,6 +182,17 @@ def build():
     qr = {y: snapshot_quality(hold_r[spine_r[y]], spine_r[y], facts, tmap, temporal) for y in years}
     qs = {y: snapshot_quality(hold_s[spine_s[y]], spine_s[y], facts, tmap, temporal) for y in years}
 
+    # QUARTERLY quality: the SAME point-in-time method on every quarter-end (Mar/Jun/Sep/Dec) -- quarterly
+    # index WEIGHTS with each name's latest-filed annual financials (pick_fy0 is already point-in-time), so
+    # the intra-year shift in what drives the benchmark (biotech / unprofitable / never-profitable weight
+    # ballooning between the annual June snapshots, esp. after the June Russell reconstitution) is visible.
+    from r2k_universe import QUARTER_MONTHS, quarter_label
+    qdates = sorted(d for d in (set(hold_r) & set(hold_s)) if d.month in QUARTER_MONTHS)
+    print(f"  quarterly quality: {len(qdates)} quarter-ends {qdates[0]:%Y-%m}..{qdates[-1]:%Y-%m} "
+          f"(this recomputes per-quarter, so it takes a bit longer)")
+    qr_q = {d: snapshot_quality(hold_r[d], d, facts, tmap, temporal) for d in qdates}
+    qs_q = {d: snapshot_quality(hold_s[d], d, facts, tmap, temporal) for d in qdates}
+
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
     # ---- Comparison (the earnings-screen headline) ----
@@ -213,15 +224,39 @@ def build():
     wc.cell(row=r + 3, column=1, value="Gross margin is computed only where GrossProfit is reported (many "
             "banks/retailers/industrials don't tag it), so it runs higher than a full-COGS index figure -- use as a "
             "relative R2KG-vs-600G signal, not an absolute level.")
+    # quarterly companion -- intra-year variability of the earnings-screen gap
+    r += 5
+    wc.cell(row=r, column=1, value="Quarterly (Mar/Jun/Sep/Dec) -- quarterly weights, point-in-time annual "
+            "financials; shows the intra-year shift the annual rows miss").font = Font(bold=True, size=11, color="7A3B2E")
+    r += 1
+    _hdr(wc, r, ["Quarter"] + hdrs[1:], fill=HDR2); r += 1
+    for d in qdates:
+        row = [quarter_label(d)]
+        for _, key, kind in METR:
+            f = conv[kind]
+            a, b = f(qr_q[d].get(key)), f(qs_q[d].get(key))
+            row += [a, b, (round(a - b, 1) if (a is not None and b is not None) else None)]
+        for c, v in enumerate(row, 1): wc.cell(row=r, column=c, value=v)
+        r += 1
     wc.freeze_panes = "B4"
 
-    # ---- per-index full quality tabs ----
-    for name, q, fill in [("R2000G Quality", qr, HDR), ("SP600G Quality", qs, HDR2)]:
+    # ---- per-index full quality tabs (annual + quarterly) ----
+    for name, q, qq, spine, fill in [("R2000G Quality", qr, qr_q, spine_r, HDR),
+                                     ("SP600G Quality", qs, qs_q, spine_s, HDR2)]:
         ws = wb.create_sheet(name)
         ws.cell(row=1, column=1, value=f"{name} -- annual snapshot (nearest month {TARGET_MONTH})").font = TITLE
         _hdr(ws, 3, FULL_COLS, fill); rr = 4
         for y in years:
-            for c, v in enumerate(full_row(y, (spine_r if "R2000G" in name else spine_s)[y], q[y]), 1):
+            for c, v in enumerate(full_row(y, spine[y], q[y]), 1):
+                ws.cell(row=rr, column=c, value=v)
+            rr += 1
+        rr += 1
+        ws.cell(row=rr, column=1, value="Quarterly (Mar/Jun/Sep/Dec) -- quarterly weights, point-in-time "
+                "annual financials; the intra-year evolution the annual rows miss").font = Font(bold=True, size=11, color="7A3B2E")
+        rr += 1
+        _hdr(ws, rr, ["Quarter"] + FULL_COLS[1:], fill=HDR2); rr += 1
+        for d in qdates:
+            for c, v in enumerate(full_row(quarter_label(d), d, qq[d]), 1):
                 ws.cell(row=rr, column=c, value=v)
             rr += 1
         ws.freeze_panes = "C4"
@@ -229,14 +264,23 @@ def build():
     # ---- Cohort Weights (both indices) ----
     wco = wb.create_sheet("Cohort Weights")
     wco.cell(row=1, column=1, value="Profitability cohort weights -- R2000G vs S&P 600 Growth").font = TITLE
-    _hdr(wco, 3, ["Year", "R2KG Prof", "R2KG Fallen", "R2KG Never", "600G Prof", "600G Fallen",
-                  "600G Never", "Never wt diff (R2KG-600G)"]); rr = 4
-    for y in years:
-        a = qr[y]; b = qs[y]
+    coh_hdr = ["R2KG Prof", "R2KG Fallen", "R2KG Never", "600G Prof", "600G Fallen",
+               "600G Never", "Never wt diff (R2KG-600G)"]
+    def coh_row(a, b):
         nd = (a.get("w_never") or 0) - (b.get("w_never") or 0)
-        row = [y, _p(a.get("w_prof")), _p(a.get("w_fallen")), _p(a.get("w_never")),
-               _p(b.get("w_prof")), _p(b.get("w_fallen")), _p(b.get("w_never")), round(nd, 1)]
-        for c, v in enumerate(row, 1): wco.cell(row=rr, column=c, value=v)
+        return [_p(a.get("w_prof")), _p(a.get("w_fallen")), _p(a.get("w_never")),
+                _p(b.get("w_prof")), _p(b.get("w_fallen")), _p(b.get("w_never")), round(nd, 1)]
+    _hdr(wco, 3, ["Year"] + coh_hdr); rr = 4
+    for y in years:
+        for c, v in enumerate([y] + coh_row(qr[y], qs[y]), 1): wco.cell(row=rr, column=c, value=v)
+        rr += 1
+    rr += 1
+    wco.cell(row=rr, column=1, value="Quarterly (Mar/Jun/Sep/Dec) -- cohort weights at each quarter-end; "
+             "the intra-year rotation into/out of the never-profitable and fallen cohorts").font = Font(bold=True, size=11, color="7A3B2E")
+    rr += 1
+    _hdr(wco, rr, ["Quarter"] + coh_hdr, fill=HDR2); rr += 1
+    for d in qdates:
+        for c, v in enumerate([quarter_label(d)] + coh_row(qr_q[d], qs_q[d]), 1): wco.cell(row=rr, column=c, value=v)
         rr += 1
 
     # ---- Sector Mix (latest year) ----

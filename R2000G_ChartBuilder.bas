@@ -474,6 +474,17 @@ Private Sub LoadSpecs()
     S "Qual Concentration|L|Qual Concentration|4|1|5,10|HHI concentration|HHI"
     S "Qual Concentration|L|Qual Concentration|@Quarter|1|2,7|Top-10 weight (quarterly): R2KG vs 600G|% of index weight"
 
+    ' ---- Quality: QUARTERLY intra-year (weights = quarter-end, financials = point-in-time annual) -----
+    ' Each tab's "@Quarter" block: the composition shift the June-only annual rows miss.
+    S "Qual Comparison|L|Qual Comparison|@Quarter|1|2,3|% Unprofitable (NI) by weight -- quarterly: R2KG vs 600G|% of index weight"
+    S "Qual Comparison|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight -- quarterly: R2KG vs 600G|% of index weight"
+    S "Qual Comparison|L|Qual Comparison|@Quarter|1|8,9|% No-revenue weight -- quarterly: R2KG vs 600G|% of index weight"
+    S "Qual R2000G|L|Qual R2000G|@Quarter|1|9,10,11|R2000G cohort weights -- quarterly|% of index weight"
+    S "Qual R2000G|L|Qual R2000G|@Quarter|1|6,7|R2000G % unprofitable (NI / OI) -- quarterly|% of index weight"
+    S "Qual SP600G|L|Qual SP600G|@Quarter|1|9,10,11|S&P 600 Growth cohort weights -- quarterly|% of index weight"
+    S "Qual Cohort Wt|L|Qual Cohort Wt|@Quarter|1|4,7|Never-profitable weight -- quarterly: R2KG vs 600G|% of index weight"
+    S "Qual Cohort Wt|L|Qual Cohort Wt|@Quarter|1|2,5|Profitable weight -- quarterly: R2KG vs 600G|% of index weight"
+
     ' ---- Attribution ------------------------------------------------------
     S "Attr Contribution|C|Attr Contribution|3|1|2,4|Cohort contribution: full period vs window|Contribution %"
     S "Attr Contribution|C|Attr Contribution|3|1|3,5|Average cohort weight: full vs window|Avg weight %"
@@ -514,6 +525,7 @@ Private Sub LoadSpecs()
     S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
     S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|3,7|Biotech name count: R2KG vs 600G|# names"
     S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|4,5|Biotech %unprofitable & %no-revenue|% within biotech"
+    S "Bio Weight & Quality|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight -- quarterly: R2KG vs 600G|% of index weight"
     S "Bio In Tail|L|Bio In Tail|3|1|4,8|Biotech share of unprofitable & never-prof|% of cohort"
     S "Bio In Tail|L|Bio In Tail|3|1|2,7|R2KG unprofitable & never-prof weight|% of index weight"
     S "Bio Unprof by Theme|A|Bio Unprof by Theme|3|1|2,3,4,5,6,7,8,9,10|Unprofitable weight by theme (stacked)|% of index weight"
@@ -570,6 +582,8 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
     S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
     S "Key Charts|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight (quarterly): R2KG vs 600G|% of index weight"
+    S "Key Charts|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|C|Conc Contribution|4|1|3,8|Top-10 return contribution: R2KG vs 600G|Contribution (pts)"
     S "Key Charts|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m unprofitable-tail contribution: R2KG vs 600G|Contribution (pts)"
 End Sub

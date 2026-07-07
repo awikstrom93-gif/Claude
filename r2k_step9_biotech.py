@@ -63,6 +63,7 @@ THEMES = [  # (label, [industry keywords]); first match wins, order matters
 ]
 
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
+HDR2 = PatternFill("solid", fgColor="7A3B2E")   # quarterly-companion header fill
 TITLE = Font(bold=True, size=12)
 
 
@@ -73,9 +74,9 @@ def find(pats):
     return None
 
 
-def _hdr(ws, row, hs):
+def _hdr(ws, row, hs, fill=HDR):
     for c, h in enumerate(hs, 1):
-        x = ws.cell(row=row, column=c, value=h); x.fill = HDR; x.font = HF
+        x = ws.cell(row=row, column=c, value=h); x.fill = fill; x.font = HF
         x.alignment = Alignment(horizontal="center", wrap_text=True)
 
 
@@ -143,37 +144,54 @@ def build():
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 
     # ---- Biotech Weight & Quality ----
-    wq = wb.create_sheet("Biotech Weight & Quality")
-    wq.cell(1, 1, "Biotech weight & quality -- R2000G vs S&P 600 Growth").font = TITLE
-    _hdr(wq, 3, ["Year", "R2KG biotech wt%", "R2KG biotech #", "Biotech %unprofitable (NI)",
-                 "Biotech %no-revenue", "600G biotech wt%", "600G biotech #", "Wt diff (R2KG-600G)"])
-    r = 4
-    for y in years:
-        snap = hold_r[spine_r[y]]; tw = sum(h["weight"] for h in snap) or 1e-9
+    def bio_wq(snap, snap_dt, ss):
+        """[R2KG bio wt%, #, %unprof, %no-rev, 600G bio wt%, #, wt diff] for one snapshot (quarterly
+        weights, point-in-time annual financials)."""
+        tw = sum(h["weight"] for h in snap) or 1e-9
         bio = [h for h in snap if is_bio(h)]
         bw = sum(h["weight"] for h in bio) / tw * 100
-        # quality within biotech (needs fundamentals)
-        snap_dt = spine_r[y]; un_w = nr_w = cov_w = 0.0
+        un_w = nr_w = cov_w = 0.0
         for h in bio:
             cf = fund_for(facts, hcik(h))
-            if not cf: continue
+            if not cf:
+                continue
             fy0 = pick_fy0(cf, snap_dt)
-            if fy0 is None: continue
+            if fy0 is None:
+                continue
             cm = company_metrics(cf, fy0); cov_w += h["weight"]
             if cm["prof_ni"] is False: un_w += h["weight"]
             if not cm["has_rev"]: nr_w += h["weight"]
         un = 100 * un_w / cov_w if cov_w else None
         nr = 100 * nr_w / cov_w if cov_w else None
         sb = sw = None
-        if hold_s and y in spine_s:
-            ss = hold_s[spine_s[y]]; stw = sum(h["weight"] for h in ss) or 1e-9
+        if ss:
+            stw = sum(h["weight"] for h in ss) or 1e-9
             sbio = [h for h in ss if is_bio(h)]
             sw = sum(h["weight"] for h in sbio) / stw * 100; sb = len(sbio)
-        row = [y, round(bw, 1), len(bio), round(un, 1) if un is not None else None,
-               round(nr, 1) if nr is not None else None,
-               round(sw, 1) if sw is not None else None, sb,
-               round(bw - sw, 1) if sw is not None else None]
-        for c, v in enumerate(row, 1): wq.cell(r, c, v)
+        return [round(bw, 1), len(bio), round(un, 1) if un is not None else None,
+                round(nr, 1) if nr is not None else None,
+                round(sw, 1) if sw is not None else None, sb,
+                round(bw - sw, 1) if sw is not None else None]
+
+    wq = wb.create_sheet("Biotech Weight & Quality")
+    wq.cell(1, 1, "Biotech weight & quality -- R2000G vs S&P 600 Growth").font = TITLE
+    bcols = ["R2KG biotech wt%", "R2KG biotech #", "Biotech %unprofitable (NI)",
+             "Biotech %no-revenue", "600G biotech wt%", "600G biotech #", "Wt diff (R2KG-600G)"]
+    _hdr(wq, 3, ["Year"] + bcols); r = 4
+    for y in years:
+        ss = hold_s[spine_s[y]] if (hold_s and y in spine_s) else None
+        for c, v in enumerate([y] + bio_wq(hold_r[spine_r[y]], spine_r[y], ss), 1): wq.cell(r, c, v)
+        r += 1
+    from r2k_universe import QUARTER_MONTHS, quarter_label
+    qd = sorted(d for d in set(hold_r) if d.month in QUARTER_MONTHS)
+    r += 1
+    wq.cell(r, 1, "Quarterly (Mar/Jun/Sep/Dec) -- biotech weight at each quarter-end (quarterly weights, "
+            "point-in-time financials); the intra-year swing in biotech's share that the annual snapshot misses").font = Font(bold=True, size=11, color="7A3B2E")
+    r += 1
+    _hdr(wq, r, ["Quarter"] + bcols, fill=HDR2); r += 1
+    for d in qd:
+        ss = hold_s.get(d) if hold_s else None
+        for c, v in enumerate([quarter_label(d)] + bio_wq(hold_r[d], d, ss), 1): wq.cell(r, c, v)
         r += 1
     wq.cell(r + 1, 1, "Biotech flagged from Morningstar Industry. %unprofitable / %no-revenue are within the "
             "covered biotech names, by weight -- biotech is overwhelmingly pre-earnings, which is why the S&P 600 "
