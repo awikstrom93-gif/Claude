@@ -105,7 +105,19 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "InvestmentAdvisoryManagementAndAdministrativeFees", "InterestAndDividendIncomeOperating",
        # broker/dealer NET revenue (revenues net of interest expense) -- the top line Stifel-type
        # capital-markets firms report; fills broker years the standard list left blank.
-       "RevenuesNetOfInterestExpense"]
+       "RevenuesNetOfInterestExpense",
+       # clinical-stage biotech top line: when a name reports collaboration / license / royalty /
+       # milestone / grant / reimbursement revenue but NO 'Revenues' total (verified as-filed in
+       # dera_facts for the R2000G no-revenue biotech cohort -- e.g. Achieve Life Sciences'
+       # ReimbursementRevenue). LOWEST priority, so a reported 'Revenues' total (or any standard tag
+       # above) always wins and there is no double count; these only fill an otherwise-blank top line.
+       "CollaborationRevenue", "CollaborationRevenues", "CollaborativeRevenues",
+       "CollaborationAndLicensingRevenue", "RevenuesFromCollaborativeAgreements",
+       "RevenueFromCollaborativeArrangementExcludingRevenueFromContractWithCustomer",
+       "RevenueNotFromContractWithCustomer", "LicensesRevenue", "LicenseAndServicesRevenue",
+       "LicensesAndRoyaltyRevenue", "LicenseAndMilestoneRevenues", "RoyaltyRevenue",
+       "MilestoneRevenue", "ProgramFeeRevenue", "ContractsRevenue", "ReimbursementRevenue",
+       "RevenueFromGrants"]
 COGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoods",
         "CostOfServices", "CostOfSales"]
 # curated operating-revenue lines (a GROSS top line, positive). Used only to recover a real revenue
@@ -1576,10 +1588,24 @@ def selftest():
                  and mnr["revenue"] == 100000 and nonb["revenue"] == 100000
                  and drift["revenue"] == 3000 and gponly["revenue"] == 3000
                  and opco["revenue"] == 100000)
+    # biotech collaboration-revenue fill: a name reporting ONLY a granular collaboration/reimbursement
+    # tag (no 'Revenues' total) must have its top line filled; a name reporting BOTH a 'Revenues' total
+    # and a component must take the total (no double count, low-priority fill).
+    bioc = run([dict(cik="BIOC", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                for t, v in {"CollaborationRevenue": 7500000, "ResearchAndDevelopmentExpense": 40000000,
+                             "NetIncomeLoss": -32000000, "Assets": 200000000, "Liabilities": 30000000,
+                             "StockholdersEquity": 170000000}.items()])[0][0]
+    biot = run([dict(cik="BIOT", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                for t, v in {"Revenues": 47500000, "ReimbursementRevenue": 5100000,
+                             "NetIncomeLoss": -10000000, "Assets": 200000000, "Liabilities": 30000000,
+                             "StockholdersEquity": 170000000}.items()])[0][0]
+    ok_biorev = (bioc["revenue"] == 7500000 and biot["revenue"] == 47500000)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST broker gross-up (dealer nets to {bro['revenue']}; miner keeps {mnr['revenue']}; "
           f"mfr keeps {nonb['revenue']}; sic-drift nets to {drift['revenue']}; gp-only nets to "
           f"{gponly['revenue']}; op-co keeps {opco['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
+    print(f"  SELFTEST biotech collab-revenue fill (collab-only={bioc['revenue']}; "
+          f"total-wins={biot['revenue']}): {'PASS' if ok_biorev else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
