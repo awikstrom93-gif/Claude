@@ -290,9 +290,22 @@ def build():
     _hdr(wsx, 3, ["GICS Sector", "R2000G wt%", "S&P 600 Growth wt%", "Diff"]); rr = 4
     sa = qr[ly]["sectors"]; sb = qs[ly]["sectors"]
     ta = sum(sa.values()) or 1; tb = sum(sb.values()) or 1
-    for sec in sorted(set(sa) | set(sb), key=lambda s: -(sa.get(s, 0) / ta)):
+    sec_order = sorted(set(sa) | set(sb), key=lambda s: -(sa.get(s, 0) / ta))
+    for sec in sec_order:
         wa, wb_ = 100 * sa.get(sec, 0) / ta, 100 * sb.get(sec, 0) / tb
         for c, v in enumerate([sec, round(wa, 1), round(wb_, 1), round(wa - wb_, 1)], 1):
+            wsx.cell(row=rr, column=c, value=v)
+        rr += 1
+    # quarterly R2000G sector rotation -- which sectors are gaining/losing weight WITHIN the year (where
+    # the money is flowing), sectors as columns ordered by latest weight.
+    rr += 2
+    wsx.cell(row=rr, column=1, value="Quarterly (Mar/Jun/Sep/Dec) -- R2000G GICS sector weights at each "
+             "quarter-end (% of index); shows intra-year sector rotation").font = Font(bold=True, size=11, color="7A3B2E")
+    rr += 1
+    _hdr(wsx, rr, ["Quarter"] + sec_order, fill=HDR2); rr += 1
+    for d in qdates:
+        sec = qr_q[d]["sectors"]; tot = sum(sec.values()) or 1
+        for c, v in enumerate([quarter_label(d)] + [round(100 * sec.get(s, 0) / tot, 1) for s in sec_order], 1):
             wsx.cell(row=rr, column=c, value=v)
         rr += 1
 

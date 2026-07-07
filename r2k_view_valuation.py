@@ -82,6 +82,29 @@ def write_sheet(wb, panel=None):
     for i, row in enumerate(rows, start=5):
         for c, v in enumerate(row, 1):
             ws.cell(i, c, v)
+    rr = 5 + len(rows)
+    # quarterly companion -- P/S and P/B move with PRICE, so quarter-ends show the tail's intra-year
+    # re-rating (is a run-up multiple expansion or fundamentals?). Sourced from the quarterly panel.
+    try:
+        qpanel = get_quarterly_panel(index="R2KG")
+        qrows = valuation_rows(qpanel, by_quarter=True)
+    except Exception as e:
+        qrows = []
+        ws.cell(rr + 1, 1, f"(quarterly view unavailable: {e})").font = Font(size=9, italic=True)
+    if qrows:
+        rr += 1
+        ws.cell(rr, 1, "Quarterly (quarter-end weights & prices, as-filed financials) -- the tail's "
+                "intra-year re-rating").font = Font(bold=True, size=11, color="7A3B2E")
+        rr += 1
+        qfill = PatternFill("solid", fgColor="7A3B2E")
+        for c, h in enumerate(["Quarter"] + HDR[1:], 1):
+            x = ws.cell(rr, c, h); x.fill = qfill; x.font = Font(bold=True, color="FFFFFF", size=10)
+            x.alignment = Alignment(horizontal="center", wrap_text=True)
+        rr += 1
+        for row in qrows:
+            for c, v in enumerate(row, 1):
+                ws.cell(rr, c, v)
+            rr += 1
     ws.freeze_panes = "B5"
     return "Valuation of the Tail"
 

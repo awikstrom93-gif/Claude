@@ -278,7 +278,8 @@ TAB_GUIDE = [
     ("Qual Cohort Wt", "Profitability-cohort weights for both indices -- annual AND quarterly.",
      "Profitable / Fallen / Never-profitable as % of index weight; the Never-weight diff is the cleanest screen effect. "
      "The quarterly block shows intra-year rotation into/out of the tail."),
-    ("Qual Sector Mix", "GICS sector weights for both indices in the latest snapshot.", "With the R2000G-minus-600G difference."),
+    ("Qual Sector Mix", "GICS sector weights for both indices (latest) + quarterly R2000G rotation.",
+     "Latest-snapshot R2KG-vs-600G difference, plus a quarter-end block showing which sectors gain/lose weight intra-year."),
     ("Qual Concentration", "Top-N weight, HHI, effective-N for both indices -- annual AND quarterly.",
      "Top 10/25/50 weight by year (June snapshot) plus a quarter-end block showing the within-year run-up; see the Conc * tabs for the deeper breadth analysis."),
     ("Cohort attribution — the realized cost", None, None),
@@ -309,12 +310,13 @@ TAB_GUIDE = [
     ("Bio Weight & Quality", "Biotech weight in each index + its quality -- annual AND quarterly.",
      "Biotech weight R2000G vs 600G over time (with a quarter-end block for the intra-year swing), and "
      "%unprofitable / %no-revenue within R2000G biotech."),
-    ("Bio In Tail", "How much of R2000G's low-quality tail is biotech / life sciences.",
-     "Strict biotech AND broad life-sciences share of the unprofitable and never-profitable weight, by year."),
-    ("Bio Unprof by Theme", "What makes up the unprofitable tail, by theme, over time.",
-     "Shows the tail rotating (biotech + software in 2021 -> biotech + hardware/electrical/semis in 2026)."),
-    ("Bio Unprof by Industry", "The unprofitable tail by Morningstar Industry (top 14 + other).",
-     "The detailed breakdown behind the themes; % of each year's unprofitable weight."),
+    ("Bio In Tail", "How much of R2000G's low-quality tail is biotech / life sciences -- annual AND quarterly.",
+     "Strict biotech AND broad life-sciences share of the unprofitable and never-profitable weight; a quarter-end block tracks it intra-year."),
+    ("Bio Unprof by Theme", "What makes up the unprofitable tail, by theme -- annual AND quarterly.",
+     "Shows the tail rotating (biotech + software in 2021 -> biotech + hardware/electrical/semis in 2026); "
+     "the quarterly block shows the rotation WITHIN a year, esp. after the June reconstitution."),
+    ("Bio Unprof by Industry", "The unprofitable tail by Morningstar Industry (top 14 + other) -- annual AND quarterly.",
+     "The detailed breakdown behind the themes; % of each period's unprofitable weight, annual and quarter-end."),
     ("Bio Contribution", "Biotech vs non-biotech contribution to R2000G's return.",
      "Carino-linked; compare biotech's contribution share to its weight share."),
     ("Bio Contribution Trend", "Biotech contribution to the return over time -- both indices.",
@@ -333,12 +335,14 @@ TAB_GUIDE = [
     ("Panel-native exhibits", None, None),
     ("Quality Factor Spreads", "R2000G-vs-S&P600G spread on each quality factor.",
      "Profitability, accruals, gross-profitability, leverage -- the factor view of the same quality gap; the sign shows which index scores better on each factor."),
-    ("Solvency Tail", "The distressed / low-solvency tail of each index.",
-     "Interest coverage, leverage, cash burn -- the balance-sheet counterpart to the earnings tail (who is financially fragile, by weight)."),
+    ("Solvency Tail", "The distressed / low-solvency tail of each index -- annual AND quarterly.",
+     "Interest coverage, leverage, cash burn -- the balance-sheet counterpart to the earnings tail (who is "
+     "financially fragile, by weight); a quarter-end block tracks the distressed share intra-year."),
     ("Cohort Persistence", "Whether a name's profitability label sticks year to year.",
      "How much of the never-profitable tail is structurally (not transiently) unprofitable."),
-    ("Valuation of the Tail", "What the market pays for the unprofitable tail.",
-     "Sales multiples and price/book of the tail -- context for whether its leadership was a re-rating rather than fundamentals."),
+    ("Valuation of the Tail", "What the market pays for the unprofitable tail -- annual AND quarterly.",
+     "Sales multiples and price/book of the tail (as a multiple of the index); the quarterly block shows the "
+     "tail's intra-year re-rating -- whether a run-up is multiple expansion rather than fundamentals."),
 ]
 
 GLOSSARY = [

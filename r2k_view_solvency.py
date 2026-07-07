@@ -10,7 +10,7 @@ expense, debt, cash) -- a single vintage, consistent with every other tab. RUN: 
 """
 from statistics import median
 
-from r2k_universe import get_panel, by_index_year, BASE
+from r2k_universe import get_panel, get_quarterly_panel, by_index_year, BASE
 
 OUT = BASE / "r2k_solvency.txt"
 HDR = ["Year", "n", "%Can'tCoverInt", "%Cover<2x", "MedCover(x)", "%ND/EBITDA>4x",
@@ -61,14 +61,19 @@ def _solvency_for(members):
             "nege_nd": 100 * nege_nd / tw}
 
 
-def solvency_rows(panel):
-    grp = by_index_year(panel)
-    years = sorted(y for (ix, y) in grp if ix == "R2KG")
+def solvency_rows(panel, by_quarter=False):
+    if by_quarter:
+        grp = {}
+        for r in panel:
+            grp.setdefault((r["index"], r["snapshot"]), []).append(r)
+    else:
+        grp = by_index_year(panel)
+    keys = sorted(k for (ix, k) in grp if ix == "R2KG")
     out = []
-    for y in years:
-        a = _solvency_for(grp[("R2KG", y)])
-        b = _solvency_for(grp[("SP600G", y)]) if ("SP600G", y) in grp else None
-        out.append([y, a["n"], round(a["cant"], 1), round(a["c2"], 1),
+    for k in keys:
+        a = _solvency_for(grp[("R2KG", k)])
+        b = _solvency_for(grp[("SP600G", k)]) if ("SP600G", k) in grp else None
+        out.append([k, a["n"], round(a["cant"], 1), round(a["c2"], 1),
                     round(a["medcov"], 1) if a["medcov"] is not None else None, round(a["nde4"], 1),
                     round(a["mednde"], 1) if a["mednde"] is not None else None,
                     round(a["nege"], 1), round(a["nege_nd"], 1),
@@ -92,6 +97,28 @@ def write_sheet(wb, panel=None):
     for i, row in enumerate(rows, start=5):
         for c, v in enumerate(row, 1):
             ws.cell(i, c, v)
+    rr = 5 + len(rows)
+    # quarterly companion -- the distressed tail shifting WITHIN the year (rate-sensitive names entering/
+    # leaving, coverage moving with quarter-end weights). Sourced from the quarterly panel.
+    try:
+        qrows = solvency_rows(get_quarterly_panel(index=None), by_quarter=True)
+    except Exception as e:
+        qrows = []
+        ws.cell(rr + 1, 1, f"(quarterly view unavailable: {e})").font = Font(size=9, italic=True)
+    if qrows:
+        rr += 1
+        ws.cell(rr, 1, "Quarterly (quarter-end weights, as-filed financials) -- the distressed tail "
+                "within each year").font = Font(bold=True, size=11, color="7A3B2E")
+        rr += 1
+        qfill = PatternFill("solid", fgColor="7A3B2E")
+        for c, h in enumerate(["Quarter"] + HDR[1:], 1):
+            x = ws.cell(rr, c, h); x.fill = qfill; x.font = Font(bold=True, color="FFFFFF", size=10)
+            x.alignment = Alignment(horizontal="center", wrap_text=True)
+        rr += 1
+        for row in qrows:
+            for c, v in enumerate(row, 1):
+                ws.cell(rr, c, v)
+            rr += 1
     ws.freeze_panes = "B5"
     return "Solvency Tail"
 

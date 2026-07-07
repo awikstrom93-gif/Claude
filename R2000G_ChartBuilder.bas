@@ -467,8 +467,9 @@ Private Sub LoadSpecs()
     S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|4,7|Never-profitable weight: R2KG vs 600G|% of index weight"
     S "Qual Cohort Wt|L|Qual Cohort Wt|3|1|2,5|Profitable weight: R2KG vs 600G|% of index weight"
     S "Qual Cohort Wt|C|Qual Cohort Wt|3|1|8|Never-profitable weight gap (R2KG - 600G)|Diff (pts)"
-    S "Qual Sector Mix|B|Qual Sector Mix|3|1|2,3|Sector weights: R2000G vs S&P 600 Growth|% weight"
+    S "Qual Sector Mix|B|Qual Sector Mix|3|1|2,3|Sector weights: R2000G vs S&P 600 Growth|% of index weight"
     S "Qual Sector Mix|B|Qual Sector Mix|3|1|4|Sector over / underweight (R2KG - 600G)|Diff (pts)"
+    S "Qual Sector Mix|L|Qual Sector Mix|@Quarter|1|2,3,4|R2000G sector rotation -- quarterly (top sectors)|% of index weight"
     ' Qual Concentration now leads with an "Annual" section header, so the table header is row 4 (was 3);
     ' a "@Quarter" block below adds the within-year run-up (quarter-end top-N weight).
     S "Qual Concentration|L|Qual Concentration|4|1|2,7|Top-10 weight (annual): R2KG vs 600G|% of index weight"
@@ -530,9 +531,12 @@ Private Sub LoadSpecs()
     S "Bio Weight & Quality|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight -- quarterly: R2KG vs 600G|% of index weight"
     S "Bio In Tail|L|Bio In Tail|3|1|4,8|Biotech share of unprofitable & never-prof|% of cohort"
     S "Bio In Tail|L|Bio In Tail|3|1|2,7|R2KG unprofitable & never-prof weight|% of index weight"
-    S "Bio Unprof by Theme|A|Bio Unprof by Theme|3|1|2,3,4,5,6,7,8,9,10|Unprofitable weight by theme (stacked)|% of index weight"
-    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5|Top unprofitable industries|% of index weight"
-    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5,6,7|Unprofitable industry composition|% of index weight"
+    S "Bio In Tail|L|Bio In Tail|@Quarter|1|4,8|Biotech share of tail -- quarterly|% of cohort"
+    S "Bio Unprof by Theme|A|Bio Unprof by Theme|3|1|2,3,4,5,6,7,8,9,10|Unprofitable weight by theme (stacked)|% of unprofitable weight"
+    S "Bio Unprof by Theme|L|Bio Unprof by Theme|@Quarter|1|2,3,4,5,6|Unprofitable tail by theme -- quarterly rotation|% of unprofitable weight"
+    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5|Top unprofitable industries|% of unprofitable weight"
+    S "Bio Unprof by Industry|L|Bio Unprof by Industry|3|1|2,3,4,5,6,7|Unprofitable industry composition|% of unprofitable weight"
+    S "Bio Unprof by Industry|L|Bio Unprof by Industry|@Quarter|1|2,3,4,5|Top unprofitable industries -- quarterly|% of unprofitable weight"
     S "Bio Contribution|C|Bio Contribution|3|1|2,4|Biotech contribution: full vs window|Contribution %"
     S "Bio Contribution|C|Bio Contribution|3|1|3,5|Average weight: full vs window|Avg weight %"
     ' Bio Contribution Trend: biotech contribution over time, both indices + the gap.
@@ -565,11 +569,13 @@ Private Sub LoadSpecs()
     S "Quality Factor Spreads|L|Quality Factor Spreads|4|1|3,4,6|ROIC / GP-Assets / NetMargin spreads|Fwd-3m spread %"
     S "Solvency Tail|L|Solvency Tail|4|1|3,10|% can't cover interest: R2KG vs 600G|% of index weight"
     S "Solvency Tail|L|Solvency Tail|4|1|8,9|% negative EBITDA (with / +net debt)|% of index weight"
-    S "Solvency Tail|L|Solvency Tail|4|1|5,7|Median coverage & net-debt / EBITDA|x"
+    S "Solvency Tail|L|Solvency Tail|4|1|5,7|Median coverage & net-debt / EBITDA|x (multiple)"
+    S "Solvency Tail|L|Solvency Tail|@Quarter|1|3,10|% can't cover interest -- quarterly: R2KG vs 600G|% of index weight"
     S "Cohort Persistence|C|Cohort Persistence|4|1|2,3,4,5,6|Cohort transitions (year over year)|% of cohort"
-    S "Valuation of the Tail|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (multiple of index; 1.0 = in line)"
-    S "Valuation of the Tail|L|Valuation of the Tail|4|1|7,8|P/B relative to the index by cohort|P/B (multiple of index; 1.0 = in line)"
+    S "Valuation of the Tail|L|Valuation of the Tail|4|1|3,4,5|P/S relative to the index by cohort|P/S (x index; 1.0 = in line)"
+    S "Valuation of the Tail|L|Valuation of the Tail|4|1|7,8|P/B relative to the index by cohort|P/B (x index; 1.0 = in line)"
     S "Valuation of the Tail|L|Valuation of the Tail|4|1|2|% no-revenue weight|% of index weight"
+    S "Valuation of the Tail|L|Valuation of the Tail|@Quarter|1|4,5|Tail P/S re-rating -- quarterly (Unprof / Never)|P/S (x index; 1.0 = in line)"
 
     ' ---- Key Charts: curated summary (best from each area) -----------------
     S "Key Charts|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"
