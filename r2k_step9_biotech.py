@@ -160,7 +160,7 @@ def build():
                 continue
             cm = company_metrics(cf, fy0); cov_w += h["weight"]
             if cm["prof_ni"] is False: un_w += h["weight"]
-            if not cm["has_rev"]: nr_w += h["weight"]
+            if not cm["has_rev"] and not cm.get("is_financial"): nr_w += h["weight"]
         un = 100 * un_w / cov_w if cov_w else None
         nr = 100 * nr_w / cov_w if cov_w else None
         sb = sw = None

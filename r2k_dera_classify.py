@@ -98,6 +98,17 @@ REV = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
        "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
        "SalesRevenueGoodsNet", "SalesRevenueServicesNet", "RevenueFromContractsWithCustomers",
        "Revenue", "RevenueLossFromContractWithCustomerIncludingAssessedTax",
+       # industry-specific OPERATING top lines -- real goods/services revenue reported under a
+       # sector tag instead of a standard 'Revenues'/RevenueFromContract line (verified as-filed in
+       # dera_facts for the blank-revenue + positive-NI operating names: Meritage/MDC homebuilding,
+       # TeamHealth hospitals, GulfMark marine, Tahoe mining, Life Time fitness). Placed below the
+       # standard tags (which always win via the 'Revenues'-preferred fallback) so these only FILL an
+       # otherwise-blank top line -- total-before-component ordering within each industry. These are
+       # OPERATING revenue only; financial-sector fills (fees/interest/premiums) stay out by design.
+       "RealEstateRevenueNet", "HomeBuildingRevenue",
+       "HealthCareOrganizationRevenue", "NetRevenueLessProvisionForUncollectibles",
+       "HealthCareOrganizationPatientServiceRevenue", "MarineServicesRevenue",
+       "RevenueFromSaleOfGoods", "TotalCenterRevenue", "FranchiseRevenue",
        # sector top-line tags verified as-filed vs the target (r2k_gap_tags.py), LOW priority so the
        # canonical tags above always win: lessor lease income, insurance-broker commissions, asset-
        # manager advisory fees, financial interest+dividend income -- fill names the standard list missed.
@@ -1600,12 +1611,28 @@ def selftest():
                              "NetIncomeLoss": -10000000, "Assets": 200000000, "Liabilities": 30000000,
                              "StockholdersEquity": 170000000}.items()])[0][0]
     ok_biorev = (bioc["revenue"] == 7500000 and biot["revenue"] == 47500000)
+    # industry-specific operating top line: a homebuilder reporting ONLY RealEstateRevenueNet /
+    # HomeBuildingRevenue (no standard 'Revenues'/RevenueFromContract tag -- Meritage's pattern) must
+    # have revenue filled to the NET TOTAL (RealEstateRevenueNet), not the homes-only component; and a
+    # name reporting BOTH a standard 'Revenues' total and the industry tag must still take the total.
+    hbld = run([dict(cik="HBLD", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                for t, v in {"RealEstateRevenueNet": 861244000, "HomeBuildingRevenue": 860884000,
+                             "NetIncomeLoss": 60000000, "Assets": 2000000000, "Liabilities": 800000000,
+                             "StockholdersEquity": 1200000000}.items()])[0][0]
+    hstd = run([dict(cik="HSTD", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v))
+                for t, v in {"Revenues": 1000000000, "RealEstateRevenueNet": 861244000,
+                             "NetIncomeLoss": 60000000, "Assets": 2000000000, "Liabilities": 800000000,
+                             "StockholdersEquity": 1200000000}.items()])[0][0]
+    ok_homebuild = (hbld["revenue"] == 861244000 and hstd["revenue"] == 1000000000)
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
     print(f"  SELFTEST broker gross-up (dealer nets to {bro['revenue']}; miner keeps {mnr['revenue']}; "
           f"mfr keeps {nonb['revenue']}; sic-drift nets to {drift['revenue']}; gp-only nets to "
           f"{gponly['revenue']}; op-co keeps {opco['revenue']}): {'PASS' if ok_broker else 'FAIL'}")
     print(f"  SELFTEST biotech collab-revenue fill (collab-only={bioc['revenue']}; "
           f"total-wins={biot['revenue']}): {'PASS' if ok_biorev else 'FAIL'}")
+    print(f"  SELFTEST homebuilder operating top line (industry-only fills to net total "
+          f"{hbld['revenue']}; standard 'Revenues' still wins {hstd['revenue']}): "
+          f"{'PASS' if ok_homebuild else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "

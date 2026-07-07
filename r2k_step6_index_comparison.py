@@ -108,7 +108,10 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         return 100 * sum(w for m, w in cls if m[flag] is False) / sum(w for _, w in cls)
     out.update(
         unprof_ni=upct("prof_ni"), unprof_oi=upct("prof_oi"),
-        no_rev=100 * sum(w for m, w in cov if not m["has_rev"]) / wtot,
+        # no-revenue = genuinely pre-commercial only: exclude financials (bank/insurer/mREIT/asset-
+        # mgr), whose blank revenue is definitional (net-interest/premium/fee top line, not a 'Revenue'
+        # tag). Keeps the two indexes' no-rev comparison apples-to-apples with the panel-sourced tabs.
+        no_rev=100 * sum(w for m, w in cov if not m["has_rev"] and not m.get("is_financial")) / wtot,
         w_prof=100 * sum(w for m, w in cov if m["cohort"] == "profitable") / wtot,
         w_fallen=100 * sum(w for m, w in cov if m["cohort"] == "fallen") / wtot,
         w_never=100 * sum(w for m, w in cov if m["cohort"] == "never_profitable") / wtot,

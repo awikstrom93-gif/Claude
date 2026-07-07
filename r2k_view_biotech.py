@@ -39,7 +39,7 @@ def bio_weight_quality_rows(panel):
                 continue
             cov_w += r["weight"]
             if r["prof_ni"] is False: un_w += r["weight"]
-            if not r["has_rev"]: nr_w += r["weight"]
+            if not r["has_rev"] and not r.get("is_financial"): nr_w += r["weight"]
         un = 100 * un_w / cov_w if cov_w else None
         nr = 100 * nr_w / cov_w if cov_w else None
         sw = sb = None

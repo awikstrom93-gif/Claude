@@ -234,6 +234,8 @@ METRIC_COLS = ["revenue", "net_income", "operating_income", "gross_profit", "equ
                "_nopat", "_ic", "gp_to_assets", "accruals", "cash_conversion", "asset_turnover",
                "rule_of_40", "d_to_equity", "d_to_capital", "prof_ni", "prof_oi", "p2", "p3",
                "ever_profitable", "was_profitable_prior", "cohort", "never_basis", "has_rev",
+               "is_financial",   # bank/insurer/mREIT/asset-mgr/BDC: revenue blank by definition, so
+                                 # EXCLUDED from the no-revenue cohort (not genuine no-revenue)
                "_aeq", "_ata",   # average equity/assets, for average-denominator ROE $agg + DuPont
                "ebitda", "interest_expense"]   # for the solvency tab -> single (panel) vintage
 PANEL_COLS = ID_COLS + METRIC_COLS
@@ -356,7 +358,8 @@ def _to_num(x):
 
 
 STR_COLS = {"sector", "cohort", "never_basis"}
-BOOL_COLS = {"prof_ni", "prof_oi", "p2", "p3", "ever_profitable", "was_profitable_prior", "has_rev"}
+BOOL_COLS = {"prof_ni", "prof_oi", "p2", "p3", "ever_profitable", "was_profitable_prior", "has_rev",
+             "is_financial"}
 
 
 def _to_bool(x):
@@ -456,7 +459,11 @@ def index_quality(members, tops=(10, 25, 50)):
 
     out.update(
         unprof_ni=upct("prof_ni"), unprof_oi=upct("prof_oi"),
-        no_rev=100 * sum(r["weight"] for r in cov if not r["has_rev"]) / wtot,
+        # no-revenue = GENUINELY pre-commercial (blank revenue AND not a financial). Banks/insurers/
+        # mREITs/asset-managers report net-interest/premium/fee top lines, not a 'Revenue' tag, so
+        # their blank revenue is definitional -- counting them here would masquerade financials as
+        # pre-commercial biotech-style names. Denominator stays total covered weight.
+        no_rev=100 * sum(r["weight"] for r in cov if not r["has_rev"] and not r.get("is_financial")) / wtot,
         w_prof=100 * sum(r["weight"] for r in cov if r["cohort"] == "profitable") / wtot,
         w_fallen=100 * sum(r["weight"] for r in cov if r["cohort"] == "fallen") / wtot,
         w_never=100 * sum(r["weight"] for r in cov if r["cohort"] == "never_profitable") / wtot,

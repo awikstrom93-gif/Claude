@@ -115,7 +115,8 @@ def load_fundamentals():
                  "stockholders_equity","total_assets","cash","short_term_investments","long_term_investments",
                  "restricted_cash","total_debt","operating_cash_flow","capex","free_cash_flow",
                  "ebitda","interest_expense")}   # for the solvency tab -> panel-sourced, single vintage
-            facts[cik][yr].update(fye=fye, filed=filed, sector=r.get("sector","general"))
+            facts[cik][yr].update(fye=fye, filed=filed, sector=r.get("sector","general"),
+                                  debt_flag=str(r.get("debt_flag") or ""))
     return facts
 
 def find_holdings():
@@ -204,6 +205,12 @@ def company_metrics(cf, fy0):
     m = {"fy0": fy0, "revenue": rev, "net_income": ni, "operating_income": oi, "gross_profit": gp,
          "equity": eq, "assets": ta, "cash": cash, "debt": debt, "cfo": cfo, "fcf": fcf,
          "sector": r0.get("sector", "general")}
+    # is_financial: the authoritative bank/insurer/mREIT/asset-manager/BDC flag classify already
+    # computed (sector in bank/insurer OR financial SIC), carried on debt_flag. Financials report
+    # net-interest / premium / fee top lines, not a 'Revenue' tag, so their blank revenue is
+    # DEFINITIONAL -- they must be excluded from the 'no-revenue' cohort (else they masquerade as
+    # pre-commercial names). Single source: classify's flag, not re-derived here.
+    m["is_financial"] = "financial" in (r0.get("debt_flag") or "")
     # growth
     m["rev_yoy"] = (rev / r1["revenue"] - 1) if (rev and r1.get("revenue") and r1["revenue"] > 0) else None
     m["rev_cagr3"] = cagr(rev, r3.get("revenue"), 3)

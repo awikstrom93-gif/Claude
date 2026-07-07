@@ -53,7 +53,8 @@ def valuation_rows(panel, by_quarter=False):
         unp = [r for r in allr if r["prof_ni"] is False]
         nev = [r for r in allr if r["cohort"] == "never_profitable"]
         tw = sum(r["weight"] for r in allr) or 1e-9
-        norev = 100 * sum(r["weight"] for r in allr if not r["has_rev"]) / tw
+        # exclude financials (definitional blank revenue) from the no-revenue cohort -- see snapshot_quality
+        norev = 100 * sum(r["weight"] for r in allr if not r["has_rev"] and not r.get("is_financial")) / tw
         out.append([y, round(norev, 1),
                     round(_mult(prof, allr, "revenue") or 0, 2) or None,
                     round(_mult(unp, allr, "revenue") or 0, 2) or None,
