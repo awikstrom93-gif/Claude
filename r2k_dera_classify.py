@@ -1051,6 +1051,21 @@ def run(facts_rows, sic_of=None, name_of=None):
         cik, fy = key
         sector = detect_sector(by[key])
         rec, prov, ident = classify_filing(by[key], sector)
+        # COMMODITY/SECURITIES BROKER-DEALER GROSS-UP. A physical-commodity dealer (SIC 6199/6211/6221)
+        # reports "Revenues" grossed up by pass-through commodity sales -- StoneX FY2026: $132B gross vs
+        # ~$4B net operating revenue -- so its top line is not comparable to an operating company's and
+        # would swamp any index revenue/margin/valuation aggregate. When COGS (cost of physical
+        # commodities) is essentially all of revenue, adopt NET operating revenue (Revenues - COGS) as
+        # the top line and mark COGS/GP n/a -- the same net-revenue basis banks/insurers already use.
+        # Legit brokers (net-revenue reporters with no large COGS) never trip this.
+        _rev, _cogs = rec.get("revenue"), rec.get("cost_of_revenue")
+        if (str((sic_of or {}).get(cik) or "")[:4] in ("6199", "6211", "6221")
+                and _rev and _rev > 0 and _cogs and _cogs > 0.90 * _rev):
+            rec["revenue"] = _rev - _cogs
+            rec["cost_of_revenue"] = None
+            rec["gross_profit"] = None
+            prov["revenue"] = "NetOperatingRevenue(broker gross-up: Revenues-CostOfPhysicalCommodities)"
+            prov["cost_of_revenue"] = prov["gross_profit"] = "n/a(broker net-revenue)"
         dd = reconstruct_debt(bs[key])
         rec["total_debt"] = dd["funded"]
         rec["total_debt_incl_leases"] = dd["incl_op"]
@@ -1499,7 +1514,21 @@ def selftest():
     ok_pred = ([r["entity_flag"] for r in pred] == ["PREDECESSOR", "PREDECESSOR", "", ""]
                and all(r["entity_flag"] == "" for r in div)
                and all(r["entity_flag"] == "" for r in ren))
+    # commodity broker-dealer gross-up (SIC 6221): $100k gross Revenues, $97k cost of physical
+    # commodities -> adopt $3k NET operating revenue; a NON-broker SIC with the same shape is untouched.
+    bro_f = [dict(cik="BRK", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v)) for t, v in
+             {"Revenues": 100000, "CostOfGoodsAndServicesSold": 97000, "OperatingIncomeLoss": 1500,
+              "NetIncomeLoss": 1200, "Assets": 8000, "Liabilities": 6000, "StockholdersEquity": 2000}.items()]
+    nonb_f = [dict(cik="MFR", fiscal_year="2024", taxonomy="usgaap", form="10-K", tag=t, value=str(v)) for t, v in
+              {"Revenues": 100000, "CostOfGoodsAndServicesSold": 97000, "OperatingIncomeLoss": 1500,
+               "NetIncomeLoss": 1200, "Assets": 8000, "Liabilities": 6000, "StockholdersEquity": 2000}.items()]
+    bro_out, _ = run(bro_f, {"BRK": "6221"}); nonb_out, _ = run(nonb_f, {"MFR": "3550"})
+    bro, nonb = bro_out[0], nonb_out[0]
+    ok_broker = (bro["revenue"] == 3000 and bro["cost_of_revenue"] is None and bro["gross_profit"] is None
+                 and nonb["revenue"] == 100000)     # non-broker SIC keeps its as-filed gross revenue
     print(f"\n  SELFTEST industrial+bank cascade & identities: {'PASS' if ok else 'FAIL'}")
+    print(f"  SELFTEST broker gross-up net-down (broker rev={bro['revenue']} vs non-broker {nonb['revenue']}): "
+          f"{'PASS' if ok_broker else 'FAIL'}")
     print(f"  SELFTEST disc-ops disposal selection (disc={dops['discontinued_operations']}, "
           f"consol={dops['net_income_consolidated']}, IS_NI tie): {'PASS' if ok_dops else 'FAIL'}")
     print(f"  SELFTEST REIT property-gain bridge (consol={rt['net_income_consolidated']}, "
