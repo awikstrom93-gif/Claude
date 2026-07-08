@@ -405,8 +405,12 @@ TAB_GUIDE = [
     ("Attr Contribution Trend", "Unprofitable-tail contribution to the return over time -- both indices.",
      "Calendar-year AND rolling-12m contribution (pts) of the never-profitable cohort and the full unprofitable "
      "tail, for R2000G and S&P600G, with the R2KG-minus-600G gap -- when the low-quality tail drove each index."),
-    ("Attr Reconstruction", "Bottom-up vs actual index return — the coverage/accuracy check.",
-     "Matched-weight ~95% and small monthly diffs confirm the attribution is trustworthy."),
+    ("Attr Reconstruction", "Bottom-up rebuild vs the actual index return — the tracking / coverage check.",
+     "'Reconstructed %' renormalizes the matched names to 100%: on that basis it tracks the index to an "
+     "effective beta ~0.99 (~22 bps/mo, unbiased). The 'incl. gap' columns keep the raw sum, which counts "
+     "the ~5% unmatched weight as a 0% return and so undershoots up-months / overshoots down-months; the "
+     "gap between the two columns is coverage, NOT a modeling error, and it is not stale weighting or "
+     "reconstitution (the error doesn't grow with snapshot age)."),
     ("Concentration deep-dive (step 8)", None, None),
     ("Conc Weight", "How top-heavy each benchmark is -- annual AND quarterly.",
      "Top 5/10/25/50 weight, largest single name, HHI, effective number of stocks. The quarterly block "
@@ -516,6 +520,12 @@ GLOSSARY = [
     ("Point-in-time (no look-ahead)", "Each name's fiscal year = the latest 10-K FILED before the snapshot.",
      "Avoids using financials that weren't yet public; survivorship-free membership."),
     ("As-filed", "Values as originally reported in each 10-K (by original accession).", "No restatement/vintage blending."),
+    ("Reconstruction residual", "Gap between the actual index return and the bottom-up rebuild from "
+     "constituent holdings x returns (the Attr Reconstruction tab; the attribution 'Unexplained' row).",
+     "A COVERAGE artifact, not a modeling gap: the few percent of index weight with no return stream is "
+     "counted as a 0% return, biasing the RAW rebuild low (effective beta ~0.96 vs the index). "
+     "Renormalized to the matched weight it is unbiased -- beta ~0.99, ~22 bps/mo. It does not grow with "
+     "snapshot age or dispersion, so it is not stale weighting or reconstitution."),
     ("Weight-weighted average (wavg)", "Index-weight-weighted mean of a per-company ratio.", "Per-name ratios winsorized before averaging."),
     ("Median", "The typical (middle) constituent's value.", "Robust to outliers; pairs with wavg to show skew."),
     ("Dollar-aggregate ($agg)", "Sum of numerators / sum of denominators across the index.",

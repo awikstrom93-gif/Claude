@@ -148,8 +148,14 @@ never-profitable (no profitable year on record), and unknown (net income not rep
 never-profitable weight is the sharpest single expression of the earnings-screen gap.
 
 Attribution is Carino-linked, so single-period cohort contributions sum exactly to the index's cumulative
-multi-period return, leaving only a small, explicitly labeled residual for coverage and weight drift
-between snapshots.
+multi-period return, leaving only a small, explicitly labeled residual. That residual is a coverage
+artifact, not a modeling gap: because a few percent of index weight has no return stream in the source
+file, the bottom-up sum implicitly counts that slice as a zero return, which pulls the raw reconstruction
+toward zero (an effective beta of about 0.96 versus the index). The Reconstruction tab therefore reports
+the rebuild renormalized to the matched weight — on that basis the constituents we do have track the index
+to a beta of about 0.99 and roughly twenty basis points a month, unbiased. This is not stale weighting or
+reconstitution: the error does not grow with the age of the holdings snapshot (snapshots are within three
+months throughout, via merged annual and quarterly holdings) or with return dispersion.
 
 The counterfactual is the cleanest of the tests. Instead of comparing two different indices, it rebuilds
 the Russell index's own constituents as a profitable-only (or ex-biotech) portfolio, reweighted monthly.
