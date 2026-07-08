@@ -82,3 +82,6 @@ r2k_persistence.txt
 benchmark_reconcile.txt
 cf_articulation_probe.txt
 *_probe.txt
+
+# ad-hoc investigation copies of the built workbook
+scratch_*.xlsx
