@@ -267,7 +267,7 @@ def exec_summary(wb, srcs, span=None):
     p, q, a = srcs["perf"], srcs["qual"], srcs["attr"]
     ps = p["Summary"]; pt = p["Trailing Returns"]
     qc = q["Comparison"]; qr = q["R2000G Quality"]; qsx = q["SP600G Quality"]
-    ac = a["Cohort Contribution"]; acf = a["Counterfactual"]
+    ac = a["Cohort Contribution"]
 
     cum_r, cum_s = n(val(ps, "Cumulative total return", 2)), n(val(ps, "Cumulative total return", 3))
     ann_r, ann_s = n(val(ps, "Annualized return", 2)), n(val(ps, "Annualized return", 3))
@@ -294,72 +294,113 @@ def exec_summary(wb, srcs, span=None):
     nev_winC = n(val(ac, "Never profitable", 4)); nev_winW = n(val(ac, "Never profitable", 5))
     tot_win = n(val(ac, "TOTAL", 4))
     nev_share = n(100 * nev_winC / tot_win, 0) if (nev_winC and tot_win) else None
-    cf_idx_f, cf_prof_f = n(val(acf, "Full period", 2)), n(val(acf, "Full period", 3))
-    cf_idx_w, cf_prof_w = n(val(acf, "Manager window", 2)), n(val(acf, "Manager window", 3))
-    screen_cost_w = n(cf_idx_w - cf_prof_w, 1) if (cf_idx_w is not None and cf_prof_w is not None) else None
-    screen_help_f = n(cf_prof_f - cf_idx_f, 1) if (cf_prof_f is not None and cf_idx_f is not None) else None
+    # no-revenue composition (Qual Comparison cols 8/9) + scope years
+    norev_r = n(qc.cell(latest, 8).value) if latest else None
+    norev_s = n(qc.cell(latest, 9).value) if latest else None
+    y0 = qc.cell(rows[0], 1).value if rows else None
+    yL = qc.cell(latest, 1).value if latest else "the latest year"
+    # concentration (optional): peak top-10 weight (the episode) + latest, and narrowest breadth
+    top10 = top10_peak = top10_peak_yr = effn_min = None
+    if "conc" in srcs and "Weight Concentration" in srcs["conc"].sheetnames:
+        cw = srcs["conc"]["Weight Concentration"]; ch = label_row(cw, "Year")
+        crs = [r for r in range(ch + 1, (cw.max_row or ch) + 1) if isinstance(cw.cell(r, 1).value, (int, float))] if ch else []
+        if crs:
+            top10 = n(cw.cell(crs[-1], 4).value)
+            pk = max(((cw.cell(r, 4).value, cw.cell(r, 1).value) for r in crs if cw.cell(r, 4).value is not None),
+                     default=(None, None))
+            top10_peak, top10_peak_yr = n(pk[0]), pk[1]
+            effn_min = n(min((cw.cell(r, 9).value for r in crs if cw.cell(r, 9).value is not None), default=None), 0)
+    # factor footprint (optional): momentum efficacy + quality attribution inside R2000G
+    mom_eff = qual_attr = None
+    if "factor" in srcs and "Factor Summary" in srcs["factor"].sheetnames:
+        fs = srcs["factor"]["Factor Summary"]
+        try:
+            mom_eff = n(val(fs, "Momentum", 2)); qual_attr = n(val(fs, "Quality", 4))
+        except Exception:
+            pass
 
     ws = wb.create_sheet("Executive Summary")
     ws.column_dimensions["A"].width = 4; ws.column_dimensions["B"].width = 112
     def line(txt, font=BODY, r=[1]):
         c = ws.cell(row=r[0], column=2, value=txt); c.font = font; c.alignment = Alignment(wrap_text=True, vertical="top"); r[0] += 1
-    line("US Small Cap Growth Benchmark Review", TITLE)
-    line("Why active managers underperformed the Russell 2000 Growth", H)
+    line("US Small Cap Growth — Anatomy of the Benchmark", TITLE)
+    line("What the Russell 2000 Growth is made of, how that has changed, and what it has meant — "
+         "read against the earnings-screened S&P SmallCap 600 Growth", H)
     line("")
-    line("THE QUESTION", H)
-    line(f"Active US Small Cap Growth managers, benched to the Russell 2000 Growth (R2000G), lagged the "
-         f"benchmark over the trailing {win_years} years. This review uses as-filed 10-K fundamentals for "
-         f"both R2000G and the earnings-screened S&P SmallCap 600 Growth (S&P600G) to explain why.")
+    line(f"This review reconstructs both small-cap growth benchmarks from as-filed 10-K fundamentals to show "
+         f"what the Russell 2000 Growth (R2000G) is actually made of and how its composition has shifted "
+         f"since {y0}. The two indices draw from the same asset class but part on one rule — the S&P "
+         f"SmallCap 600 Growth (S&P600G) admits only companies with positive trailing GAAP earnings, the "
+         f"Russell index screens for nothing — which turns the pair into a natural experiment in what an "
+         f"earnings discipline does to a small-cap growth portfolio.")
     line("")
-    line("1. THE STRUCTURAL DIFFERENCE  ->  tab 'Qual Comparison'", H)
-    line(f"The S&P 600 requires positive trailing GAAP earnings to enter; R2000G does not. As a result "
-         f"R2000G carries a much larger unprofitable tail: in {qc.cell(latest,1).value if latest else 'the latest year'} "
-         f"{un_r_latest}% of R2000G by weight was unprofitable vs {un_s_latest}% of S&P600G "
-         f"(a {diff_latest}-point gap), and R2000G's unprofitable weight peaked near {peak_un}% in {peak_yr}. "
-         f"Never-profitable names are ~{nev_r}% of R2000G by weight vs ~{nev_s}% of S&P600G -- the screen "
-         f"all but eliminates that cohort.")
-    # biotech line (only if the step-9 source is present)
+    line("1. THE PROFITABILITY TAIL HAS WIDENED  ->  tabs 'Qual Comparison', 'R2KG Prof Cohorts'", H)
+    line(f"In {yL}, {un_r_latest}% of R2000G by weight earns nothing, versus {un_s_latest}% of S&P600G — a "
+         f"{diff_latest}-point gap that has widened over the decade (R2000G's unprofitable weight peaked near "
+         f"{peak_un}% in {peak_yr}). The sharper cut is the never-profitable cohort — names with no profitable "
+         f"year on record — at ~{nev_r}% of R2000G by weight versus ~{nev_s}% of S&P600G; the earnings screen "
+         f"all but removes it. This is the single clearest structural difference between the two benchmarks.")
+    line("")
+    line("2. A PRE-COMMERCIAL, BIOTECH-HEAVY EDGE  ->  tabs 'Bio Weight & Quality', 'Bio In Tail'", H)
+    norev_txt = (f"About {norev_r}% of R2000G sits in names with no revenue at all — genuinely pre-commercial "
+                 f"companies, overwhelmingly clinical-stage biotech — versus ~{norev_s}% of S&P600G. "
+                 if norev_r is not None else "")
     if "bio" in srcs:
         bq = srcs["bio"]["Biotech Weight & Quality"]; bt = srcs["bio"]["Biotech in the Tail"]
-        bcf = srcs["bio"]["Biotech Counterfactual"]
-        def last_data_row(ws):
-            rs = [r for r in range(1, (ws.max_row or 1) + 1) if isinstance(ws.cell(r, 1).value, (int, float))]
+        def last_data_row(w):
+            rs = [r for r in range(1, (w.max_row or 1) + 1) if isinstance(w.cell(r, 1).value, (int, float))]
             return rs[-1] if rs else None
         lb = last_data_row(bq); lt = last_data_row(bt)
-        bio_r = n(bq.cell(lb, 2).value) if lb else None      # R2KG biotech wt
-        bio_s = n(bq.cell(lb, 6).value) if lb else None      # 600G biotech wt
-        bio_unp = n(bq.cell(lb, 4).value) if lb else None    # %unprofitable within biotech
-        bio_nev = n(bt.cell(lt, 7).value) if lt else None    # biotech share of never-prof
-        cf_idx_w2 = n(val(bcf, "Manager window", 2)); cf_exb_w = n(val(bcf, "Manager window", 3))
-        bio_cost = n(cf_idx_w2 - cf_exb_w, 1) if (cf_idx_w2 is not None and cf_exb_w is not None) else None
-        line(f"Biotech makes this concrete: ~{bio_r}% of R2000G vs ~{bio_s}% of S&P600G, ~{bio_unp}% of it "
-             f"unprofitable, and ~{bio_nev}% of R2000G's never-profitable weight. Removing biotech from "
-             f"R2000G's own names lowers the window return from {cf_idx_w2}% to {cf_exb_w}% "
-             f"(~{bio_cost} pts a disciplined manager would have missed). See the 'Bio *' tabs.")
+        bio_r = n(bq.cell(lb, 2).value) if lb else None
+        bio_s = n(bq.cell(lb, 6).value) if lb else None
+        bio_unp = n(bq.cell(lb, 4).value) if lb else None
+        bio_nev = n(bt.cell(lt, 7).value) if lt else None
+        line(f"{norev_txt}Biotech is ~{bio_r}% of R2000G versus ~{bio_s}% of S&P600G, ~{bio_unp}% of it "
+             f"unprofitable, and it accounts for ~{bio_nev}% of the index's never-profitable weight. The "
+             f"character of that book has grown more pre-commercial over the study — the non-earner tail is "
+             f"not a scattering of stumbles but a concentrated, identifiable exposure.")
+    elif norev_txt:
+        line(norev_txt + "The non-earner tail is a concentrated, identifiable exposure, not a scattering of stumbles.")
     line("")
-    line("2. THE REALIZED COST  ->  tabs 'Attr Contribution', 'Attr Counterfactual'", H)
-    line(f"Over the trailing manager window, the never-profitable cohort was ~{nev_winW}% of R2000G by weight "
-         f"but produced ~{nev_winC}% of the index's {tot_win}% return -- about {nev_share}% of the gain, "
-         f"punching well above its weight. Rebuilding R2000G's OWN names as a profitable-only portfolio "
-         f"(the S&P 600-style screen) returned {cf_prof_w}% over the window vs the index's {cf_idx_w}% -- "
-         f"i.e. screening for earnings COST ~{screen_cost_w} points exactly when managers were measured.")
+    if top10_peak is not None:
+        line("3. IT RECENTLY PASSED THROUGH ITS MOST CONCENTRATED EPISODE  ->  tabs 'Conc Weight', 'Conc Breadth'", H)
+        breadth_txt = f" and effective breadth narrowed to about {int(effn_min)} names" if effn_min is not None else ""
+        ease_txt = f" It has since eased (top 10 ~{top10}% by {yL})." if top10 is not None and top10 < top10_peak else ""
+        line(f"After a long stretch of unusually wide breadth, the index tightened into the most concentrated "
+             f"reading of the study: the top 10 names reached ~{top10_peak}% of weight in {top10_peak_yr}"
+             f"{breadth_txt}, with a handful of leaders carrying most of the gains — a headwind for a "
+             f"diversified, equal-conviction book.{ease_txt}")
+        line("")
+    line("4. WHAT THE MAKEUP HAS MEANT FOR RETURNS  ->  tabs 'Attr Contribution', 'Factor Summary'", H)
+    fac_txt = ""
+    if mom_eff is not None and qual_attr is not None:
+        fac_txt = (f" Decomposing the index into style factors, momentum was the one style consistently "
+                   f"rewarded inside R2000G (~{mom_eff} pts/yr) while quality was the single largest drag "
+                   f"(about {abs(qual_attr)} points) — it paid through the pre-COVID years and was then "
+                   f"overwhelmed by the 2020–21 non-earner rally.")
+    ann_txt = f" (annualized {ann_s}% vs {ann_r}%)" if (ann_r is not None and ann_s is not None) else ""
+    line(f"The composition is not just descriptive — it drives returns. Over the trailing {win_years} years "
+         f"the never-profitable cohort was ~{nev_winW}% of R2000G by weight but produced ~{nev_share}% of its "
+         f"return, several times its weight.{fac_txt} Over the full cycle the earnings-screened S&P600G "
+         f"returned {cum_s}% versus R2000G's {cum_r}%{ann_txt} at lower volatility ({vol_s}% vs {vol_r}%); "
+         f"the Russell index's edge is episodic — it comes when its low-quality tail runs, as it did over "
+         f"the recent window.")
     line("")
-    line("3. THE LONG-RUN CONTEXT  ->  tabs 'Perf Summary', 'Attr Counterfactual'", H)
-    line(f"Over the full period the discipline helped: S&P600G returned {cum_s}% vs R2000G's {cum_r}% "
-         f"(annualized {ann_s}% vs {ann_r}%, with lower volatility {vol_s}% vs {vol_r}%), and the profitable-only "
-         f"rebuild returned {cf_prof_f}% vs the index's {cf_idx_f}% (+{screen_help_f} pts). The recent window is a "
-         f"reversal, not a regime change: R2000G beat S&P600G by {win_x} points over the window "
-         f"({win_r}% vs {win_s}%) on the back of its lower-quality tail.")
+    line("FOR THE COMMITTEE", H)
+    line(f"The two small-cap growth benchmarks are structurally different portfolios, and the gap has widened "
+         f"rather than closed. The Russell 2000 Growth today is materially more unprofitable, more "
+         f"pre-revenue, and more biotech than the S&P SmallCap 600 Growth, and it recently passed through its "
+         f"most concentrated episode of the study. Where a mandate is quality- or earnings-disciplined, those "
+         f"distinguishing features — the non-earner tail, the pre-commercial biotech book, the bursts of "
+         f"concentration — are precisely the exposures the mandate is built to limit, which makes the "
+         f"S&P SmallCap 600 Growth the more representative yardstick (as a primary benchmark or as standing "
+         f"context alongside the Russell index).")
     line("")
-    line("BOTTOM LINE", H)
-    line("The underperformance is structural and explainable, not manager skill loss: a quality/earnings "
-         "discipline that resembles the S&P 600 Growth lagged because R2000G's unprofitable, often "
-         "pre-earnings tail -- absent from a disciplined portfolio -- led the benchmark over the window. "
-         "The same discipline added value over the full cycle and carries lower volatility and drawdown.")
-    line("")
-    line("Methodology: as-filed 10-K values by original accession; point-in-time membership (no look-ahead); "
-         "average-denominator ratios; cohort attribution Carino-linked to the index return. See per-tab notes "
-         "and the source workbooks (steps 4-6).", Font(italic=True, size=9))
+    line("Methodology: fundamentals as originally filed in each 10-K (by original accession, no restatement "
+         "blending); point-in-time, survivorship-free membership (no look-ahead); financial-sector filers "
+         "excluded from the no-revenue figures; dollar totals count each company once across share classes; "
+         "cohort attribution Carino-linked to the index return. Full definitions on the Glossary and "
+         "Reading Guide tabs.", Font(italic=True, size=9))
     return ws
 
 
