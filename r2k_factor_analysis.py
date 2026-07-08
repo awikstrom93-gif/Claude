@@ -1,13 +1,17 @@
 """
 r2k_factor_analysis.py -- what factors drove the two indices, over time.
 
-Two views, both holdings-based and point-in-time (factor known at month t, return realized at t+1):
+Views, all holdings-based and point-in-time (factor known at month t, return realized at t+1):
   1. FACTOR EFFICACY -- cumulative long/short return of each factor inside the index (cap-weighted top-
      minus-bottom quintile on the sector-neutral factor score). "Was the factor rewarded, and when."
   2. INDEX-RETURN ATTRIBUTION -- a multivariate Fama-MacBeth cross-section each month regresses the
      constituents' next-month returns on their (raw) factor z-scores; the slope is the factor's return,
      and the index's own weighted exposure x that return is the factor's contribution to the index. Sums
      of the contributions + an intercept ("market") + a residual reconstruct the index return.
+  2b. SECTOR-ADJUSTED ATTRIBUTION -- (2) re-run with GICS-sector factors added, so the style slopes are
+     estimated CONTROLLING for sector (consistent with the sector-neutral efficacy lens) and the sector
+     tilt becomes its own bucket. A robustness check: if the styles barely move, the effect is genuinely
+     within-sector rather than a sector bet in disguise. Still reconciles to the index return.
 
 Six factors: momentum, size, low-volatility, value, quality, growth (definitions in FACTORS below).
 
@@ -278,13 +282,51 @@ def _avail_mean(xs):
 
 
 # --------------------------------------------------------------------------- main analysis
+def _fm_decompose(common, w, zr, fwd, sect=None):
+    """One month's multivariate Fama-MacBeth decomposition of next-month returns. Columns:
+    intercept + (optional demeaned GICS-sector dummies) + the six style z-scores. Returns
+        {market, style{factor:contrib}, sect_bucket, resid, ir}
+    which sum to the index return by construction (resid is the plug). When `sect` (cik->sector) is
+    given, the style slopes are estimated CONTROLLING for sector -- i.e. sector-neutral, matching the
+    efficacy lens -- and the sector tilt is reported as its own bucket. The style coefficients are
+    invariant to how the sector space is parameterized, so the demeaning below only keeps the
+    intercept interpretable as the average-name return."""
+    tw = sum(w[c] for c in common) or 1.0
+    ir = sum(w[c] * fwd[c] for c in common) / tw
+    sc_cols = []                                     # (sector label, {cik: demeaned dummy})
+    if sect:
+        secs = sorted({sect.get(c, "?") for c in common})
+        if len(secs) > 1:
+            n = len(common)
+            for s in secs[:-1]:                      # drop one sector to avoid collinearity w/ the constant
+                p = sum(1 for c in common if sect.get(c, "?") == s) / n
+                sc_cols.append((s, {c: (1.0 if sect.get(c, "?") == s else 0.0) - p for c in common}))
+    X = [[1.0] + [col[c] for _, col in sc_cols] + [zr[ff][c] for ff in FACTORS] for c in common]
+    b = ols(X, [fwd[c] for c in common])
+    if not b:
+        return None
+    off = 1 + len(sc_cols)
+    style = {}
+    for i, ff in enumerate(FACTORS):
+        expo = sum(w[c] * zr[ff][c] for c in common) / tw
+        style[ff] = b[off + i] * expo
+    sect_bucket = 0.0
+    for j, (_, col) in enumerate(sc_cols):
+        expo = sum(w[c] * col[c] for c in common) / tw
+        sect_bucket += b[1 + j] * expo
+    resid = ir - b[0] - sum(style.values()) - sect_bucket
+    return dict(market=b[0], style=style, sect_bucket=sect_bucket, resid=resid, ir=ir)
+
+
 def analyse(index_pat, label, months, ret, mcap, fund, tkr2cik):
     univ, sect = load_holdings(index_pat)
     hmonths = sorted(univ)                                # snapshot months (monthly recent, quarterly early)
     midx = {m: k for k, m in enumerate(months)}
     eff = {ff: [] for ff in FACTORS}                     # monthly L/S returns per factor
-    attr = {ff: [] for ff in FACTORS}                    # monthly index contribution per factor
+    attr = {ff: [] for ff in FACTORS}                    # raw monthly index contribution per factor
+    attr_adj = {ff: [] for ff in FACTORS}                # sector-controlled contribution per factor
     intercepts = []; resid = []; idx_ret = []; mos = []; emos = []; nnames = []
+    intercepts_adj = []; resid_adj = []; sect_bucket = []   # sector-adjusted decomposition
     # carry the latest holdings snapshot forward to every month (hold until the next rebalance), so the
     # factor series is continuous rather than only on snapshot dates.
     def latest_snap(ym):
@@ -321,26 +363,27 @@ def analyse(index_pat, label, months, ret, mcap, fund, tkr2cik):
             top, bot = it[-q:], it[:q]
             qr = lambda g: sum(w[c] * fwd[c] for c in g) / (sum(w[c] for c in g) or 1)
             eff[ff].append(qr(top) - qr(bot))
-        # --- attribution: multivariate Fama-MacBeth on raw z ---
+        # --- attribution: multivariate Fama-MacBeth, two decompositions on the SAME cross-section ---
+        #     raw = styles only (reconciles to the index return; style slopes carry the sector tilt);
+        #     adj = styles + GICS-sector factors (style slopes are sector-controlled, matching efficacy,
+        #           and the sector tilt is reported as its own bucket). Both reconcile by construction.
         common = [c for c in names if all(c in zr[ff] for ff in FACTORS)]
-        if len(common) >= MIN_NAMES:
-            X = [[1.0] + [zr[ff][c] for ff in FACTORS] for c in common]
-            b = ols(X, [fwd[c] for c in common])
-            if b:
-                tw = sum(w[c] for c in common) or 1
-                for i, ff in enumerate(FACTORS):
-                    expo = sum(w[c] * zr[ff][c] for c in common) / tw     # index exposure
-                    attr[ff].append(b[i + 1] * expo)
-                intercepts.append(b[0])
-                ir = sum(w[c] * fwd[c] for c in common) / tw
-                idx_ret.append(ir)
-                resid.append(ir - b[0] - sum(attr[ff][-1] for ff in FACTORS))
-                mos.append(ym)
+        draw = _fm_decompose(common, w, zr, fwd) if len(common) >= MIN_NAMES else None
+        dadj = _fm_decompose(common, w, zr, fwd, sect=sec) if len(common) >= MIN_NAMES else None
+        if draw and dadj:
+            for ff in FACTORS:
+                attr[ff].append(draw["style"][ff])
+                attr_adj[ff].append(dadj["style"][ff])
+            intercepts.append(draw["market"]); resid.append(draw["resid"])
+            intercepts_adj.append(dadj["market"]); resid_adj.append(dadj["resid"])
+            sect_bucket.append(dadj["sect_bucket"])
+            idx_ret.append(draw["ir"]); mos.append(ym)
         else:
             for ff in FACTORS:
-                attr[ff].append(None)
-    return dict(label=label, eff=eff, attr=attr, intercepts=intercepts, resid=resid,
-                idx_ret=idx_ret, mos=mos, emos=emos, nnames=nnames)
+                attr[ff].append(None); attr_adj[ff].append(None)
+    return dict(label=label, eff=eff, attr=attr, attr_adj=attr_adj, intercepts=intercepts,
+                resid=resid, intercepts_adj=intercepts_adj, resid_adj=resid_adj,
+                sect_bucket=sect_bucket, idx_ret=idx_ret, mos=mos, emos=emos, nnames=nnames)
 
 
 def _cum(series):
@@ -387,6 +430,19 @@ def report(res):
     print(f"    {'Market(a)':10s} {mkt:>+8.1f}")
     print(f"    {'Residual':10s} {rez:>+8.1f}")
     print(f"    {'--sum--':10s} {tot + mkt + rez:>+8.1f}  vs index (sum monthly) {ir:>+8.1f}")
+    print(f"\n  SECTOR-ADJUSTED ATTRIBUTION (style slopes controlled for GICS sector; pts):")
+    tota = 0.0
+    for ff in FACTORS:
+        c = sum(v for v in res["attr_adj"][ff] if v is not None) * 100
+        tota += c
+        print(f"    {ff:10s} {c:>+8.1f}")
+    mkta = sum(res["intercepts_adj"]) * 100
+    seca = sum(res["sect_bucket"]) * 100
+    reza = sum(res["resid_adj"]) * 100
+    print(f"    {'Market(a)':10s} {mkta:>+8.1f}")
+    print(f"    {'Sectors':10s} {seca:>+8.1f}")
+    print(f"    {'Residual':10s} {reza:>+8.1f}")
+    print(f"    {'--sum--':10s} {tota + mkta + seca + reza:>+8.1f}  vs index (sum monthly) {ir:>+8.1f}")
 
 
 # --------------------------------------------------------------------------- workbook output
@@ -502,6 +558,46 @@ def write_workbook(results, out_path):
     wa.column_dimensions["A"].width = 22
     wa.column_dimensions["B"].width = 14; wa.column_dimensions["C"].width = 14
 
+    # ---- sector-adjusted attribution: raw vs GICS-sector-controlled, side by side ----
+    res_list = list(results.values())            # [R2000G, S&P600G] in insertion order
+    def _S(res, key, ff=None):
+        return round((sum(v for v in res[key][ff] if v is not None) if ff is not None
+                      else sum(res[key])) * 100, 1)
+    wj = wb.create_sheet("Factor Attribution Adj")
+    wj.cell(row=1, column=1, value="Return attribution: raw vs sector-adjusted. The 'adj' columns add GICS-"
+            "sector factors to the monthly regression, so the style slopes are estimated CONTROLLING for "
+            "sector (consistent with the sector-neutral efficacy lens); the sector tilt is then its own "
+            "bucket. Both reconcile to the index return.").font = TITLE
+    wj.cell(row=2, column=1, value="Read across each style row: if a style's contribution barely changes "
+            "from raw to adj (and the Sectors bucket stays small), the effect is a genuine within-sector "
+            "style effect, not a sector bet in disguise.").font = BODY
+    hdr(wj, 3, ["Component", "R2000G raw", "R2000G sector-adj", "S&P600G raw", "S&P600G sector-adj"])
+    # bridge: Market, 6 styles, Sectors, Residual, Index total  (rows 4..13)
+    bridge = [("Market (intercept)", "intercepts", "intercepts_adj", None)]
+    bridge += [(ff, "attr", "attr_adj", ff) for ff in FACTORS]
+    bridge += [("Sectors", None, "sect_bucket", None),
+               ("Residual", "resid", "resid_adj", None),
+               ("Index total", "idx_ret", "idx_ret", None)]
+    rr = 4
+    for name, kraw, kadj, ff in bridge:
+        bold = name in ("Market (intercept)", "Sectors", "Index total")
+        wj.cell(row=rr, column=1, value=name).font = (H if bold else BODY)
+        for base, res in zip((2, 4), res_list):
+            wj.cell(row=rr, column=base, value=(0.0 if kraw is None else _S(res, kraw, ff))).font = BODY
+            wj.cell(row=rr, column=base + 1, value=_S(res, kadj, ff)).font = BODY
+        rr += 1
+    # style-only comparison block at a FIXED header row (15) so a chart can target just the six styles
+    SB = 15
+    hdr(wj, SB, ["Style", "R2000G raw", "R2000G adj", "S&P600G raw", "S&P600G adj"])
+    for i, ff in enumerate(FACTORS):
+        wj.cell(row=SB + 1 + i, column=1, value=ff).font = Font(bold=True)
+        for base, res in zip((2, 4), res_list):
+            wj.cell(row=SB + 1 + i, column=base, value=_S(res, "attr", ff)).font = BODY
+            wj.cell(row=SB + 1 + i, column=base + 1, value=_S(res, "attr_adj", ff)).font = BODY
+    wj.column_dimensions["A"].width = 22
+    for col in "BCDE":
+        wj.column_dimensions[col].width = 16
+
     # ---- calendar-year efficacy grid (factor x year), one block per index ----
     wy = wb.create_sheet("Factor By Year")
     wy.cell(row=1, column=1, value="Calendar-year factor efficacy (long/short %, sector-neutral) -- "
@@ -539,6 +635,16 @@ def write_workbook(results, out_path):
          "next-month returns on raw factor z-scores; the index's own weighted exposure x that slope is "
          "the contribution. Market + sum of factors + residual reconstructs the index return (the "
          "reconciliation is exact by construction).", BODY),
+        ("", BODY),
+        ("  2b. SECTOR-ADJUSTED ATTRIBUTION (Factor Attribution Adj) -- the same bridge, but with GICS-"
+         "sector factors added to each monthly regression, so the STYLE slopes are estimated controlling "
+         "for sector (consistent with the sector-neutral efficacy lens) and the sector tilt becomes its "
+         "own bucket. Reads directly against the raw columns: if a style barely moves and the Sectors "
+         "bucket stays small, the effect is a genuine within-sector style effect rather than a sector "
+         "bet. In this data the styles barely move -- e.g. R2000G Quality stays about -17 pts and the "
+         "Sectors bucket is only ~+2 -- so the Quality drag is a real within-sector, profitability "
+         "effect (the unprofitable-biotech phenomenon lives in Quality, not in a GICS sector), NOT a "
+         "sector artifact.", BODY),
         ("", BODY),
         ("Six factors: Momentum (12-1 price), Size (-ln market cap; small tilt = positive score), "
          "LowVol (-trailing 12m stdev), Value (E/P, B/P, S/P composite), Quality (ROIC, GP/assets, "

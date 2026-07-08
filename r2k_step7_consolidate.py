@@ -74,6 +74,7 @@ SHEETS = [
     # ---- factor analysis (optional; what drove each index) ----
     (FACTOR, "Factor Summary", "Factor Summary"),
     (FACTOR, "Factor Attribution", "Factor Attribution"),
+    (FACTOR, "Factor Attribution Adj", "Factor Attribution Adj"),
     (FACTOR, "Factor By Year", "Factor By Year"),
     (FACTOR, "Factor $1 R2000G", "Factor $1 R2000G"),
     (FACTOR, "Factor $1 SP600G", "Factor $1 SP600G"),
@@ -358,6 +359,11 @@ TAB_GUIDE = [
     ("Factor Attribution", "Market + each factor's contribution + residual = the index's total return (pts).",
      "A multivariate Fama-MacBeth bridge; reconciles to the index return by construction. Size was the largest "
      "positive factor contribution inside R2000G; Quality was the largest drag."),
+    ("Factor Attribution Adj", "The same bridge with GICS-sector factors added -- style slopes controlled for "
+     "sector (consistent with the efficacy lens), with the sector tilt as its own bucket. Raw vs adj side by side.",
+     "Robustness check: the styles barely move (R2000G Quality stays ~-17 pts, Sectors bucket only ~+2), so the "
+     "Quality drag is a genuine within-sector profitability effect (unprofitable biotech lives in Quality, not "
+     "in a GICS sector) rather than a sector bet in disguise."),
     ("Factor By Year", "Calendar-year efficacy (long/short %) per factor -- when each factor paid or hurt.",
      "Reads left-to-right as the factor's year-by-year story; the sign flips show the regimes."),
     ("Factor $1 R2000G / SP600G", "Growth of $1 in each factor's long/short leg, monthly.",

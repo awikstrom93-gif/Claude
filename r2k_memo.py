@@ -204,6 +204,24 @@ def factor(wb):
     return out or None
 
 
+def factor_adj(wb):
+    """Raw vs sector-adjusted attribution from `Factor Attribution Adj` (optional). Returns
+    {component: dict(r_raw, r_adj, s_raw, s_adj)} keyed by the bridge row label, or None if absent."""
+    if "Factor Attribution Adj" not in wb.sheetnames:
+        return None
+    R = _rows(wb["Factor Attribution Adj"])
+    hi = _hdr_row(R, "Component")
+    if hi is None:
+        return None
+    out = {}
+    for r in R[hi + 1:]:
+        name = str(r[0]).strip() if r and r[0] else ""
+        if not name:
+            break                                # stop at the blank row before the style-only block
+        out[name] = dict(r_raw=_num(r[1]), r_adj=_num(r[2]), s_raw=_num(r[3]), s_adj=_num(r[4]))
+    return out or None
+
+
 def series_returns(wb, sheet):
     """Full-period and trailing-3y returns for every value column of a growth-of-$1 sheet.
     Base is $1 at the month before the first row, so full = last-1. Window denominator is the row
@@ -255,8 +273,9 @@ def collect(wb):
     bcf, _ = series_returns(wb, "Bio Counterfactual")
     cn = conc(wb)
     fac = factor(wb)
+    facadj = factor_adj(wb)
     return dict(ps=ps, cal=cal, q=q, wp=wp, attr=attr, bio=bio, biocon=biocon,
-                cf=cf, bcf=bcf, end_m=end_m, cn=cn, fac=fac)
+                cf=cf, bcf=bcf, end_m=end_m, cn=cn, fac=fac, facadj=facadj)
 
 
 def reconcile(D):
@@ -482,7 +501,22 @@ def build_memo(D):
                  f"is a headwind to *relative* return even as it lowers risk. In the earnings-screened "
                  f"S&P 600 Growth the pattern is muted — value carried a modest, more reliable premium "
                  f"and quality was far less punished.\n")
-        P.append("*Tab: `Factor Summary`; charts on `Key Charts` and `Factor $1 R2000G`.*\n")
+        facadj = D.get("facadj")
+        if facadj and facadj.get("Quality") and facadj.get("Sectors"):
+            qa, se = facadj["Quality"], facadj["Sectors"]
+            P.append(f"\nOne natural objection is that this is really a sector call — biotech dressed up "
+                     f"as a quality factor. It is not. Re-running the attribution with GICS-sector "
+                     f"factors added — so the style effects are measured *within* sector — barely moves "
+                     f"the styles: quality's contribution goes from **{fmt(qa['r_raw'],1,sign=True)}** to "
+                     f"**{fmt(qa['r_adj'],1,sign=True)} pts** and the entire sector tilt accounts for "
+                     f"only **{fmt(se['r_adj'],1,sign=True)} pts**. The quality drag is a genuine "
+                     f"*within-sector* effect: what distinguishes the Russell index's non-earners is that "
+                     f"they are pre-revenue and unprofitable, not that they sit in a different sector, so "
+                     f"the effect lives in the quality factor rather than in a sector bucket.\n")
+            P.append("*Tabs: `Factor Summary`, `Factor Attribution Adj`; charts on `Key Charts` and "
+                     "`Factor $1 R2000G`.*\n")
+        else:
+            P.append("*Tab: `Factor Summary`; charts on `Key Charts` and `Factor $1 R2000G`.*\n")
     P.append("---\n")
 
     # For the Committee

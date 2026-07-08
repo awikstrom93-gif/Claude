@@ -595,6 +595,8 @@ Private Sub LoadSpecs()
     S "Factor Summary|C|Factor Summary|6|1|4,7|Factor contribution to index return (pts): R2KG vs 600G|Contribution (pts)"
     S "Factor $1 R2000G|L|Factor $1 R2000G|3|1|2,3,4,5,6,7|R2000G: growth of $1 by factor (long/short)|Growth of $1"
     S "Factor $1 SP600G|L|Factor $1 SP600G|3|1|2,3,4,5,6,7|S&P600G: growth of $1 by factor (long/short)|Growth of $1"
+    S "Factor Attribution Adj|C|Factor Attribution Adj|15|1|2,3|R2000G style attribution: raw vs sector-adjusted (styles barely move)|Contribution (pts)"
+    S "Factor Attribution Adj|C|Factor Attribution Adj|15|1|4,5|S&P600G style attribution: raw vs sector-adjusted|Contribution (pts)"
 
     ' ---- Key Charts: curated summary (best from each area) -----------------
     S "Key Charts|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"

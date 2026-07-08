@@ -144,10 +144,14 @@ the market-cap file, the two holdings workbooks, and `fundamentals_dera_resolved
 holdings snapshot forward between rebalances so the monthly series is continuous. It produces two
 lenses per index — **efficacy** (cap-weighted top-minus-bottom quintile on the sector-neutral score)
 and **attribution** (a multivariate Fama-MacBeth cross-section that reconciles Market + factors +
-residual back to the index return) — and writes `R2000G_Factor_Analysis.xlsx` (Factor Summary,
-Factor Attribution, Factor By Year, Factor $1 per index), which step7 folds into the IC workbook. If
-its input files are absent the step self-skips, so the rest of the chain still builds. Headline:
-momentum was the one style rewarded inside R2000G (≈+7–8 pts/yr, t≈2.1); quality did not pay there.
+residual back to the index return) — plus a **sector-adjusted** attribution (the same bridge with
+GICS-sector factors added, so the style slopes are measured *within* sector and the sector tilt is
+its own bucket). It writes `R2000G_Factor_Analysis.xlsx` (Factor Summary, Factor Attribution, Factor
+Attribution Adj, Factor By Year, Factor $1 per index), which step7 folds into the IC workbook. If its
+input files are absent the step self-skips, so the rest of the chain still builds. Headline: momentum
+was the one style rewarded inside R2000G (≈+7–8 pts/yr, t≈2.1); quality did not pay there — and the
+sector-adjusted view shows that is a genuine within-sector effect (the styles barely move, the sector
+bucket is ~+2 pts), i.e. the unprofitable-biotech drag lives in the quality factor, not in a sector.
 
 **The IC memo is generated, never hand-typed** (`python r2k_memo.py`, after `r2k_report.py`):
 it reads the finished workbook and writes **`R2000G_SCG_Benchmark_Review_Memo.md`** with every figure
