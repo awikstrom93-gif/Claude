@@ -59,7 +59,9 @@ The tabs build the portrait across four dimensions and follow each through the y
 mix: how much of the index earns nothing, and how that tail has grown. The pre-commercial edge: the
 weight in companies with no revenue at all, and the biotech book that drives it. Concentration and
 breadth: how top-heavy the index has become and how narrow its leadership. And the return footprint of
-all three — what the makeup has meant for performance. The companion memo carries the current figures;
+all three — what the makeup has meant for performance. Alongside these, a factor view decomposes each
+index's return into the style tilts its holdings carry — momentum, value, quality and the rest — to ask
+which of them the market actually rewarded, and when. The companion memo carries the current figures;
 this document explains how each is built and what each tab shows.
 
 The work began with a practical question — why earnings-disciplined managers trail the Russell benchmark
@@ -161,6 +163,42 @@ range of candidate windows so the conclusion does not rest on a single start mon
 
 Ratios use average (opening and closing) denominators, following the CFA convention, and per-name ratios
 are winsorized before any averaging.
+
+## The factor view
+
+A final lens asks not what the index is made of but which of its style tilts the market paid for. Each
+month every constituent is scored on six factors built from the same point-in-time data — momentum (the
+trailing twelve-month return, skipping the most recent month), size, low volatility, value (earnings,
+book, and sales yields), quality (profitability, margins, low leverage and accruals), and growth (the
+revenue trend) — using only what was known that month, with the following month's return as the thing to
+be explained. There is no look-ahead.
+
+The scores are read two ways. The first asks whether a factor was rewarded inside the index: the names
+are sorted into quintiles on the factor and the top quintile is held against the bottom, cap-weighted,
+with sector effects removed first so that "quality paid" cannot quietly mean "biotech paid." The second
+asks how much a factor contributed to the index's actual return: a cross-sectional regression each month
+relates the constituents' next-month returns to their factor scores, and the index's own exposure to each
+factor, multiplied by that factor's return, is its contribution. The parts — a market term, the factor
+contributions, and a small residual — add back to the index return by construction, so the decomposition
+never asserts more than the arithmetic supports.
+
+Because the Russell index's distinctive names are concentrated in biotech, the obvious question is whether
+a quality result is really a sector bet in disguise. To settle it the attribution is run a second time
+with the GICS sectors entered as their own factors, so the style effects are measured within sector and
+the sector tilt is carried in a separate bucket. The styles barely move — the quality drag holds and the
+sector bucket stays small — which locates the effect in the profitability of the names themselves rather
+than in where they sit. What sets the Russell index's non-earners apart is that they are pre-revenue and
+unprofitable, not that they occupy a different sector, so the effect lives in the quality factor.
+
+Factor returns are regime-dependent, so the same efficacy is also split into three environments — the
+pre-COVID years, the 2020–2021 non-earner rally, and the 2022-onward reversal. This is where the
+composition story and the factor story meet: the quality tilt that looks flat across the whole period in
+fact paid through 2019 and was then overwhelmed by the 2020–21 tail rally, the same episode the
+concentration and biotech sections describe, measured a third way.
+
+Coverage follows the rest of the study. Holdings are carried forward between reconstitutions so the
+monthly series is continuous, and names that appear in the index but have no return history — new
+additions at a reconstitution — are left out rather than guessed.
 """.strip("\n")
 
 NARRATIVE_ARC = r"""
@@ -179,7 +217,9 @@ of names.
 Finish with Attr Contribution and Attr Counterfactual — what the makeup has meant. Splitting the return
 by quality cohort shows the unprofitable tail carrying far more of it than its weight in the recent
 rally; the counterfactual reruns the index on its own profitable names to size that effect against the
-full cycle.
+full cycle. For a different cut of the same question, Factor Summary and Factor by Regime decompose each
+index's return into the style tilts its holdings carry, and show that the Russell index's quality tilt
+paid until the 2020–21 rally, then did not.
 
 The through-line is that the two benchmarks are structurally different portfolios and have grown more so
 — which is why the S&P SmallCap 600 Growth is often the better yardstick for a quality-disciplined
