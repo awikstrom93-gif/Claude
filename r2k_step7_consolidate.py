@@ -76,6 +76,7 @@ SHEETS = [
     (FACTOR, "Factor Attribution", "Factor Attribution"),
     (FACTOR, "Factor Attribution Adj", "Factor Attribution Adj"),
     (FACTOR, "Factor By Year", "Factor By Year"),
+    (FACTOR, "Factor by Regime", "Factor by Regime"),
     (FACTOR, "Factor $1 R2000G", "Factor $1 R2000G"),
     (FACTOR, "Factor $1 SP600G", "Factor $1 SP600G"),
 ]
@@ -366,6 +367,10 @@ TAB_GUIDE = [
      "in a GICS sector) rather than a sector bet in disguise."),
     ("Factor By Year", "Calendar-year efficacy (long/short %) per factor -- when each factor paid or hurt.",
      "Reads left-to-right as the factor's year-by-year story; the sign flips show the regimes."),
+    ("Factor by Regime", "Annualized efficacy grouped into three market regimes (pre-COVID / 2020-21 melt-up "
+     "/ 2022+ reversal) -- which factors paid in which environment.",
+     "Shows how the same factor flips sign across regimes -- e.g. R2000G Quality paid pre-2020 then was "
+     "crushed in the 2020-21 non-earner melt-up, which is why the full-period average looks flat."),
     ("Factor $1 R2000G / SP600G", "Growth of $1 in each factor's long/short leg, monthly.",
      "The cumulative version of efficacy; a rising line means the factor was rewarded inside that index."),
 ]

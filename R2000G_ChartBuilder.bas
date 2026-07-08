@@ -590,13 +590,18 @@ Private Sub LoadSpecs()
     S "Valuation of the Tail|L|Valuation of the Tail|4|1|2|% no-revenue weight|% of index weight"
     S "Valuation of the Tail|L|Valuation of the Tail|@Quarter|1|4,5|Tail P/S re-rating -- quarterly (Unprof / Never)|P/S (x index; 1.0 = in line)"
 
-    ' ---- Factor analysis -------------------------------------------------
-    S "Factor Summary|C|Factor Summary|6|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
-    S "Factor Summary|C|Factor Summary|6|1|4,7|Factor contribution to index return (pts): R2KG vs 600G|Contribution (pts)"
-    S "Factor $1 R2000G|L|Factor $1 R2000G|3|1|2,3,4,5,6,7|R2000G: growth of $1 by factor (long/short)|Growth of $1"
-    S "Factor $1 SP600G|L|Factor $1 SP600G|3|1|2,3,4,5,6,7|S&P600G: growth of $1 by factor (long/short)|Growth of $1"
-    S "Factor Attribution Adj|C|Factor Attribution Adj|15|1|2,3|R2000G style attribution: raw vs sector-adjusted (styles barely move)|Contribution (pts)"
-    S "Factor Attribution Adj|C|Factor Attribution Adj|15|1|4,5|S&P600G style attribution: raw vs sector-adjusted|Contribution (pts)"
+    ' ---- Factor analysis (header rows located by @Label so the inline summary block can't shift them) -
+    S "Factor Summary|C|Factor Summary|@Factor|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
+    S "Factor Summary|C|Factor Summary|@Factor|1|4,7|Factor contribution to index return (pts): R2KG vs 600G|Contribution (pts)"
+    S "Factor $1 R2000G|L|Factor $1 R2000G|@Month|1|2,3,4,5,6,7|R2000G: growth of $1 by factor (long/short)|Growth of $1"
+    S "Factor $1 SP600G|L|Factor $1 SP600G|@Month|1|2,3,4,5,6,7|S&P600G: growth of $1 by factor (long/short)|Growth of $1"
+    S "Factor Attribution Adj|C|Factor Attribution Adj|@Style|1|2,3|R2000G style attribution: raw vs sector-adjusted (styles barely move)|Contribution (pts)"
+    S "Factor Attribution Adj|C|Factor Attribution Adj|@Style|1|4,5|S&P600G style attribution: raw vs sector-adjusted|Contribution (pts)"
+    S "Factor By Year|L|Factor By Year|@Year R2000G|1|2,3,4,5,6,7|R2000G: factor efficacy by calendar year|Long/short %"
+    S "Factor By Year|L|Factor By Year|@Year SP600G|1|2,3,4,5,6,7|S&P600G: factor efficacy by calendar year|Long/short %"
+    S "Factor By Year|L|Factor By Year|@Year R2000G|1|2,6|R2000G by year: Momentum paid, Quality didn't|Long/short %"
+    S "Factor by Regime|C|Factor by Regime|@Factor R2000G|1|2,3,4|R2000G: factor efficacy by market regime|Ann. L/S %"
+    S "Factor by Regime|C|Factor by Regime|@Factor SP600G|1|2,3,4|S&P600G: factor efficacy by market regime|Ann. L/S %"
 
     ' ---- Key Charts: curated summary (best from each area) -----------------
     S "Key Charts|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"
@@ -615,8 +620,9 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
     S "Key Charts|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight (quarterly): R2KG vs 600G|% of index weight"
-    S "Key Charts|C|Factor Summary|6|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
-    S "Key Charts|L|Factor $1 R2000G|3|1|2,6|R2000G: Momentum paid, Quality didn't (growth of $1)|Growth of $1"
+    S "Key Charts|C|Factor Summary|@Factor|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
+    S "Key Charts|L|Factor $1 R2000G|@Month|1|2,6|R2000G: Momentum paid, Quality didn't (growth of $1)|Growth of $1"
+    S "Key Charts|C|Factor by Regime|@Factor R2000G|1|2,3,4|R2000G: factor efficacy by market regime|Ann. L/S %"
     S "Key Charts|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|BR|Attr Cohort Ret|@Cohort|1|3|Volatility by profitability cohort (annualized)|Ann. vol %"
     S "Key Charts|L|Perf Rolling 12m|1|1|5,6|Rolling 12-month volatility: R2KG vs 600G|Ann. vol %"

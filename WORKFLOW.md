@@ -148,8 +148,11 @@ residual back to the index return) — plus a **sector-adjusted** attribution (t
 GICS-sector factors added, so the style slopes are measured *within* sector and the sector tilt is
 its own bucket). It writes `R2000G_Factor_Analysis.xlsx` (Factor Summary, Factor Attribution, Factor
 Attribution Adj, Factor By Year, Factor $1 per index), which step7 folds into the IC workbook. If its
-input files are absent the step self-skips, so the rest of the chain still builds. Headline: momentum
-was the one style rewarded inside R2000G (≈+7–8 pts/yr, t≈2.1); quality did not pay there — and the
+input files are absent the step self-skips, so the rest of the chain still builds. Every factor tab
+opens with its own summary block (what it shows / how to read / definitions) above the data and
+charts, and `Factor by Regime` groups the years into pre-COVID / 2020–21 melt-up / 2022+ reversal.
+Headline: momentum was the one style rewarded inside R2000G (≈+7–8 pts/yr, t≈2.1); quality did not
+pay there over the full window (it paid pre-2020, then the 2020–21 non-earner melt-up crushed it) — and the
 sector-adjusted view shows that is a genuine within-sector effect (the styles barely move, the sector
 bucket is ~+2 pts), i.e. the unprofitable-biotech drag lives in the quality factor, not in a sector.
 

@@ -446,6 +446,11 @@ def report(res):
 
 
 # --------------------------------------------------------------------------- workbook output
+REGIMES = [("2012-2019 pre-COVID calm", "2012-01", "2019-12"),
+           ("2020-2021 non-earner melt-up", "2020-01", "2021-12"),
+           ("2022+ rate reset / reversal", "2022-01", "2099-12")]
+
+
 def _cy_eff(res):
     """calendar-year cumulative L/S % per factor: {factor: {year: pct}}."""
     out = {ff: {} for ff in FACTORS}
@@ -462,35 +467,80 @@ def _cy_eff(res):
     return out
 
 
+def _regime_eff(res):
+    """annualized efficacy L/S % per factor per regime: {factor: {regime_label: ann%}}."""
+    out = {ff: {} for ff in FACTORS}
+    for ff in FACTORS:
+        for lab, a, b in REGIMES:
+            s = [v for ym, v in zip(res["emos"], res["eff"][ff]) if a <= ym <= b and v is not None]
+            if not s:
+                out[ff][lab] = None
+                continue
+            g = 1.0
+            for v in s:
+                g *= (1 + v)
+            out[ff][lab] = (g ** (12.0 / len(s)) - 1) * 100
+    return out
+
+
 def write_workbook(results, out_path):
-    """One workbook, IC-facing: Summary (both indices), per-index Efficacy $1 time series,
-    Attribution bridge, calendar-year efficacy grid, README."""
+    """One workbook, IC-facing. Every tab opens with a self-contained summary (What this shows / How to
+    read it / Definitions & method) above the data and charts, so the reader never has to leave the tab.
+    Tabs: Factor Summary, Factor $1 (per index), Factor Attribution, Factor Attribution Adj, Factor By
+    Year, Factor by Regime, README."""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
     HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
     TITLE = Font(bold=True, size=12, color="1F4E5F"); H = Font(bold=True, size=11, color="1F4E5F")
-    BODY = Font(size=10)
+    SUB = Font(bold=True, size=10, color="7A3B2E"); BODY = Font(size=10)
 
     def hdr(ws, row, hs, c0=1):
         for i, h in enumerate(hs):
             x = ws.cell(row=row, column=c0 + i, value=h); x.fill = HDR; x.font = HF
             x.alignment = Alignment(horizontal="center", wrap_text=True)
 
-    wb = openpyxl.Workbook(); wb.remove(wb.active)
+    def intro(ws, span, title, sections):
+        """Titled summary block (merged across `span` data columns) at the top of a tab. `sections` is
+        a list of (heading, [lines]). Returns the first free row for the data below."""
+        span = max(span, 1)
+        def put(row, text, font, h):
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+            c = ws.cell(row, 1, text); c.font = font
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[row].height = h
+        r = 1
+        put(r, title, TITLE, 20); r += 1
+        for head, lines in sections:
+            put(r, head, SUB, 15); r += 1
+            for ln in lines:
+                put(r, ln, BODY, 15 + 15 * (len(ln) // (span * 13 + 1))); r += 1
+            r += 1
+        return r + 1
 
-    # ---- Summary: efficacy (ann %, t) + attribution (pts) for both indices, factor by factor ----
+    wb = openpyxl.Workbook(); wb.remove(wb.active)
+    res_list = list(results.values())            # [R2000G, S&P600G] in insertion order
+
+    def _S(res, key, ff=None):
+        return round((sum(v for v in res[key][ff] if v is not None) if ff is not None
+                      else sum(res[key])) * 100, 1)
+
+    # ---- Factor Summary: efficacy (ann %, t) + attribution (pts) for both indices ----------------
     ws = wb.create_sheet("Factor Summary")
-    ws.cell(row=1, column=1, value="What drove the two Small-Cap Growth indices -- factor efficacy and "
-            "return attribution (point-in-time, holdings-based)").font = TITLE
-    ws.cell(row=2, column=1, value="Efficacy = cap-weighted top-minus-bottom quintile on the sector-neutral "
-            "factor score, held one month. Attribution = the index's own factor exposure x the "
-            "cross-sectional (Fama-MacBeth) return to that factor.").font = BODY
-    rd = 3
-    for lab, res in results.items():
-        ws.cell(row=rd, column=1, value=f"({lab}: {res['emos'][0]}..{res['emos'][-1]}, "
-                f"{len(res['emos'])} months of efficacy; {len(res['mos'])} months reconciled)").font = BODY
-        rd += 1
-    r = rd + 1
+    win = "; ".join(f"{lab} {res['emos'][0]}..{res['emos'][-1]}" for lab, res in results.items())
+    r = intro(ws, 7, "Factor Summary -- what drove each Small-Cap Growth index",
+              [("What this shows",
+                ["Which style factors were rewarded inside each index (efficacy) and how much each "
+                 "contributed to the index's realized return (attribution)."]),
+               ("How to read it",
+                ["Efficacy ann % = annualized return of a long top-quintile / short bottom-quintile bet "
+                 "on the factor. Positive = the factor paid inside the index.",
+                 "t = reliability of that efficacy; treat |t| above ~2 as a real effect and a low t as "
+                 "suggestive only. Attrib pts = the factor's cumulative contribution to index return.",
+                 "Charts (to the right): efficacy by factor, and factor contribution by factor."]),
+               ("Definitions & method",
+                ["Point-in-time: factor known at month t, return earned at t+1 (no look-ahead). Efficacy "
+                 "is sector-neutral; attribution is raw and reconciles to the index return.",
+                 f"Window: {win}. Six factors defined on the README tab."])])
     hdr(ws, r, ["Factor", "R2000G eff ann %", "R2000G t", "R2000G attrib pts",
                 "S&P600G eff ann %", "S&P600G t", "S&P600G attrib pts"])
     r += 1
@@ -502,33 +552,39 @@ def write_workbook(results, out_path):
             row += [round(_ann(s, nyr), 1), round(_tstat(s) or 0, 2),
                     round(sum(v for v in res["attr"][ff] if v is not None) * 100, 1)]
         for i, v in enumerate(row):
-            cell = ws.cell(row=r, column=1 + i, value=v)
-            cell.font = Font(bold=True) if i == 0 else BODY
+            ws.cell(row=r, column=1 + i, value=v).font = Font(bold=True) if i == 0 else BODY
         r += 1
-    # market + residual footer for the attribution reconciliation
     r += 1
     ws.cell(row=r, column=1, value="Market (intercept) / Residual / Index total, pts:").font = H
     r += 1
-    hdr(ws, r, ["", "R2000G", "", "", "S&P600G", "", ""]); r += 1
-    for name, key, sign in [("Market (intercept)", "intercepts", 1), ("Residual", "resid", 1),
-                            ("Index (sum of months)", "idx_ret", 1)]:
+    for name, key in [("Market (intercept)", "intercepts"), ("Residual", "resid"),
+                      ("Index (sum of months)", "idx_ret")]:
         ws.cell(row=r, column=1, value=name).font = BODY
-        for ci, (lab, res) in zip((2, 5), results.items()):
+        for ci, res in zip((2, 5), res_list):
             ws.cell(row=r, column=ci, value=round(sum(res[key]) * 100, 1)).font = BODY
         r += 1
     ws.column_dimensions["A"].width = 26
     for col in "BCDEFG":
         ws.column_dimensions[col].width = 15
 
-    # ---- per-index Efficacy growth-of-$1 (monthly) time series, for line charts ----
+    # ---- Factor $1: growth-of-$1 monthly time series (per index) ----------------------------------
     for lab, res in results.items():
         tag = "R2000G" if "R2000" in lab else "SP600G"
         wsg = wb.create_sheet(f"Factor $1 {tag}")
-        wsg.cell(row=1, column=1, value=f"{lab}: growth of $1 in each factor's long/short leg "
-                 "(cap-wtd top-minus-bottom quintile, sector-neutral)").font = TITLE
-        hdr(wsg, 3, ["Month"] + FACTORS)
+        r = intro(wsg, 7, f"Factor $1 ({lab}) -- growth of $1 in each factor's long/short leg",
+                  [("What this shows",
+                    ["The cumulative, month-by-month version of the efficacy figures on Factor Summary: "
+                     "$1 invested in each factor's long/short bet inside this index."]),
+                   ("How to read it",
+                    ["A rising line = the factor was being rewarded; a falling line = it was a drag. "
+                     "Changes in slope mark regime shifts (compare 2020-21 vs 2022+).",
+                     "Chart (to the right) plots all six factors; see Factor by Regime for the grouped view."]),
+                   ("Definitions & method",
+                    ["Long top-quintile / short bottom-quintile on the sector-neutral factor score, "
+                     "cap-weighted, rebalanced monthly. $1 starts at the first month shown."])])
+        hdr(wsg, r, ["Month"] + FACTORS)
         g = {ff: 1.0 for ff in FACTORS}
-        rr = 4
+        rr = r + 1
         for k, ym in enumerate(res["emos"]):
             wsg.cell(row=rr, column=1, value=ym).font = BODY
             for i, ff in enumerate(FACTORS):
@@ -539,46 +595,57 @@ def write_workbook(results, out_path):
             rr += 1
         wsg.column_dimensions["A"].width = 10
 
-    # ---- Attribution bridge (cumulative pts) per index, for bar charts ----
+    # ---- Factor Attribution: the Market -> index-return bridge (per index) ------------------------
     wa = wb.create_sheet("Factor Attribution")
-    wa.cell(row=1, column=1, value="Cumulative contribution to each index's total return, in points "
-            "(Market + sum of factor contributions + Residual = index return)").font = TITLE
-    hdr(wa, 3, ["Component", "R2000G pts", "S&P600G pts"])
-    comps = [("Market (intercept)", lambda res: sum(res["intercepts"]) * 100)]
-    comps += [(ff, (lambda res, ff=ff: sum(v for v in res["attr"][ff] if v is not None) * 100))
-              for ff in FACTORS]
-    comps += [("Residual", lambda res: sum(res["resid"]) * 100),
-              ("Index total", lambda res: sum(res["idx_ret"]) * 100)]
-    rr = 4
-    for name, fn in comps:
+    r = intro(wa, 8, "Factor Attribution -- from 'the market' to each index's return",
+              [("What this shows",
+                ["The bridge that reconstructs each index's total return: Market + each factor's "
+                 "contribution + a residual = the index return."]),
+               ("How to read it",
+                ["Market (the average-constituent return) dominates; the factor lines are the points the "
+                 "index's style tilts added or subtracted. Values are cumulative points over the window.",
+                 "For the sector-robustness view of these same numbers, see Factor Attribution Adj."]),
+               ("Definitions & method",
+                ["Multivariate Fama-MacBeth: each month regress next-month returns on raw factor "
+                 "z-scores; a factor's contribution = the index's weighted exposure x the factor's "
+                 "return, summed. 'Market' is the intercept (average-name return). Reconciles by "
+                 "construction."])])
+    hdr(wa, r, ["Component", "R2000G pts", "S&P600G pts"])
+    comps = [("Market (intercept)", "intercepts", None)]
+    comps += [(ff, "attr", ff) for ff in FACTORS]
+    comps += [("Residual", "resid", None), ("Index total", "idx_ret", None)]
+    rr = r + 1
+    for name, key, ff in comps:
         wa.cell(row=rr, column=1, value=name).font = (H if name in ("Market (intercept)", "Index total") else BODY)
-        for ci, (lab, res) in zip((2, 3), results.items()):
-            wa.cell(row=rr, column=ci, value=round(fn(res), 1)).font = BODY
+        for ci, res in zip((2, 3), res_list):
+            wa.cell(row=rr, column=ci, value=_S(res, key, ff)).font = BODY
         rr += 1
     wa.column_dimensions["A"].width = 22
     wa.column_dimensions["B"].width = 14; wa.column_dimensions["C"].width = 14
 
-    # ---- sector-adjusted attribution: raw vs GICS-sector-controlled, side by side ----
-    res_list = list(results.values())            # [R2000G, S&P600G] in insertion order
-    def _S(res, key, ff=None):
-        return round((sum(v for v in res[key][ff] if v is not None) if ff is not None
-                      else sum(res[key])) * 100, 1)
+    # ---- Factor Attribution Adj: raw vs GICS-sector-controlled ------------------------------------
     wj = wb.create_sheet("Factor Attribution Adj")
-    wj.cell(row=1, column=1, value="Return attribution: raw vs sector-adjusted. The 'adj' columns add GICS-"
-            "sector factors to the monthly regression, so the style slopes are estimated CONTROLLING for "
-            "sector (consistent with the sector-neutral efficacy lens); the sector tilt is then its own "
-            "bucket. Both reconcile to the index return.").font = TITLE
-    wj.cell(row=2, column=1, value="Read across each style row: if a style's contribution barely changes "
-            "from raw to adj (and the Sectors bucket stays small), the effect is a genuine within-sector "
-            "style effect, not a sector bet in disguise.").font = BODY
-    hdr(wj, 3, ["Component", "R2000G raw", "R2000G sector-adj", "S&P600G raw", "S&P600G sector-adj"])
-    # bridge: Market, 6 styles, Sectors, Residual, Index total  (rows 4..13)
+    r = intro(wj, 5, "Factor Attribution Adj -- is it a style effect or a sector bet?",
+              [("What this shows",
+                ["The same attribution, raw vs sector-adjusted. The 'adj' columns add GICS-sector "
+                 "factors, so the style effects are measured within sector and the sector tilt gets "
+                 "its own bucket."]),
+               ("How to read it",
+                ["Compare each style's raw vs adj column. If it barely changes and the Sectors bucket is "
+                 "small, the effect is a genuine style effect, not a sector bet in disguise.",
+                 "Finding: R2000G Quality holds about -17 pts and the Sectors bucket is only ~+2 -- the "
+                 "quality drag is a real within-sector, profitability effect (unprofitable biotech lives "
+                 "in Quality, not in a GICS sector). Chart to the right."]),
+               ("Definitions & method",
+                ["Sector dummies are demeaned so 'Market' stays the average-constituent return; both "
+                 "columns reconcile to the index total."])])
+    hdr(wj, r, ["Component", "R2000G raw", "R2000G sector-adj", "S&P600G raw", "S&P600G sector-adj"])
     bridge = [("Market (intercept)", "intercepts", "intercepts_adj", None)]
     bridge += [(ff, "attr", "attr_adj", ff) for ff in FACTORS]
     bridge += [("Sectors", None, "sect_bucket", None),
                ("Residual", "resid", "resid_adj", None),
                ("Index total", "idx_ret", "idx_ret", None)]
-    rr = 4
+    rr = r + 1
     for name, kraw, kadj, ff in bridge:
         bold = name in ("Market (intercept)", "Sectors", "Index total")
         wj.cell(row=rr, column=1, value=name).font = (H if bold else BODY)
@@ -586,50 +653,97 @@ def write_workbook(results, out_path):
             wj.cell(row=rr, column=base, value=(0.0 if kraw is None else _S(res, kraw, ff))).font = BODY
             wj.cell(row=rr, column=base + 1, value=_S(res, kadj, ff)).font = BODY
         rr += 1
-    # style-only comparison block at a FIXED header row (15) so a chart can target just the six styles
-    SB = 15
-    hdr(wj, SB, ["Style", "R2000G raw", "R2000G adj", "S&P600G raw", "S&P600G adj"])
+    rr += 1                                          # blank spacer before the style-only block
+    hdr(wj, rr, ["Style", "R2000G raw", "R2000G adj", "S&P600G raw", "S&P600G adj"])
     for i, ff in enumerate(FACTORS):
-        wj.cell(row=SB + 1 + i, column=1, value=ff).font = Font(bold=True)
+        wj.cell(row=rr + 1 + i, column=1, value=ff).font = Font(bold=True)
         for base, res in zip((2, 4), res_list):
-            wj.cell(row=SB + 1 + i, column=base, value=_S(res, "attr", ff)).font = BODY
-            wj.cell(row=SB + 1 + i, column=base + 1, value=_S(res, "attr_adj", ff)).font = BODY
+            wj.cell(row=rr + 1 + i, column=base, value=_S(res, "attr", ff)).font = BODY
+            wj.cell(row=rr + 1 + i, column=base + 1, value=_S(res, "attr_adj", ff)).font = BODY
     wj.column_dimensions["A"].width = 22
     for col in "BCDE":
         wj.column_dimensions[col].width = 16
 
-    # ---- calendar-year efficacy grid (factor x year), one block per index ----
+    # ---- Factor By Year: calendar-year efficacy, years down / factors across (chartable) ----------
     wy = wb.create_sheet("Factor By Year")
-    wy.cell(row=1, column=1, value="Calendar-year factor efficacy (long/short %, sector-neutral) -- "
-            "when each factor paid, and when it hurt").font = TITLE
-    rr = 3
+    r = intro(wy, 7, "Factor By Year -- when each factor paid, year by year",
+              [("What this shows",
+                ["Each factor's long/short efficacy in each calendar year, for both indices -- the "
+                 "year-by-year trajectory behind the Factor Summary averages."]),
+               ("How to read it",
+                ["Each value/line is that year's long/short return for the factor (sector-neutral). Read "
+                 "a factor across the years to see its story; the sign flips are the regimes.",
+                 "One line chart per index (to the right). Factor by Regime groups these years into "
+                 "three environments."]),
+               ("Definitions & method",
+                ["Same efficacy as Factor Summary, split by calendar year. 2011 is excluded (thin "
+                 "coverage); 2012 on is ~99-100% of index weight."])])
     for lab, res in results.items():
+        tag = "R2000G" if "R2000" in lab else "SP600G"
         cy = _cy_eff(res)
         years = sorted({y for ff in FACTORS for y in cy[ff]})
-        wy.cell(row=rr, column=1, value=lab).font = H; rr += 1
-        hdr(wy, rr, ["Factor"] + [str(y) for y in years]); rr += 1
-        for ff in FACTORS:
-            wy.cell(row=rr, column=1, value=ff).font = Font(bold=True)
-            for j, y in enumerate(years):
+        wy.cell(row=r, column=1, value=lab).font = H; r += 1
+        hdr(wy, r, [f"Year {tag}"] + FACTORS); r += 1       # unique corner label = chart anchor
+        for y in years:
+            wy.cell(row=r, column=1, value=y).font = Font(bold=True)
+            for j, ff in enumerate(FACTORS):
                 v = cy[ff].get(y)
-                wy.cell(row=rr, column=2 + j, value=(round(v, 1) if v is not None else None)).font = BODY
-            rr += 1
-        rr += 2
-    wy.column_dimensions["A"].width = 14
+                wy.cell(row=r, column=2 + j, value=(round(v, 1) if v is not None else None)).font = BODY
+            r += 1
+        r += 2
+    wy.column_dimensions["A"].width = 12
+
+    # ---- Factor by Regime: annualized efficacy grouped into market regimes ------------------------
+    wg = wb.create_sheet("Factor by Regime")
+    reglabs = [lab for lab, _, _ in REGIMES]
+    r = intro(wg, 4, "Factor by Regime -- which factors paid in which environment",
+              [("What this shows",
+                ["Each factor's annualized long/short efficacy within three market regimes -- the "
+                 "clearest view of how the same factor flipped from tailwind to headwind."]),
+               ("How to read it",
+                ["Each bar (chart to the right) is the factor's annualized L/S return in that regime. "
+                 "Compare a factor across regimes: the 2020 boundary splits the low-quality rally from "
+                 "its unwind.",
+                 "This is why a single pre/post-2020 split understates the story -- 2020-21 and 2022+ "
+                 "pull in opposite directions and a two-way cut averages them away."]),
+               ("Definitions & method",
+                ["Regimes: 2012-2019 (pre-COVID calm), 2020-2021 (the non-earner / biotech melt-up), "
+                 "2022+ (the rate-reset reversal). Annualized from the monthly sector-neutral long/short "
+                 "returns within each regime."])])
+    for lab, res in results.items():
+        tag = "R2000G" if "R2000" in lab else "SP600G"
+        rg = _regime_eff(res)
+        wg.cell(row=r, column=1, value=lab).font = H; r += 1
+        hdr(wg, r, [f"Factor {tag}"] + reglabs); r += 1     # unique corner label = chart anchor
+        for ff in FACTORS:
+            wg.cell(row=r, column=1, value=ff).font = Font(bold=True)
+            for j, rl in enumerate(reglabs):
+                v = rg[ff].get(rl)
+                wg.cell(row=r, column=2 + j, value=(round(v, 1) if v is not None else None)).font = BODY
+            r += 1
+        r += 2
+    wg.column_dimensions["A"].width = 14
+    for col in "BCD":
+        wg.column_dimensions[col].width = 24
 
     # ---- README ----
     wr = wb.create_sheet("README")
     notes = [
         ("Factor Analysis -- how to read it", TITLE),
         ("", BODY),
+        ("Every tab in this workbook opens with its own summary (What this shows / How to read it / "
+         "Definitions & method) above the data and charts, so you can read a tab without leaving it. "
+         "This README is just the overview.", BODY),
+        ("", BODY),
         ("Purpose: decompose each index's return into the factors that drove it, using only "
          "point-in-time information (the factor is known at month t; the return is realized at t+1). "
          "No look-ahead.", BODY),
         ("", BODY),
         ("Two lenses:", H),
-        ("  1. EFFICACY (Factor Summary, Factor $1, Factor By Year) -- was the factor rewarded INSIDE the "
-         "index? Cap-weighted top-minus-bottom quintile on the sector-neutral score, held one month, "
-         "compounded. This isolates the factor from sector bets.", BODY),
+        ("  1. EFFICACY (Factor Summary, Factor $1, Factor By Year, Factor by Regime) -- was the factor "
+         "rewarded INSIDE the index? Cap-weighted top-minus-bottom quintile on the sector-neutral score, "
+         "held one month, compounded. This isolates the factor from sector bets. Factor by Regime groups "
+         "the years into pre-COVID / 2020-21 melt-up / 2022+ reversal, where the same factor often flips.", BODY),
         ("  2. ATTRIBUTION (Factor Summary, Factor Attribution) -- how much did the factor CONTRIBUTE to "
          "the index's realized return? A multivariate Fama-MacBeth cross-section each month regresses "
          "next-month returns on raw factor z-scores; the index's own weighted exposure x that slope is "
