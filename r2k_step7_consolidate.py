@@ -113,6 +113,7 @@ SHEETS = [
     (ANALYTICS, "DuPont", "R2KG DuPont"), (ANALYTICS, "Composition Change", "R2KG Composition"),
     # ---- factor analysis (optional; what drove each index) ----
     (FACTOR, "Factor Summary", "Factor Summary"),
+    (FACTOR, "Factor Definitions", "Factor Definitions"),
     (FACTOR, "Factor Attribution", "Factor Attribution"),
     (FACTOR, "Factor Attribution Adj", "Factor Attribution Adj"),
     (FACTOR, "Factor By Year", "Factor By Year"),
@@ -465,6 +466,10 @@ TAB_GUIDE = [
      "(how much it contributed to the realized return).",
      "Point-in-time, holdings-based, monthly. Trust efficacy t-stats above ~2. Momentum is the one factor "
      "that paid inside R2000G (ann +7-8%, t~2.1); Quality did NOT pay inside R2000G over this window."),
+    ("Factor Definitions", "The exact construction of each of the six style factors.",
+     "Momentum (12-1 price), Size (-ln mkt cap), LowVol (-trailing 12m stdev), Value (E/P, B/P, S/P), "
+     "Quality (ROIC, GP/assets, margin, -leverage, -accruals, profitable), Growth (rev YoY + 3y CAGR); "
+     "each cross-sectionally z-scored, point-in-time. Start here to read the other Factor tabs."),
     ("Factor Attribution", "Market + each factor's contribution + residual = the index's total return (pts).",
      "A multivariate Fama-MacBeth bridge; reconciles to the index return by construction. Size was the largest "
      "positive factor contribution inside R2000G; Quality was the largest drag."),

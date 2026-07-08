@@ -540,7 +540,7 @@ def write_workbook(results, out_path):
                ("Definitions & method",
                 ["Point-in-time: factor known at month t, return earned at t+1 (no look-ahead). Efficacy "
                  "is sector-neutral; attribution is raw and reconciles to the index return.",
-                 f"Window: {win}. Six factors defined on the README tab."])])
+                 f"Window: {win}. Each factor's exact construction is on the Factor Definitions tab."])])
     hdr(ws, r, ["Factor", "R2000G eff ann %", "R2000G t", "R2000G attrib pts",
                 "S&P600G eff ann %", "S&P600G t", "S&P600G attrib pts"])
     r += 1
@@ -566,6 +566,62 @@ def write_workbook(results, out_path):
     ws.column_dimensions["A"].width = 26
     for col in "BCDEFG":
         ws.column_dimensions[col].width = 15
+
+    # ---- Factor Definitions: exact construction of each factor (referenced by every factor tab) ----
+    wd = wb.create_sheet("Factor Definitions")
+    r = intro(wd, 4, "Factor Definitions -- what each factor is and how it is built",
+              [("What this shows",
+                ["The exact construction of the six style factors used throughout the Factor tabs."]),
+               ("How to read it",
+                ["Each factor is a cross-sectional score: every constituent is ranked each month on the "
+                 "'Construction' column, then standardized. 'A high score means' names the end of the "
+                 "factor the long leg sits on (efficacy is long the high end, short the low end)."]),
+               ("Definitions & method",
+                ["Point-in-time: price and size are known through month t; fundamentals are the latest "
+                 "fiscal year whose 10-K was filed before t (FY t-1 from April on, else t-2); the return "
+                 "is realized at t+1. No look-ahead.",
+                 "Each raw factor is winsorized and standardized to a cross-sectional z-score (+/-3 sigma). "
+                 "Efficacy uses the SECTOR-NEUTRAL z (demeaned within GICS sector); attribution uses the "
+                 "RAW z. Monthly returns are winsorized at -60% / +150%. Universe = the index's own "
+                 "constituents, carried forward between rebalances."])])
+    DEFS = [
+        ("Momentum", "Price trend (recent winners)",
+         "Compound total return over the trailing 12 months, SKIPPING the most recent month "
+         "(the standard 12-minus-1 momentum).", "strong recent price performance"),
+        ("Size", "Small-cap tilt",
+         "Negative natural log of month-end market capitalization (-ln of market cap).",
+         "a SMALLER company"),
+        ("LowVol", "Return stability",
+         "Negative standard deviation of the trailing 12 monthly returns (requires >=6 months).",
+         "LOWER realized volatility"),
+        ("Value", "Cheapness",
+         "Equal-weight composite of three yields against market cap: earnings yield (net income / mkt cap), "
+         "book yield (common equity / mkt cap), and sales yield (revenue / mkt cap).",
+         "a CHEAPER valuation"),
+        ("Quality", "Profitability & balance-sheet strength",
+         "Equal-weight composite of: ROIC (operating income / (debt + equity)), gross profit / assets, "
+         "net margin (net income / revenue), minus leverage (debt / equity), minus accruals "
+         "((net income - operating cash flow) / assets), and a profitable flag (1 if net income > 0).",
+         "HIGHER quality / profitability"),
+        ("Growth", "Fundamental growth",
+         "Average of revenue year-over-year growth and the 3-year revenue CAGR.",
+         "FASTER revenue growth"),
+    ]
+    hdr(wd, r, ["Factor", "What it captures", "Construction", "A high score means"])
+    r += 1
+    for f, cap, con, hi in DEFS:
+        wd.cell(r, 1, f).font = Font(bold=True)
+        wd.cell(r, 2, cap).font = BODY
+        wd.cell(r, 3, con).font = BODY
+        wd.cell(r, 4, hi).font = BODY
+        for c in range(1, 5):
+            wd.cell(r, c).alignment = Alignment(wrap_text=True, vertical="top")
+        wd.row_dimensions[r].height = 58
+        r += 1
+    wd.column_dimensions["A"].width = 12
+    wd.column_dimensions["B"].width = 26
+    wd.column_dimensions["C"].width = 72
+    wd.column_dimensions["D"].width = 24
 
     # ---- Factor $1: growth-of-$1 monthly time series (per index) ----------------------------------
     for lab, res in results.items():
