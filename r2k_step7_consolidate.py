@@ -192,9 +192,21 @@ def copy_sheet(src_ws, dst_ws, row_off=0):
                 d.font = copy(c.font); d.fill = copy(c.fill)
                 d.alignment = copy(c.alignment); d.number_format = c.number_format
             widths[c.column] = max(widths.get(c.column, 8), min(28, len(str(c.value)) + 2) if c.value else 8)
-    from openpyxl.utils import get_column_letter
+    from openpyxl.utils import get_column_letter, column_index_from_string
+    # honor explicit source column widths where wider than content (keeps summary bands from collapsing)
+    for cl, dim in src_ws.column_dimensions.items():
+        if dim.width:
+            widths[column_index_from_string(cl)] = max(widths.get(column_index_from_string(cl), 8), dim.width)
     for col, w in widths.items():
         dst_ws.column_dimensions[get_column_letter(col)].width = w
+    # preserve explicit row heights and merged ranges (shifted), so a source summary block keeps its
+    # layout instead of collapsing into column A and auto-fitting to very tall rows
+    for r, dim in src_ws.row_dimensions.items():
+        if dim.height:
+            dst_ws.row_dimensions[r + row_off].height = dim.height
+    for mc in list(src_ws.merged_cells.ranges):
+        dst_ws.merge_cells(start_row=mc.min_row + row_off, start_column=mc.min_col,
+                           end_row=mc.max_row + row_off, end_column=mc.max_col)
     if src_ws.freeze_panes and not row_off: dst_ws.freeze_panes = src_ws.freeze_panes
 
 

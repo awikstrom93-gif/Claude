@@ -603,6 +603,8 @@ Private Sub LoadSpecs()
     ' ---- Factor analysis (header rows located by @Label so the inline summary block can't shift them) -
     S "Factor Summary|C|Factor Summary|@Factor|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
     S "Factor Summary|C|Factor Summary|@Factor|1|4,7|Factor contribution to index return (pts): R2KG vs 600G|Contribution (pts)"
+    ' on the Attribution tab itself: chart the six factor contributions only (skip the dominant Market row so the factors are legible)
+    S "Factor Attribution|C|Factor Attribution|@Component|1|2,3|Factor contribution to index return (excl. Market): R2KG vs 600G|Contribution (pts)||1|6"
     S "Factor $1 R2000G|L|Factor $1 R2000G|@Month|1|2,3,4,5,6,7|R2000G: growth of $1 by factor (long/short)|Growth of $1"
     S "Factor $1 SP600G|L|Factor $1 SP600G|@Month|1|2,3,4,5,6,7|S&P600G: growth of $1 by factor (long/short)|Growth of $1"
     S "Factor Attribution Adj|C|Factor Attribution Adj|@Style|1|2,3|R2000G style attribution: raw vs sector-adjusted (styles barely move)|Contribution (pts)"
