@@ -206,23 +206,45 @@ def _method_note(name):
 
 
 def inject_summary(dst_ws, name, ncols):
-    """Write the self-documenting summary block (rows 1..SUMMARY_ROWS) at the top of a data tab. `name`
-    is the consolidated tab name; what/how are pulled from the same TAB_GUIDE that feeds the Reading
-    Guide, so the tab and the guide never disagree. The last row is a spacer before the data."""
+    """Write the self-documenting summary block (rows 1..SUMMARY_ROWS) at the top of a data tab. Call
+    AFTER copy_sheet so the widths/heights set here are not overwritten. `name` is the consolidated tab
+    name; what/how are pulled from the same TAB_GUIDE that feeds the Reading Guide, so the tab and the
+    guide never disagree. The last row is a spacer before the data.
+
+    The summary text is merged across the data columns and wrapped, so narrow tabs would wrap it into
+    tall rows. To keep the rows compact we widen the spanned columns to a readable band and then size
+    each row to the number of lines the text actually needs (not a fixed tall height)."""
+    from openpyxl.utils import get_column_letter
     what, how = _SUM.get(name, (None, None))
     method = _method_note(name)
-    span = max(2, min(int(ncols or 2), 14))
+    span = max(2, min(int(ncols or 2), 12))
 
-    def put(row, text, font, h):
+    # widen the summary band: floor each spanned column, then top the band up to ~BAND chars so the
+    # text wraps to about two lines even on a 3-column tab.
+    BAND = 84
+    for c in range(1, span + 1):
+        L = get_column_letter(c)
+        dst_ws.column_dimensions[L].width = max(dst_ws.column_dimensions[L].width or 8.43, 12)
+    total = sum((dst_ws.column_dimensions[get_column_letter(c)].width or 12) for c in range(1, span + 1))
+    if total < BAND:
+        add = (BAND - total) / span
+        for c in range(1, span + 1):
+            L = get_column_letter(c)
+            dst_ws.column_dimensions[L].width = (dst_ws.column_dimensions[L].width or 12) + add
+        total = BAND
+    cpl = max(24, int(total * 0.85))            # ~characters per wrapped line (conservative: avoids clipping)
+
+    def put(row, text, font, base):
         dst_ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
         c = dst_ws.cell(row, 1, text or ""); c.font = font
         c.alignment = Alignment(wrap_text=True, vertical="top")
-        dst_ws.row_dimensions[row].height = h
+        lines = max(1, -(-len(text or "") // cpl))     # ceil(len / chars-per-line)
+        dst_ws.row_dimensions[row].height = base * lines + 3
 
-    put(1, name, SUM_TITLE, 20)
-    put(2, ("What it shows — " + what) if what else "", BODY, 46)
-    put(3, ("How to read it — " + how) if how else "", BODY, 46)
-    put(4, ("Method — " + method) if method else "", BODY, 32)
+    put(1, name, SUM_TITLE, 18)
+    put(2, ("What it shows — " + what) if what else "", BODY, 15)
+    put(3, ("How to read it — " + how) if how else "", BODY, 15)
+    put(4, ("Method — " + method) if method else "", BODY, 15)
     # row SUMMARY_ROWS (5) left blank as a spacer before the copied data
 
 
@@ -628,8 +650,8 @@ def main():
         if nm.startswith("Factor "):               # factor tabs already carry their own summary block
             copy_sheet(sw[orig], dst)
         else:
-            inject_summary(dst, nm, sw[orig].max_column)
             copy_sheet(sw[orig], dst, row_off=SUMMARY_ROWS)
+            inject_summary(dst, nm, sw[orig].max_column)   # after copy: sets its own widths/heights
         copied.append(nm)
     # panel-native exhibits (quality-factor spreads needs the performance file; the others are panel-only).
     # Each module writes its sheet directly; render it to a temp sheet, then re-copy WITH the summary
@@ -645,8 +667,8 @@ def main():
                 srcsh = wb[raw]; nc = srcsh.max_column
                 srcsh.title = (raw + "~tmp")[:31]
                 dst = wb.create_sheet(raw[:31])
-                inject_summary(dst, raw[:31], nc)
                 copy_sheet(srcsh, dst, row_off=SUMMARY_ROWS)
+                inject_summary(dst, raw[:31], nc)          # after copy: sets its own widths/heights
                 del wb[srcsh.title]
                 copied.append(raw[:31])
                 print(f"  added {label} tab")
