@@ -184,6 +184,26 @@ def conc(wb):
     return dict(weight=weight, breadth=breadth)
 
 
+def factor(wb):
+    """Factor efficacy + attribution from the consolidated `Factor Summary` tab (optional). Returns
+    {factor: dict(r_eff, r_t, r_attr, s_eff, s_t, s_attr)} or None if the tab is absent (so an older
+    workbook still produces a memo -- the factor paragraph then self-skips)."""
+    if "Factor Summary" not in wb.sheetnames:
+        return None
+    R = _rows(wb["Factor Summary"])
+    hi = _hdr_row(R, "Factor")
+    if hi is None:
+        return None
+    out = {}
+    for r in R[hi + 1:]:
+        name = str(r[0]).strip() if r and r[0] else ""
+        if not name or _num(r[1]) is None:      # stop at the blank row before the market/residual footer
+            break
+        out[name] = dict(r_eff=_num(r[1]), r_t=_num(r[2]), r_attr=_num(r[3]),
+                         s_eff=_num(r[4]), s_t=_num(r[5]), s_attr=_num(r[6]))
+    return out or None
+
+
 def series_returns(wb, sheet):
     """Full-period and trailing-3y returns for every value column of a growth-of-$1 sheet.
     Base is $1 at the month before the first row, so full = last-1. Window denominator is the row
@@ -234,8 +254,9 @@ def collect(wb):
     cf, end_m = series_returns(wb, "Attr Counterfactual")
     bcf, _ = series_returns(wb, "Bio Counterfactual")
     cn = conc(wb)
+    fac = factor(wb)
     return dict(ps=ps, cal=cal, q=q, wp=wp, attr=attr, bio=bio, biocon=biocon,
-                cf=cf, bcf=bcf, end_m=end_m, cn=cn)
+                cf=cf, bcf=bcf, end_m=end_m, cn=cn, fac=fac)
 
 
 def reconcile(D):
@@ -438,6 +459,30 @@ def build_memo(D):
              f"profitable-only rebuild lands close to the actual S&P600G return over the cycle "
              f"(**{fmt(pf_f,1,True)}** vs **{fmt(cum6,1,True)}**).\n")
     P.append("*Tabs: `Attr Contribution`, `Attr Counterfactual`, `Bio Contribution`.*\n")
+
+    # ---- factor footprint (optional; only if the Factor Summary tab is present) ----
+    fac = D.get("fac")
+    if fac:
+        def _f(name):
+            return fac.get(name, {})
+        mom, qal = _f("Momentum"), _f("Quality")
+        P.append("\nLooking *inside* the Russell index — decomposing its own return into the style "
+                 "factors its constituents carry — tells the same story from a different angle. Holding "
+                 "the factor known at each month and measuring the next month's return (no look-ahead), "
+                 f"**momentum was the one style that was consistently rewarded** inside the index "
+                 f"(about **{fmt(mom.get('r_eff'),1,sign=True)} pts/yr** on a sector-neutral long/short, "
+                 f"the only factor with a t-stat near 2). **Quality did *not* pay inside the Russell "
+                 f"index** over this window: on a clean sector-neutral long/short it earned essentially "
+                 f"nothing (**{fmt(qal.get('r_eff'),1,sign=True)} pts/yr**, statistically "
+                 f"indistinguishable from zero), and once the index's actual factor exposures are "
+                 f"weighted in, quality was the single largest *drag* on its realized return "
+                 f"(**{fmt(qal.get('r_attr'),1,sign=True)} pts** of attribution — more than any other "
+                 f"style). That is the mirror image of the composition finding: in an index whose "
+                 f"returns have been led by its non-earning, high-momentum names, screening for quality "
+                 f"is a headwind to *relative* return even as it lowers risk. In the earnings-screened "
+                 f"S&P 600 Growth the pattern is muted — value carried a modest, more reliable premium "
+                 f"and quality was far less punished.\n")
+        P.append("*Tab: `Factor Summary`; charts on `Key Charts` and `Factor $1 R2000G`.*\n")
     P.append("---\n")
 
     # For the Committee

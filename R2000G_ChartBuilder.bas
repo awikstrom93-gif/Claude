@@ -590,6 +590,12 @@ Private Sub LoadSpecs()
     S "Valuation of the Tail|L|Valuation of the Tail|4|1|2|% no-revenue weight|% of index weight"
     S "Valuation of the Tail|L|Valuation of the Tail|@Quarter|1|4,5|Tail P/S re-rating -- quarterly (Unprof / Never)|P/S (x index; 1.0 = in line)"
 
+    ' ---- Factor analysis -------------------------------------------------
+    S "Factor Summary|C|Factor Summary|6|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
+    S "Factor Summary|C|Factor Summary|6|1|4,7|Factor contribution to index return (pts): R2KG vs 600G|Contribution (pts)"
+    S "Factor $1 R2000G|L|Factor $1 R2000G|3|1|2,3,4,5,6,7|R2000G: growth of $1 by factor (long/short)|Growth of $1"
+    S "Factor $1 SP600G|L|Factor $1 SP600G|3|1|2,3,4,5,6,7|S&P600G: growth of $1 by factor (long/short)|Growth of $1"
+
     ' ---- Key Charts: curated summary (best from each area) -----------------
     S "Key Charts|L|Perf Monthly|1|1|5,6|Growth of $1: R2000G vs S&P 600 Growth|Growth of $1"
     S "Key Charts|L|Perf Monthly|1|1|7|Cumulative excess return (R2KG - SP6G)|Cumulative excess %"
@@ -607,6 +613,8 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Quality Factor Spreads|4|1|8|Composite quality factor spread|Fwd-3m %"
     S "Key Charts|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|L|Qual Comparison|@Quarter|1|11,12|Never-profitable weight (quarterly): R2KG vs 600G|% of index weight"
+    S "Key Charts|C|Factor Summary|6|1|2,5|Factor efficacy (annualized long/short %): R2KG vs 600G|Ann. L/S %"
+    S "Key Charts|L|Factor $1 R2000G|3|1|2,6|R2000G: Momentum paid, Quality didn't (growth of $1)|Growth of $1"
     S "Key Charts|L|Bio Weight & Quality|@Quarter|1|2,6|Biotech weight (quarterly): R2KG vs 600G|% of index weight"
     S "Key Charts|BR|Attr Cohort Ret|@Cohort|1|3|Volatility by profitability cohort (annualized)|Ann. vol %"
     S "Key Charts|L|Perf Rolling 12m|1|1|5,6|Rolling 12-month volatility: R2KG vs 600G|Ann. vol %"

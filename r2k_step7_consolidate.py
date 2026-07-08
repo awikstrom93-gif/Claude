@@ -35,6 +35,7 @@ ATTR = BASE / "R2000G_Cohort_Attribution.xlsx"
 ANALYTICS = BASE / "Russell2000Growth_Analytics.xlsx"   # step 3 (optional)
 CONC = BASE / "R2000G_Concentration.xlsx"               # step 8 (optional)
 BIO = BASE / "R2000G_Biotech.xlsx"                       # step 9 (optional)
+FACTOR = BASE / "R2000G_Factor_Analysis.xlsx"            # factor analysis (optional)
 OUT = BASE / "R2000G_SmallCapGrowth_Benchmark_Review.xlsx"
 FLAGS = BASE / "plausibility_flags.csv"      # reliability tier per (cik, fy)  -- from r2k_plausibility
 FUND = BASE / "fundamentals_dera.csv"        # confidence / breaks / provenance -- from r2k_dera_classify
@@ -70,6 +71,12 @@ SHEETS = [
     (ANALYTICS, "Index Quality Trends", "R2KG Quality Trends"),
     (ANALYTICS, "Profitability Cohorts", "R2KG Prof Cohorts"),
     (ANALYTICS, "DuPont", "R2KG DuPont"), (ANALYTICS, "Composition Change", "R2KG Composition"),
+    # ---- factor analysis (optional; what drove each index) ----
+    (FACTOR, "Factor Summary", "Factor Summary"),
+    (FACTOR, "Factor Attribution", "Factor Attribution"),
+    (FACTOR, "Factor By Year", "Factor By Year"),
+    (FACTOR, "Factor $1 R2000G", "Factor $1 R2000G"),
+    (FACTOR, "Factor $1 SP600G", "Factor $1 SP600G"),
 ]
 
 
@@ -343,6 +350,18 @@ TAB_GUIDE = [
     ("Valuation of the Tail", "What the market pays for the unprofitable tail -- annual AND quarterly.",
      "Sales multiples and price/book of the tail (as a multiple of the index); the quarterly block shows the "
      "tail's intra-year re-rating -- whether a run-up is multiple expansion rather than fundamentals."),
+    ("Factor analysis", None, None),
+    ("Factor Summary", "Which factors drove each index -- efficacy (was the factor rewarded) and attribution "
+     "(how much it contributed to the realized return).",
+     "Point-in-time, holdings-based, monthly. Trust efficacy t-stats above ~2. Momentum is the one factor "
+     "that paid inside R2000G (ann +7-8%, t~2.1); Quality did NOT pay inside R2000G over this window."),
+    ("Factor Attribution", "Market + each factor's contribution + residual = the index's total return (pts).",
+     "A multivariate Fama-MacBeth bridge; reconciles to the index return by construction. Size was the largest "
+     "positive factor contribution inside R2000G; Quality was the largest drag."),
+    ("Factor By Year", "Calendar-year efficacy (long/short %) per factor -- when each factor paid or hurt.",
+     "Reads left-to-right as the factor's year-by-year story; the sign flips show the regimes."),
+    ("Factor $1 R2000G / SP600G", "Growth of $1 in each factor's long/short leg, monthly.",
+     "The cumulative version of efficacy; a rising line means the factor was rewarded inside that index."),
 ]
 
 GLOSSARY = [
@@ -475,7 +494,8 @@ def contents(wb, names):
     groups = [("Performance (R2000G vs S&P 600 Growth)", "Perf "),
               ("Quality & composition", "Qual "), ("Cohort attribution", "Attr "),
               ("Concentration & breadth", "Conc "), ("Biotech deep-dive", "Bio "),
-              ("R2000G internal trends (appendix)", "R2KG ")]
+              ("R2000G internal trends (appendix)", "R2KG "),
+              ("Factor analysis", "Factor ")]
     r = 3
     for title, pre in groups:
         ws.cell(r, 1, title).font = H; r += 1
@@ -498,10 +518,11 @@ def main():
     missing = [f.name for f in (PERF, QUAL, ATTR) if not f.exists()]
     if missing:
         raise SystemExit(f"!! missing input workbook(s): {missing}. Run steps 4-6 first.")
-    paths = {PERF: "perf", QUAL: "qual", ATTR: "attr", ANALYTICS: "analytics", CONC: "conc", BIO: "bio"}
+    paths = {PERF: "perf", QUAL: "qual", ATTR: "attr", ANALYTICS: "analytics", CONC: "conc",
+             BIO: "bio", FACTOR: "factor"}
     srcwb = {tag: openpyxl.load_workbook(p, data_only=True) for p, tag in paths.items() if p.exists()}
     for p, tag in paths.items():
-        if not p.exists() and tag in ("analytics", "conc", "bio"):
+        if not p.exists() and tag in ("analytics", "conc", "bio", "factor"):
             print(f"  (optional source not found, skipping: {p.name})")
     wb = openpyxl.Workbook(); wb.remove(wb.active)
 

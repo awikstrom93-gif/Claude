@@ -31,6 +31,7 @@ PIPELINE = [
     ("step6 index comparison",  "r2k_step6_index_comparison.py"),
     ("step8 concentration",     "r2k_step8_concentration.py"),
     ("step9 biotech",           "r2k_step9_biotech.py"),
+    ("factor analysis",         "r2k_factor_analysis.py"),
     ("step7 consolidate",       "r2k_step7_consolidate.py"),
 ]
 GUARD_TOL = 0.15   # $B; panel vs workbook headline tolerance (rounding across the chain)

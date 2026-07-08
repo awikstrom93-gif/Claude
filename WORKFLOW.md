@@ -134,8 +134,20 @@ python r2k_report.py
 
 `r2k_report.py` builds the whole IC workbook from the **canonical panel** and runs a consistency
 guard at the end. It orchestrates, in order: panel + analytics → performance → attribution →
-comparison → concentration → biotech → consolidate → guard. Flags: `--guard` re-runs only the
-consistency check on the existing workbook; `--skip step4_performance,…` omits named steps.
+comparison → concentration → biotech → factor analysis → consolidate → guard. Flags: `--guard`
+re-runs only the consistency check on the existing workbook; `--skip step4_performance,…` omits
+named steps.
+
+**Factor analysis** (`r2k_factor_analysis.py`) is holdings-based and point-in-time (factor known at
+month *t*, return realized at *t+1*, no look-ahead). It reads the constituent monthly-return file,
+the market-cap file, the two holdings workbooks, and `fundamentals_dera_resolved.csv`; carries each
+holdings snapshot forward between rebalances so the monthly series is continuous. It produces two
+lenses per index — **efficacy** (cap-weighted top-minus-bottom quintile on the sector-neutral score)
+and **attribution** (a multivariate Fama-MacBeth cross-section that reconciles Market + factors +
+residual back to the index return) — and writes `R2000G_Factor_Analysis.xlsx` (Factor Summary,
+Factor Attribution, Factor By Year, Factor $1 per index), which step7 folds into the IC workbook. If
+its input files are absent the step self-skips, so the rest of the chain still builds. Headline:
+momentum was the one style rewarded inside R2000G (≈+7–8 pts/yr, t≈2.1); quality did not pay there.
 
 **The IC memo is generated, never hand-typed** (`python r2k_memo.py`, after `r2k_report.py`):
 it reads the finished workbook and writes **`R2000G_SCG_Benchmark_Review_Memo.md`** with every figure
