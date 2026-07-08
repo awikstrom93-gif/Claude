@@ -18,6 +18,12 @@ and writes:
 
 Sheets are copied cell-by-cell (values + styles) so the file is self-contained; the
 headline charts are re-created against the copied tabs.
+
+Every data tab is given a self-documenting summary block (title / what it shows / how to read it /
+method) injected ABOVE the data, so the reader understands a tab without leaving it. That block is a
+constant SUMMARY_ROWS tall, which shifts each tab's data down by that many rows; the chart macro's
+SUMMARY_OFFSET must match SUMMARY_ROWS so numeric header references still resolve (factor tabs bring
+their own summary and are charted by @Label, so they are left unshifted).
 RUN: python r2k_step7_consolidate.py
 ============================================================
 """
@@ -44,6 +50,40 @@ TITLE = Font(bold=True, size=14, color="1F4E5F")
 H = Font(bold=True, size=11, color="1F4E5F")
 BODY = Font(size=10)
 HDR = PatternFill("solid", fgColor="1F4E5F"); HF = Font(bold=True, color="FFFFFF", size=10)
+SUM_TITLE = Font(bold=True, size=12, color="1F4E5F")
+SUM_LEAD = Font(bold=True, size=10, color="7A3B2E")
+
+# Rows of self-documenting summary injected ABOVE the data on each data tab (title / what / how /
+# method / spacer). Every data table therefore starts SUMMARY_ROWS lower, so the chart macro shifts
+# each NUMERIC header row by the same constant. MUST equal SUMMARY_OFFSET in R2000G_ChartBuilder.bas.
+SUMMARY_ROWS = 5
+
+# Standing method note per tab family (prefix match); keeps the summary self-contained without a trip
+# to the Glossary. Panel-native tabs (no Perf/Qual/... prefix) are keyed by full name below.
+_METHOD = [
+    ("Perf ", "Monthly total-return series for both indices; trailing/annualized figures compounded; "
+              "up/down capture uses the Morningstar geometric-mean method."),
+    ("Qual ", "Index-level figures are dollar aggregates with each company counted once across share "
+              "classes; profitability cohorts are point-in-time from as-filed net income."),
+    ("Attr ", "Carino-linked, so single-period cohort contributions sum to the cumulative index return; "
+              "the counterfactual reweights the index's OWN names on an earnings screen."),
+    ("Conc ", "Weight and return-contribution by rank (top-5/10/25), with breadth counting how many "
+              "names beat the index; a quarterly block tracks the intra-year path."),
+    ("Bio ", "Biotech is identified by GICS/industry; unprofitable and no-revenue shares are measured "
+             "within the biotech book, point-in-time."),
+    ("R2KG ", "R2000G-only trends from the as-filed panel -- dollar aggregates, point-in-time, "
+              "survivorship-free."),
+]
+_METHOD_NAMED = {
+    "Quality Factor Spreads": "Quintile long/short on each as-filed quality factor vs forward returns; "
+                              "no look-ahead (factor known at the snapshot, return earned after).",
+    "Solvency Tail": "Coverage, leverage and cash-burn screens by index weight; annual plus a quarter-end "
+                     "block for the intra-year distressed share.",
+    "Cohort Persistence": "Year-over-year transitions of each name's profitability label -- how much of "
+                          "the tail is structurally (not transiently) unprofitable.",
+    "Valuation of the Tail": "Sales and book multiples of each cohort as a multiple of the index; a "
+                             "quarterly block shows the tail's intra-year re-rating.",
+}
 
 # (source path, original sheet, new name)  -- skip per-file README/Charts
 SHEETS = [
@@ -141,11 +181,13 @@ def window_span(srcs):
     return d
 
 
-def copy_sheet(src_ws, dst_ws):
+def copy_sheet(src_ws, dst_ws, row_off=0):
     widths = {}
     for row in src_ws.iter_rows():
         for c in row:
-            d = dst_ws.cell(row=c.row, column=c.column, value=c.value)
+            if c.value is None and not c.has_style:
+                continue
+            d = dst_ws.cell(row=c.row + row_off, column=c.column, value=c.value)
             if c.has_style:
                 d.font = copy(c.font); d.fill = copy(c.fill)
                 d.alignment = copy(c.alignment); d.number_format = c.number_format
@@ -153,7 +195,35 @@ def copy_sheet(src_ws, dst_ws):
     from openpyxl.utils import get_column_letter
     for col, w in widths.items():
         dst_ws.column_dimensions[get_column_letter(col)].width = w
-    if src_ws.freeze_panes: dst_ws.freeze_panes = src_ws.freeze_panes
+    if src_ws.freeze_panes and not row_off: dst_ws.freeze_panes = src_ws.freeze_panes
+
+
+def _method_note(name):
+    for pre, note in _METHOD:
+        if name.startswith(pre):
+            return note
+    return _METHOD_NAMED.get(name)
+
+
+def inject_summary(dst_ws, name, ncols):
+    """Write the self-documenting summary block (rows 1..SUMMARY_ROWS) at the top of a data tab. `name`
+    is the consolidated tab name; what/how are pulled from the same TAB_GUIDE that feeds the Reading
+    Guide, so the tab and the guide never disagree. The last row is a spacer before the data."""
+    what, how = _SUM.get(name, (None, None))
+    method = _method_note(name)
+    span = max(2, min(int(ncols or 2), 14))
+
+    def put(row, text, font, h):
+        dst_ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
+        c = dst_ws.cell(row, 1, text or ""); c.font = font
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        dst_ws.row_dimensions[row].height = h
+
+    put(1, name, SUM_TITLE, 20)
+    put(2, ("What it shows — " + what) if what else "", BODY, 46)
+    put(3, ("How to read it — " + how) if how else "", BODY, 46)
+    put(4, ("Method — " + method) if method else "", BODY, 32)
+    # row SUMMARY_ROWS (5) left blank as a spacer before the copied data
 
 
 def exec_summary(wb, srcs, span=None):
@@ -375,6 +445,10 @@ TAB_GUIDE = [
      "The cumulative version of efficacy; a rising line means the factor was rewarded inside that index."),
 ]
 
+# tab name -> (what it shows, how to read it), for the in-tab summary blocks; skips section-header rows
+# (which have no description). Same source as the Reading Guide, so a tab and the guide never disagree.
+_SUM = {a: (b, c) for a, b, c in TAB_GUIDE if b}
+
 GLOSSARY = [
     ("Units in this workbook", "Read every chart's axis title and column header for the unit -- they are "
      "stated explicitly.",
@@ -550,17 +624,31 @@ def main():
         sw = srcwb[tag]
         if orig not in sw.sheetnames:
             print(f"  (skip: '{orig}' not in {src.name})"); continue
-        copy_sheet(sw[orig], wb.create_sheet(new[:31])); copied.append(new[:31])
-    # panel-native exhibits (quality-factor spreads needs the performance file; the others are panel-only)
+        nm = new[:31]; dst = wb.create_sheet(nm)
+        if nm.startswith("Factor "):               # factor tabs already carry their own summary block
+            copy_sheet(sw[orig], dst)
+        else:
+            inject_summary(dst, nm, sw[orig].max_column)
+            copy_sheet(sw[orig], dst, row_off=SUMMARY_ROWS)
+        copied.append(nm)
+    # panel-native exhibits (quality-factor spreads needs the performance file; the others are panel-only).
+    # Each module writes its sheet directly; render it to a temp sheet, then re-copy WITH the summary
+    # offset so these tabs match the injected data tabs (and their numeric chart specs line up).
     for mod_name, label in (("r2k_factor_spreads", "Quality Factor Spreads"),
                             ("r2k_view_solvency", "Solvency Tail"),
                             ("r2k_view_persistence", "Cohort Persistence"),
                             ("r2k_view_valuation", "Valuation of the Tail")):
         try:
             mod = __import__(mod_name)
-            nm = mod.write_sheet(wb)
-            if nm:
-                copied.append(nm)
+            raw = mod.write_sheet(wb)
+            if raw:
+                srcsh = wb[raw]; nc = srcsh.max_column
+                srcsh.title = (raw + "~tmp")[:31]
+                dst = wb.create_sheet(raw[:31])
+                inject_summary(dst, raw[:31], nc)
+                copy_sheet(srcsh, dst, row_off=SUMMARY_ROWS)
+                del wb[srcsh.title]
+                copied.append(raw[:31])
                 print(f"  added {label} tab")
         except Exception as e:
             print(f"  ({label} tab skipped: {e})")

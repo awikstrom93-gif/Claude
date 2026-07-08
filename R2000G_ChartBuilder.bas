@@ -46,6 +46,13 @@ Private Const DATE_FMT As String = "mmm-yyyy"   ' date axis labels: Month-Year (
 ' Re-applied on every run so a Python-rebuilt .xlsx (which reverts to the Office theme) gets the
 ' agreed Accent 1..6 back before the charts are coloured. Rename here if you rename the theme.
 Private Const THEME_FILE As String = "Theme1.thmx"
+' Every data tab in the consolidated workbook carries a self-documenting summary block that step7
+' injects ABOVE the data (title + what-it-shows + how-to-read + method). That pushes every data table
+' down by a constant number of rows, so a spec's NUMERIC header row is shifted by the same constant
+' here. Specs that locate their header by @Label are unaffected (FindHeaderRow scans the whole column).
+' MUST equal SUMMARY_ROWS in r2k_step7_consolidate.py. Factor tabs self-document (own summary) and are
+' charted only by @Label, so they never hit this offset.
+Private Const SUMMARY_OFFSET As Long = 5
 
 Private mSpecs As Collection
 Private mTop   As Object                    ' Scripting.Dictionary: target -> next Top
@@ -150,7 +157,10 @@ Private Sub BuildSpec(p As Variant)
         hdr = FindHeaderRow(sws, Mid$(CStr(p(3)), 2), catCol)
         If hdr = 0 Then Exit Sub
     Else
+        ' numeric header row: shift past the injected summary block on data tabs. Factor tabs and the
+        ' Key Charts gallery carry no injected summary, so their numeric refs must NOT be shifted.
         hdr = CLng(p(3))
+        If Left$(srcN, 7) <> "Factor " And srcN <> "Key Charts" Then hdr = hdr + SUMMARY_OFFSET
     End If
     Dim tws As Worksheet: Set tws = EnsureSheet(target)
     Dim lr As Long: lr = LastContig(sws, hdr, catCol)
