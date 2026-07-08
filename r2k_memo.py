@@ -222,6 +222,33 @@ def factor_adj(wb):
     return out or None
 
 
+def factor_regime(wb):
+    """Annualized factor efficacy by market regime from `Factor by Regime` (optional). Returns
+    {index_tag: {factor: {regime_label: pct}}} keyed by 'R2000G'/'SP600G', plus '_regimes' (the ordered
+    regime labels), or None if the tab is absent."""
+    if "Factor by Regime" not in wb.sheetnames:
+        return None
+    R = _rows(wb["Factor by Regime"])
+    out, regimes = {}, None
+    for i, r in enumerate(R):
+        c0 = str(r[0]).strip() if r and r[0] else ""
+        if c0.startswith("Factor R2000G") or c0.startswith("Factor SP600G"):
+            tag = "R2000G" if "R2000G" in c0 else "SP600G"
+            labs = [str(x).strip() for x in r[1:] if x is not None]
+            regimes = regimes or labs
+            block = {}
+            for rr in R[i + 1:]:
+                name = str(rr[0]).strip() if rr and rr[0] else ""
+                if not name or name.startswith("Factor "):
+                    break
+                block[name] = {lab: _num(rr[1 + j]) for j, lab in enumerate(labs)}
+            out[tag] = block
+    if not out:
+        return None
+    out["_regimes"] = regimes
+    return out
+
+
 def series_returns(wb, sheet):
     """Full-period and trailing-3y returns for every value column of a growth-of-$1 sheet.
     Base is $1 at the month before the first row, so full = last-1. Window denominator is the row
@@ -274,8 +301,9 @@ def collect(wb):
     cn = conc(wb)
     fac = factor(wb)
     facadj = factor_adj(wb)
+    facreg = factor_regime(wb)
     return dict(ps=ps, cal=cal, q=q, wp=wp, attr=attr, bio=bio, biocon=biocon,
-                cf=cf, bcf=bcf, end_m=end_m, cn=cn, fac=fac, facadj=facadj)
+                cf=cf, bcf=bcf, end_m=end_m, cn=cn, fac=fac, facadj=facadj, facreg=facreg)
 
 
 def reconcile(D):
@@ -501,6 +529,26 @@ def build_memo(D):
                  f"is a headwind to *relative* return even as it lowers risk. In the earnings-screened "
                  f"S&P 600 Growth the pattern is muted — value carried a modest, more reliable premium "
                  f"and quality was far less punished.\n")
+        facreg = D.get("facreg")
+        if facreg and facreg.get("R2000G", {}).get("Quality") and facreg.get("_regimes"):
+            regs = facreg["_regimes"]
+            qr = facreg["R2000G"]["Quality"]
+            mr = facreg["R2000G"].get("Momentum", {})
+            if len(regs) >= 3 and qr.get(regs[0]) is not None and qr.get(regs[1]) is not None:
+                P.append(f"\nThat full-period average hides a sharp regime break, and it is worth seeing "
+                         f"because it *is* the composition story in factor form. Quality actually **paid "
+                         f"inside the Russell index through the pre-COVID years** "
+                         f"(**{fmt(qr.get(regs[0]),1,sign=True)} pts/yr** annualized, 2012–2019); it was "
+                         f"the **2020–2021 non-earner melt-up that crushed it** "
+                         f"(**{fmt(qr.get(regs[1]),1,sign=True)} pts/yr**), when the pre-revenue and "
+                         f"unprofitable names ran hardest, and it has stayed slightly negative in the "
+                         f"2022-onward reversal (**{fmt(qr.get(regs[2]),1,sign=True)} pts/yr**). Momentum "
+                         f"traces the mirror image — muted early, then strongly rewarded in the reversal "
+                         f"(**{fmt(mr.get(regs[2]),1,sign=True)} pts/yr**) as the melt-up unwound. So "
+                         f"“quality did not pay” is really “quality paid until the 2020–21 "
+                         f"tail rally erased a decade of it” — the same episode the concentration and "
+                         f"biotech sections describe, measured a third way.\n")
+                P.append("*Tab: `Factor by Regime`.*\n")
         facadj = D.get("facadj")
         if facadj and facadj.get("Quality") and facadj.get("Sectors"):
             qa, se = facadj["Quality"], facadj["Sectors"]
