@@ -499,7 +499,7 @@ Private Sub LoadSpecs()
     S "Attr Contribution|C|Attr Contribution|3|1|3,5|Average cohort weight: full vs window|Avg weight %"
     S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|2,3,4,5|Cohort weights over time|% of index weight"
     S "Attr Cohort Wt|L|Attr Cohort Wt|1|1|6,4|Unprofitable & never-profitable weight|% of index weight"
-    S "Attr Cohort Ret|L|Attr Cohort Ret|1|1|2,3,5|Monthly return: index vs profitable vs never|Monthly return %"
+    S "Attr Cohort Ret|L|Attr Cohort Ret|1|1|7,8,9|Growth of $1 by cohort: index vs profitable vs never|Growth of $1"
     ' Risk-by-cohort summary block (anchored on the 'Cohort' header below the monthly series): the makeup
     ' turned into risk -- the low-quality cohorts carry higher volatility and deeper drawdowns.
     S "Attr Cohort Ret|BR|Attr Cohort Ret|@Cohort|1|3|Annualized volatility by cohort|Ann. vol %"
@@ -521,6 +521,8 @@ Private Sub LoadSpecs()
     S "Conc Weight|L|Conc Weight|4|1|9,17|Effective N: R2KG vs 600G|Eff. N"
     S "Conc Weight|L|Conc Weight|4|1|2,10|Number of names|# names"
     S "Conc Weight|L|Conc Weight|@Quarter|1|4,12|Top-10 weight run-up (quarterly): R2KG vs 600G|% of index weight"
+    S "Conc Weight|L|Conc Weight|@Quarter|1|5,13|Top-25 weight run-up (quarterly): R2KG vs 600G|% of index weight"
+    S "Conc Weight|L|Conc Weight|@Quarter|1|6,14|Top-50 weight run-up (quarterly): R2KG vs 600G|% of index weight"
     S "Conc Weight|L|Conc Weight|@Quarter|1|4,5,6|R2KG top 10/25/50 weight (quarterly)|% of index weight"
     ' Conc Breadth is now both indices side by side (R2KG cols 2-9, 600G cols 10-17).
     S "Conc Breadth|L|Conc Breadth|3|1|3,4|R2KG % positive & % beating index|% of names"

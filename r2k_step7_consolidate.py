@@ -361,6 +361,14 @@ GLOSSARY = [
     ("Profitability cohort", "Point-in-time label from as-filed net income history.",
      "Profitable = NI>0 in the latest filed FY; Fallen = NI<=0 now but profitable in a prior year; "
      "Never-profitable = no profitable year on record; Unknown = NI not reported."),
+    ("The \"tail\" (low-quality tail)", "Shorthand for the lowest-quality slice of the index by weight -- "
+     "the names an earnings/quality screen would set aside.",
+     "In practice it is the UNPROFITABLE cohort (negative net income), and within it the NEVER-PROFITABLE "
+     "and NO-REVENUE names, which are overwhelmingly clinical-stage biotech. 'Unprofitable tail', "
+     "'never-profitable tail', and 'low-quality tail' all point at this same slice; the Solvency Tail and "
+     "Valuation of the Tail tabs profile its credit risk and what the market pays for it. It is called a "
+     "'tail' because it sits at the weak end of the quality distribution -- small in a screened index like "
+     "the S&P 600 Growth, large and growing in the Russell 2000 Growth."),
     ("Unprofitable by weight", "Index weight in names with negative net income (or operating income).",
      "The headline structural difference; OI version strips below-the-line items."),
     ("No-revenue weight", "Index weight in GENUINELY pre-commercial names (no/zero revenue). Financial-sector "

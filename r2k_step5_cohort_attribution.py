@@ -338,11 +338,19 @@ def build():
         for c, v in enumerate(vals, 1): ww.cell(row=i, column=c, value=v)
     ww.freeze_panes = "A2"
 
-    # ---- Cohort Returns (monthly sub-portfolio returns) ----
+    # ---- Cohort Returns (monthly sub-portfolio returns + cumulative growth of $1) ----
+    # The monthly columns are noisy month to month; the growth-of-$1 columns (cumulative wealth from $1)
+    # are the readable view -- they show the cohorts DIVERGING over time, which is the point.
     wcr = wb.create_sheet("Cohort Returns")
-    _hdr(wcr, 1, ["Month", "Index actual %"] + [COH_LABEL[c] + " %" for c in COHORTS])
+    _hdr(wcr, 1, ["Month", "Index actual %"] + [COH_LABEL[c] + " %" for c in COHORTS]
+                 + ["Index $1", "Profitable $1", "Never-profitable $1"])
+    gI = gP = gN = 1.0
     for i, r in enumerate(rows, 2):
-        vals = [f"{r['d']:%Y-%m-%d}", _p(r["actual"])] + [_p(r["coh_ret"][c]) for c in COHORTS]
+        gI *= (1 + (r["actual"] or 0))
+        gP *= (1 + (r["coh_ret"].get("profitable") or 0))
+        gN *= (1 + (r["coh_ret"].get("never_profitable") or 0))
+        vals = ([f"{r['d']:%Y-%m-%d}", _p(r["actual"])] + [_p(r["coh_ret"][c]) for c in COHORTS]
+                + [round(gI, 3), round(gP, 3), round(gN, 3)])
         for c, v in enumerate(vals, 1): wcr.cell(row=i, column=c, value=v)
     wcr.freeze_panes = "A2"
 

@@ -78,10 +78,14 @@ def growth_levels(dates, rets):
 
 
 def capture(bench, port, dates):
-    """Up/down capture of `port` relative to benchmark `bench` (compounded, Morningstar-style).
-    Returns the ratios AND the underlying leg compounds so the exhibit can SHOW its work: a ratio
-    alone can't be reconciled against the cumulative return, but (up-leg x down-leg) reconstructs it
-    exactly. up_b/dn_b/up_p/dn_p are growth-of-$1 over the bench-up / bench-down months."""
+    """Up/down capture of `port` relative to benchmark `bench`, on the MORNINGSTAR (geometric-mean)
+    convention: the ratio of the two indices' PER-PERIOD geometric-mean returns over the bench-up /
+    bench-down months -- geomean = growth^(1/n) - 1. This is what Morningstar reports and is what a
+    reader will find there (e.g. S&P600G vs R2KG down-capture ~87, not the ~98 the compound-total ratio
+    gives -- over many deeply-negative down months the compound ratio is pulled toward 100 and overstates
+    down-capture / understates up-capture). The underlying leg compounds up_b/dn_b/up_p/dn_p (growth-of-$1
+    over the up / down months) are still returned so the exhibit can SHOW its work: (up-leg x down-leg)
+    reconstructs each index's cumulative return exactly, independent of the ratio convention."""
     up_b = up_p = dn_b = dn_p = fl_b = fl_p = 1.0; nu = nd = nf = 0
     for d in dates:
         rb, rp = bench["ret"].get(d), port["ret"].get(d)
@@ -89,8 +93,13 @@ def capture(bench, port, dates):
         if rb > 0: up_b *= (1 + rb); up_p *= (1 + rp); nu += 1
         elif rb < 0: dn_b *= (1 + rb); dn_p *= (1 + rp); nd += 1
         else: fl_b *= (1 + rb); fl_p *= (1 + rp); nf += 1
-    up = ((up_p - 1) / (up_b - 1)) if (up_b - 1) != 0 else None
-    dn = ((dn_p - 1) / (dn_b - 1)) if (dn_b - 1) != 0 else None
+    def _geo_ratio(gp, gb, n):
+        if not n:
+            return None
+        gmb = gb ** (1.0 / n) - 1                       # per-period geometric mean of the benchmark
+        return ((gp ** (1.0 / n) - 1) / gmb) if gmb != 0 else None
+    up = _geo_ratio(up_p, up_b, nu)
+    dn = _geo_ratio(dn_p, dn_b, nd)
     return up, dn, nu, nd, {"up_b": up_b, "up_p": up_p, "dn_b": dn_b, "dn_p": dn_p,
                             "fl_b": fl_b, "fl_p": fl_p, "nf": nf}
 
@@ -272,13 +281,17 @@ def build():
     recon_S = fl["up_p"] * fl["dn_p"] * fl["fl_p"] - 1
     assert abs(recon_R - full_R) < 1e-9 and abs(recon_S - full_S) < 1e-9, \
         f"capture legs do not reconcile to cumulative: R {recon_R:.6f} vs {full_R:.6f}, S {recon_S:.6f} vs {full_S:.6f}"
-    wcap.cell(row=7, column=1, value="Up/Down capture = compounded SP6G return / compounded R2KG return in months R2KG was up / down.")
-    wcap.cell(row=8, column=1, value="HOW TO READ: a capture ratio cannot be reconciled against cumulative return on its own. "
-              "The leg columns show growth-of-$1 in the up-months and down-months for BOTH indices; (up-leg x down-leg) "
-              "rebuilds each index's cumulative (last two columns), which ties to the Summary tab EXACTLY. So compare "
-              "capture to the SAME row's cumulative -- never cross-wire full-period cumulative with the window's capture.")
-    wcap.cell(row=9, column=1, value="A higher-returning SP6G can still show sub-100% up-capture if its outperformance "
-              "comes from a large up-leg compound rather than per-month ratios -- the leg columns make that visible.")
+    wcap.cell(row=7, column=1, value="Up/Down capture = ratio of the PER-PERIOD geometric-mean returns of SP6G vs R2KG "
+              "in months R2KG was up / down (Morningstar convention: geomean = growth^(1/n)-1). This matches the "
+              "capture ratios Morningstar publishes; the earlier compound-total ratio overstated down-capture (~98 vs "
+              "~87) because a long run of deeply-negative down-month compounds pulls that ratio toward 100.")
+    wcap.cell(row=8, column=1, value="HOW TO READ: the leg columns show growth-of-$1 in the up-months and down-months "
+              "for BOTH indices; (up-leg x down-leg) rebuilds each index's cumulative (last two columns), which ties to "
+              "the Summary tab EXACTLY -- the reconstruction is independent of the ratio convention. Compare capture to "
+              "the SAME row's cumulative; never cross-wire full-period cumulative with the window's capture.")
+    wcap.cell(row=9, column=1, value="Down-capture < 100 means SP6G fell less than R2KG in R2KG's down months; up-capture "
+              "< 100 means it rose less in the up months. The window (2011-01 start here) can differ from a vendor's, "
+              "which shifts which months count as up/down and moves the ratio a little.")
 
     # ---- Drawdown ----
     wdd = wb.create_sheet("Drawdown")
