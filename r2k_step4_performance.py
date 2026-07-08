@@ -303,9 +303,13 @@ def build():
         for c, v in enumerate(vals, 1): wdd.cell(row=i + 2, column=c, value=v)
     wdd.freeze_panes = "A2"
 
-    # ---- Window Proof (data-driven justification of the manager window) ----
+    # ---- Relative-performance regime (supplementary context; NOT on Key Charts) ----
+    # Formerly the "window proof" that justified a data-driven manager window. The review now uses a plain
+    # trailing-3y window and leads with index composition, so this is kept only as back-tab context: when
+    # R2000G's cumulative excess over the quality index troughed and turned.
     wp = wb.create_sheet("Window Proof")
-    wp.cell(1, 1, "Why the manager window starts where it does -- when R2000G began leading the quality index").font = TITLE
+    wp.cell(1, 1, "Relative-performance regime (context) -- when R2000G's cumulative excess over the "
+                  "quality index troughed and turned").font = TITLE
     # relative line = R2KG growth / SP6G growth; its trough = R2KG's relative low (start of its run)
     rel = [rg[i][1] / sg[i][1] for i in range(n)]
     trough_i = min(range(n), key=lambda i: rel[i])
