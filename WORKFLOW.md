@@ -156,6 +156,18 @@ pay there over the full window (it paid pre-2020, then the 2020–21 non-earner 
 sector-adjusted view shows that is a genuine within-sector effect (the styles barely move, the sector
 bucket is ~+2 pts), i.e. the unprofitable-biotech drag lives in the quality factor, not in a sector.
 
+**Audit / working papers (`r2k_audit_pack.py`, run on request — NOT part of the pipeline).** A separate
+traceability deliverable kept OUT of the IC workbook so that stays small. Reusing the same panel and the
+same functions the pipeline uses (`index_quality` / `dedup_cik` and the `r2k_factor_analysis` building
+blocks), so it reconciles by construction, it writes: `audit_constituents.csv` (every constituent ×
+snapshot with weight, as-filed metrics, cohort/biotech/financial flags, and per-value provenance —
+fiscal year used, FYE and 10-K filing dates, confidence — joined from `fundamentals_dera.csv`);
+`R2000G_Audit_Workbook.xlsx` (each headline aggregate recomputed by a live SUMIFS formula over the
+constituent rows, beside the pipeline's reported value and an automatic tie check — click a number,
+trace it to the names); and `audit_factor_crosssection.csv` + `audit_factor_coefficients.csv` (every
+monthly regression input and output — slope, exposure, contribution per factor — with one month
+reproduced in-sheet via LINEST). Compliance can reproduce any figure or regression from source.
+
 **The IC memo is generated, never hand-typed** (`python r2k_memo.py`, after `r2k_report.py`):
 it reads the finished workbook and writes **`R2000G_SCG_Benchmark_Review_Memo.md`** with every figure
 in the prose pulled from a named tab or computed from that tab's own monthly growth-of-$1 series —

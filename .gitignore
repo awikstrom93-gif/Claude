@@ -19,6 +19,10 @@ R2000G_Concentration.xlsx
 R2000G_Biotech.xlsx
 R2000G_SmallCapGrowth_Benchmark_Review.xlsx
 R2000G_Factor_Analysis.xlsx
+R2000G_Audit_Workbook.xlsx
+audit_constituents.csv
+audit_factor_crosssection.csv
+audit_factor_coefficients.csv
 Russell2000Growth_Analytics.xlsx
 sp600g_cik_map.json
 
