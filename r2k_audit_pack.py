@@ -86,30 +86,49 @@ CONS = [
     ("debt", lambda r, p: r.get("debt")),
     ("cfo", lambda r, p: r.get("cfo")),
     ("fiscal_year_used", lambda r, p: r.get("fy0")),
+    ("form", lambda r, p: p.get("form")),
+    ("taxonomy", lambda r, p: p.get("taxonomy")),
     ("fye_date", lambda r, p: p.get("fye_date")),
     ("filed_date", lambda r, p: p.get("filed_date")),
     ("confidence", lambda r, p: p.get("confidence")),
     ("breaks", lambda r, p: p.get("breaks")),
+    ("value_provenance", lambda r, p: p.get("provenance")),   # which tag/derivation produced each figure
 ]
 CIDX = {name: i for i, (name, _) in enumerate(CONS)}                 # 0-based column index
 CLET = {name: get_column_letter(i + 1) for i, (name, _) in enumerate(CONS)}   # Excel column letter
 
 
+PROV_FIELDS = ("form", "taxonomy", "fye_date", "filed_date", "confidence", "breaks", "provenance")
+# read the pipeline's fundamentals first, then let the resolved variant fill any gaps (it carries the
+# derivation string / form / taxonomy even when the plain file's filing-date index was absent)
+PROV_FILES = ("fundamentals_dera.csv", "fundamentals_dera_resolved.csv")
+
+
 def load_provenance():
-    """(cik, fiscal_year) -> {fye_date, filed_date, confidence, breaks} from fundamentals_dera.csv."""
+    """(cik, fiscal_year) -> provenance dict, merged across the fundamentals files (first non-blank wins).
+    'provenance' is the per-filing derivation string -- which XBRL tag or accounting-identity derivation
+    produced each figure. fye_date/filed_date need dera_filing_index.csv at build time or stay blank."""
     prov = {}
-    if not FUND_DERA.exists():
-        print(f"  (provenance source {FUND_DERA.name} not found -- provenance columns left blank)")
-        return prov
-    with open(FUND_DERA, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
-            cik = str(r.get("cik", "")).strip()
-            try:
-                fy = int(float(r.get("fiscal_year", "")))
-            except (TypeError, ValueError):
-                continue
-            prov[(cik, fy)] = {"fye_date": r.get("fye_date", ""), "filed_date": r.get("filed_date", ""),
-                               "confidence": r.get("confidence", ""), "breaks": r.get("breaks", "")}
+    found = False
+    for fname in PROV_FILES:
+        path = BASE / fname
+        if not path.exists():
+            continue
+        found = True
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                cik = str(r.get("cik", "")).strip()
+                try:
+                    fy = int(float(r.get("fiscal_year", "")))
+                except (TypeError, ValueError):
+                    continue
+                d = prov.setdefault((cik, fy), {})
+                for k in PROV_FIELDS:
+                    v = (r.get(k) or "").strip()
+                    if v and not d.get(k):       # first file's non-blank value wins; later files fill gaps
+                        d[k] = v
+    if not found:
+        print(f"  (no provenance source found among {PROV_FILES} -- provenance columns left blank)")
     return prov
 
 
@@ -202,9 +221,12 @@ AGG = [
     ("Total net income ($B, deduped)",
      lambda ct, y: f"={_sifs(ct, 'net_income', y, ('dedup_primary', 'yes'))}/1000000000",
      lambda q, extra: extra.get("tot_ni")),
+    # dollar-agg net margin pairs numerator & denominator: only companies with BOTH revenue and net
+    # income present (matching dollar_agg, which skips a pair if either side is blank -- else a
+    # no-revenue biotech's loss would inflate the numerator with no matching revenue).
     ("Net margin ($agg, deduped) %",
-     lambda ct, y: f"={_sifs(ct, 'net_income', y, ('dedup_primary', 'yes'))}/"
-                   f"{_sifs(ct, 'revenue', y, ('dedup_primary', 'yes'))}*100",
+     lambda ct, y: f"={_sifs(ct, 'net_income', y, ('dedup_primary', 'yes'), ('net_income', '<>'), ('revenue', '<>'))}/"
+                   f"{_sifs(ct, 'revenue', y, ('dedup_primary', 'yes'), ('net_income', '<>'), ('revenue', '<>'))}*100",
      lambda q, extra: (extra.get("net_da") * 100 if extra.get("net_da") is not None else None)),
 ]
 
@@ -239,7 +261,7 @@ def _agg_tab(wb, index_tag, cons_tab, members_by_year):
             ws.cell(r, 1, label).font = BODY
             ws.cell(r, 2, fbuild(cons_tab, y))
             rv = rep(q, extra)
-            ws.cell(r, 3, round(rv, 4) if isinstance(rv, (int, float)) else rv)
+            ws.cell(r, 3, round(rv, 6) if isinstance(rv, (int, float)) else rv)
             ws.cell(r, 4, f"=ABS(B{r}-C{r})")
             r += 1
         r += 1
@@ -400,10 +422,13 @@ def readme(wb):
          "the number.", BODY),
         ("", BODY),
         ("2. TRACE A FUNDAMENTAL.  The constituent tabs (and audit_constituents.csv) carry, per name per "
-         "snapshot: the as-filed revenue / net income / etc., the fiscal year used, the fiscal-year-end "
-         "and 10-K FILING dates, and a confidence flag -- so a value walks back to a specific as-filed "
-         "10-K. 'dedup_primary = yes' marks the one row per company kept in dollar totals (dual share "
-         "classes share a CIK and identical fundamentals).", BODY),
+         "snapshot: the as-filed revenue / net income / etc.; the fiscal year used; the filing FORM and "
+         "TAXONOMY; a confidence flag and any accounting-identity BREAKS; and a 'value_provenance' string "
+         "-- the per-filing derivation showing which XBRL tag or identity produced each figure (e.g. "
+         "'revenue=NetInterestIncome+Noninterest'). 'dedup_primary = yes' marks the one row per company "
+         "kept in dollar totals (dual share classes share a CIK and identical fundamentals). Note: the "
+         "fiscal-year-end and 10-K filing DATES populate only when dera_filing_index.csv is present at "
+         "build time; SEC accession numbers can be added on request by joining the DERA filing index.", BODY),
         ("", BODY),
         ("3. REPRODUCE THE REGRESSIONS.  The factor attribution is a monthly multivariate OLS "
          "(Fama-MacBeth) of each constituent's next-month return on its raw factor z-scores. "
