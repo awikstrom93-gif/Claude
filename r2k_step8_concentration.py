@@ -84,7 +84,12 @@ def finest_holdings(index):
 
 
 def _nearest_prior(dts, d):
-    p = [x for x in dts if x <= d]
+    # STRICTLY before d: the beginning-of-month held weight, from a snapshot dated before the return
+    # month. Using <= would pick the concurrent month-end snapshot, whose weights already embed that
+    # month's price move -- a look-ahead that over-weights each month's winners and, in high-dispersion
+    # months (esp. the June reconstitution), inflates the whole bottom-up contribution well above the
+    # index return. Matches the strict r2k_calc.nearest_prior used everywhere else in the pipeline.
+    p = [x for x in dts if x < d]
     return p[-1] if p else None
 
 
@@ -121,11 +126,16 @@ def period_contrib(index, months, hold, hdates, ret_rec, idx):
     return idx_ret, contrib
 
 
-def topn_pts(contrib, ns):
-    """{n: (contribution_pts, share_of_total)} for the top-n return contributors."""
+def topn_pts(contrib, ns, idx_ret):
+    """{n: (contribution_pts, share_of_index_return)} for the top-n return contributors. The SHARE
+    divides the top-n contribution by the INDEX RETURN (idx_ret) -- so it reconciles with the 'index%'
+    column shown beside it and with pts/index-return. (The prior version divided by the sum of all
+    constituent contributions, which does not equal the index return once coverage/linking are in play,
+    so 'share' and 'pts / index return' disagreed.) Share is None when idx_ret <= 0, because a 'share of
+    the return' is meaningless against a flat or negative base."""
     ranked = sorted(contrib.values(), reverse=True)
-    tot = sum(contrib.values())
-    return {nn: (sum(ranked[:nn]), (sum(ranked[:nn]) / tot if tot else None)) for nn in ns}
+    denom = idx_ret if (idx_ret and idx_ret > 0) else None
+    return {nn: (sum(ranked[:nn]), (sum(ranked[:nn]) / denom if denom else None)) for nn in ns}
 
 
 def return_contribution(wb, series, idx, pdates, ret_rec):
@@ -166,7 +176,7 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
         per = {}
         for ix in idxs:
             iret, contrib = period_contrib(ix, months, holds[ix], hd[ix], ret_rec, idx)
-            per[ix] = (iret, topn_pts(contrib, NS)) if iret is not None else None
+            per[ix] = (iret, topn_pts(contrib, NS, iret)) if iret is not None else None
         if not any(per.get(ix) for ix in idxs):
             continue
         row = [y]
@@ -205,7 +215,7 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
         cell = {}
         for ix in idxs:
             iret, contrib = period_contrib(ix, window, holds[ix], hd[ix], ret_rec, idx)
-            cell[ix] = topn_pts(contrib, [10, 25]) if iret is not None else None
+            cell[ix] = topn_pts(contrib, [10, 25], iret) if iret is not None else None
         if not any(cell.values()):
             continue
         row = [f"{d:%Y-%m}"]
@@ -393,7 +403,7 @@ def build():
     share = {}
     for ix in ("R2KG", "SP600G"):
         iret, cc = period_contrib(ix, win, holds_w[ix], hd_w[ix], ret_rec, idx)
-        share[ix] = topn_pts(cc, [10, 25, 50]) if iret is not None else None
+        share[ix] = topn_pts(cc, [10, 25, 50], iret) if iret is not None else None
     rel_w = share["R2KG"] and share["SP600G"]
     wc.cell(5, 1, "Share of the window return from the top contributors (monthly-linked, held-period "
             "weights) -- R2000G vs S&P600G:").font = Font(bold=True)

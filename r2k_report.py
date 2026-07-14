@@ -76,9 +76,14 @@ def _tab_headline(ws, rev_col, ni_col=None):
         if snap is None:
             continue
         s = str(snap).strip()
-        if not re.fullmatch(r"\d{4}(\.0)?", s):   # bare year only; reject 'YYYY Qn' and dates
+        # accept a bare year (2012), float year (2012.0), OR a YYYY-MM-DD snapshot date (2012-06-30) --
+        # the panel-sourced 'R2KG Quality Trends' tab keys on the snapshot date, so the old bare-year-only
+        # regex silently matched ZERO of its rows and the cross-check validated nothing for that tab.
+        # Still reject the quarterly companion rows ('2012 Q1').
+        m = re.fullmatch(r"(\d{4})(?:-\d\d-\d\d|\.0)?", s)
+        if not m:
             continue
-        y = int(float(s))
+        y = int(m.group(1))
         if y in out:                              # keep the first (annual) occurrence
             continue
         rev = ws.cell(r, rev_col).value

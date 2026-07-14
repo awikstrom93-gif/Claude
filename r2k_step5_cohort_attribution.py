@@ -365,7 +365,7 @@ def build():
     def _risk(seq):
         s = [v for v in seq if v is not None]
         if len(s) < 3:
-            return (None,) * 7
+            return (None,) * 6           # must match the 6-tuple returned below (caller unpacks 6)
         n = len(s); mean = sum(s) / n
         vol = (sum((v - mean) ** 2 for v in s) / (n - 1)) ** 0.5 * (12 ** 0.5) * 100   # annualized %, sample
         g = 1.0

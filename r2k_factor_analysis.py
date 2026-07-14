@@ -221,8 +221,11 @@ def build_factor_scores(names, mi, ym, ret, mcap, fund):
     raw = {ff: {} for ff in FACTORS}
     for c in names:
         rc = ret.get(c, {})
-        # momentum 12-1
-        raw["Momentum"][c] = compound(rc, mi - MOM_LOOK, mi - MOM_SKIP)
+        # momentum 12-1: trailing MOM_LOOK months as of the formation month mi, skipping the most recent
+        # MOM_SKIP. compound() sums range(a, b) exclusive of b, so [mi-11 .. mi-1] for the 12-1 default --
+        # i.e. through last month, skipping the formation month. (The prior mi-MOM_LOOK..mi-MOM_SKIP form
+        # ran one month stale -- ending at mi-2 -- so momentum was measured a month before size/value.)
+        raw["Momentum"][c] = compound(rc, mi - MOM_LOOK + 1, mi - MOM_SKIP + 1)
         # size = -ln(mktcap)
         mc = mcap.get(c, {}).get(mi)
         raw["Size"][c] = (-math.log(mc)) if (mc and mc > 0) else None
