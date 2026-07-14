@@ -33,6 +33,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import LineChart, Reference
 from openpyxl.utils import get_column_letter
 
+from r2k_calc import roe_equity   # positive-avg-equity ROE $agg denominator (shared, ROIC-consistent; leaf import, no cycle)
+
 BASE = Path(os.environ.get("R2KG_BASE", "."))
 FUND = BASE / "edgar_annual_fundamentals_ASFILED.csv"
 CIK_MAP, TEMPORAL = BASE / "security_cik_map.json", BASE / "temporal_cik_map.json"
@@ -374,7 +376,7 @@ def write_workbook(per_snap, detail, years):
         up_ni = 100*sum(w for m,w,_ in cov if m["prof_ni"] is False)/sum(w for m,w,_ in cov if m["prof_ni"] is not None) if any(m["prof_ni"] is not None for m,_,_ in cov) else None
         up_oi = 100*sum(w for m,w,_ in cov if m["prof_oi"] is False)/sum(w for m,w,_ in cov if m["prof_oi"] is not None) if any(m["prof_oi"] is not None for m,_,_ in cov) else None
         opm_da = dollar_agg([(m["operating_income"], m["revenue"]) for m,_,_ in cov])
-        roe_da = dollar_agg([(m["net_income"], m.get("_aeq") if m.get("_aeq") is not None else m["equity"]) for m,_,_ in cov])
+        roe_da = dollar_agg([(m["net_income"], roe_equity(m)) for m,_,_ in cov])   # positive avg equity only (ROIC-consistent)
         roic_da = dollar_agg([(m["_nopat"], m["_ic"]) for m,_,_ in cov])
         dcap_da = dollar_agg([(m["debt"], (m["debt"]+m["equity"]) if (m["debt"] is not None and m["equity"] is not None) else None) for m,_,_ in cov])
         row = [f"{yr}-04-30", round(tot_rev,1), round(tot_ni,1), round(pct_rev,1),

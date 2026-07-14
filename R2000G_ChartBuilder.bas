@@ -546,6 +546,12 @@ Private Sub LoadSpecs()
     S "Conc Contribution|C|Conc Contribution|4|1|12|Top-10 contribution gap (R2KG - 600G)|Difference (pts)"
     S "Conc Contribution|L|Conc Contribution|@Month ending|1|2,4|Rolling-12m top-10 contribution: R2KG vs 600G|Contribution (pts)"
     S "Conc Contribution|L|Conc Contribution|@Month ending|1|6|Rolling-12m top-10 contribution gap|Difference (pts)"
+    ' Sector / Industry Contribution: which GICS sectors / Morningstar industries drove the index return.
+    ' Both charted by @Label so they are immune to the injected-summary row shift; the block-1 header
+    ' corner is "Year <group>" (calendar-year decomposition) and block-2 is "<group>" (full-period rank).
+    S "Conc Sector Contrib|CS|Conc Sector Contrib|@Year GICS sector|1|3,4,5,6,7,8,9,10,11,12,13|R2000G return contribution by GICS sector, by year (each bar sums to the index return)|Contribution (pts)"
+    S "Conc Sector Contrib|BR|Conc Sector Contrib|@GICS sector|1|2|What drove the R2000G return by sector (full period)|Contribution (pts)"
+    S "Conc Industry Contrib|BR|Conc Industry Contrib|@Morningstar industry|1|2|What drove the R2000G return by industry (full period)|Contribution (pts)"
 
     ' ---- Biotech ----------------------------------------------------------
     S "Bio Weight & Quality|L|Bio Weight & Quality|3|1|2,6|Biotech weight: R2KG vs 600G|% of index weight"
@@ -640,4 +646,5 @@ Private Sub LoadSpecs()
     S "Key Charts|L|Perf Rolling 12m|1|1|5,6|Rolling 12-month volatility: R2KG vs 600G|Ann. vol %"
     S "Key Charts|C|Conc Contribution|4|1|3,8|Top-10 return contribution: R2KG vs 600G|Contribution (pts)"
     S "Key Charts|L|Attr Contribution Trend|@Month ending|1|2,3|Rolling-12m unprofitable-tail contribution: R2KG vs 600G|Contribution (pts)"
+    S "Key Charts|BR|Conc Sector Contrib|@GICS sector|1|2|What drove the R2000G return by sector (full period)|Contribution (pts)"
 End Sub

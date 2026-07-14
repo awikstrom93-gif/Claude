@@ -106,7 +106,7 @@ the S&P SmallCap 600 Growth is often the more representative yardstick for a qua
 | **Perf Calendar Yr** | Calendar-year total return for each index and the excess. | 2015 (from May) and 2026 (through Apr) are partial years. |
 | **Perf Monthly** | Monthly returns and growth-of-$1 paths; basis for the Growth-of-$1 chart. | Cum excess = compounded R2000G-minus-600G monthly difference. |
 | **Perf Rolling 12m** | Rolling 12-month return for each index and the rolling excess. | Shows when the relative-performance gap opened and closed. |
-| **Perf Capture** | Up/down capture of S&P 600 Growth vs R2000G (R2000G = benchmark). | Up capture = compounded 600G return / compounded R2000G return in months R2000G rose; down capture likewise. |
+| **Perf Capture** | Up/down capture of S&P 600 Growth vs R2000G (R2000G = benchmark), Morningstar geometric-mean convention. | Up capture = per-period geomean of 600G / per-period geomean of R2000G in months R2000G rose (geomean = growth^(1/n)−1); down capture likewise. Displayed geomean-leg columns rebuild the ratio exactly; growth-of-$1 legs rebuild each index's cumulative. |
 | **Perf Drawdown** | Peak-to-trough drawdown path for each index. |  |
 | **Perf Window Proof** | Data-driven justification for the manager-window dates. | Finds when R2000G's cumulative excess over S&P 600 Growth troughed (its relative low) and began a persistent run; a candidate-window table shows the choice isn't cherry-picked. The trailing-3-year window brackets that rising leg. |
 

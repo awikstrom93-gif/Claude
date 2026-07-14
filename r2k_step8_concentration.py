@@ -93,10 +93,11 @@ def _nearest_prior(dts, d):
     return p[-1] if p else None
 
 
-def period_contrib(index, months, hold, hdates, ret_rec, idx):
-    """(index_return, {name: contribution}) over `months`, monthly-linked and Carino-scaled so the
-    per-name contributions sum to the compounded index return. Beginning-of-month (nearest-prior) held
-    weight x that month's return -- a name is credited only for months it was actually in the index."""
+def group_contrib(index, months, hold, hdates, ret_rec, idx, keyfn):
+    """(index_return, {group: contribution}) over `months`, monthly-linked and Carino-scaled so the
+    group contributions (+ the unmatched slice) sum to the compounded index return. Each held name is
+    credited to keyfn(h) -- a name (for concentration), a GICS sector, or a Morningstar industry. Uses
+    the strict beginning-of-month prior snapshot (no look-ahead) and beginning-of-month held weight."""
     ikey = IKEY[index]
     if ikey not in idx:
         return None, {}
@@ -121,9 +122,13 @@ def period_contrib(index, months, hold, hdates, ret_rec, idx):
             rm = rec["ret"].get(d)
             if rm is None:
                 continue
-            nm = h["nt"] or h["name"]
-            contrib[nm] += (km / Kt) * (h["weight"] / tw) * rm
+            contrib[keyfn(h) or "Unknown"] += (km / Kt) * (h["weight"] / tw) * rm
     return idx_ret, contrib
+
+
+def period_contrib(index, months, hold, hdates, ret_rec, idx):
+    """(index_return, {name: contribution}); the name-keyed case of group_contrib (see it for the math)."""
+    return group_contrib(index, months, hold, hdates, ret_rec, idx, lambda h: h["nt"] or h["name"])
 
 
 def topn_pts(contrib, ns, idx_ret):
@@ -166,7 +171,8 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
             "return, and their share of it").font = Font(bold=True, size=11, color="1F4E5F")
     head = ["Year"]
     for ix in idxs:
-        head += [f"{lab[ix]} index%"] + [f"{lab[ix]} Top{n} pts" for n in NS] + [f"{lab[ix]} Top10 %ret"]
+        head += [f"{lab[ix]} index%"] + [f"{lab[ix]} Top{n} pts" for n in NS] \
+            + [f"{lab[ix]} Top{n} %ret" for n in NS]      # top-10/25/50 share of the index return, per year
     if rel:
         head += ["Top10 pts diff (R2KG-600G)", "Top25 pts diff"]
     _hdr(ws, 4, head); r = 5
@@ -184,9 +190,9 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
             if per.get(ix):
                 iret, tp = per[ix]
                 row += [round(100 * iret, 1)] + [round(100 * tp[n][0], 1) for n in NS] + \
-                       [round(100 * tp[10][1], 0) if tp[10][1] is not None else None]
+                       [round(100 * tp[n][1], 0) if tp[n][1] is not None else None for n in NS]
             else:
-                row += [None] * (len(NS) + 2)
+                row += [None] * (2 * len(NS) + 1)
         if rel and per.get("R2KG") and per.get("SP600G"):
             d10 = 100 * (per["R2KG"][1][10][0] - per["SP600G"][1][10][0])
             d25 = 100 * (per["R2KG"][1][25][0] - per["SP600G"][1][25][0])
@@ -239,6 +245,89 @@ def return_contribution(wb, series, idx, pdates, ret_rec):
             "workbook to add the relative columns.)"))
     ws.freeze_panes = "B5"
     return idxs
+
+
+def group_contribution(wb, idx, pdates, ret_rec, keyfn, tabname, title, group_label, top_n=None):
+    """New tab: how much of each index's return came from each GROUP (GICS sector or Morningstar
+    industry) over time. Block 1 -- R2000G calendar-year contribution (pts) by group (chartable, each
+    year's return split by group). Block 2 -- full-period cumulative contribution by group, ranked,
+    R2000G vs S&P600G, with each group's share of the index return. Both are Carino-linked (block 1
+    within each year, block 2 over the whole window), so the parts sum to the compounded index return
+    for that span. When there are more groups than `top_n`, the smaller ones collapse to 'Other'."""
+    holds = {ix: finest_holdings(ix) for ix in ("R2KG", "SP600G")}
+    hd = {ix: sorted(holds[ix]) for ix in holds}
+
+    def covered(ix):
+        if IKEY[ix] not in idx or not hd[ix]:
+            return False
+        snap = holds[ix][hd[ix][-1]]
+        return bool(snap) and sum(1 for h in snap if ret_rec(h)) / len(snap) > 0.5
+
+    idxs = [ix for ix in ("R2KG", "SP600G") if covered(ix)]
+    if "R2KG" not in idxs:
+        return None
+    rel = "SP600G" in idxs
+    years = sorted({d.year for d in pdates})
+    allm = sorted(pdates)
+
+    # full-period contribution by group (Carino-linked to the compounded full return), to rank groups
+    full = {ix: group_contrib(ix, allm, holds[ix], hd[ix], ret_rec, idx, keyfn) for ix in idxs}
+    fr_ir, fr_gc = full["R2KG"]
+    if fr_ir is None:
+        return None
+    ranked = sorted(fr_gc, key=lambda g: -abs(fr_gc[g]))
+    collapse = bool(top_n) and len(ranked) > top_n
+    keep = ranked[:top_n] if collapse else ranked
+    cols = keep + (["Other"] if collapse else [])
+    bucket = lambda g: g if g in keep else "Other"
+
+    ws = wb.create_sheet(tabname)
+    ws.cell(1, 1, title).font = TITLE
+
+    # ---- Block 1: R2000G calendar-year contribution (pts) by group ----
+    ws.cell(3, 1, f"R2000G: calendar-year contribution (pts) to the index return by {group_label} "
+                  "(each year's bar sums to the index return)").font = Font(bold=True, size=11, color="1F4E5F")
+    _hdr(ws, 4, [f"Year {group_label}", "R2KG index%"] + cols)          # unique corner label = chart anchor
+    r = 5
+    for y in years:
+        months = [d for d in pdates if d.year == y]
+        iret, gc = group_contrib("R2KG", months, holds["R2KG"], hd["R2KG"], ret_rec, idx, keyfn)
+        if iret is None:
+            continue
+        agg = defaultdict(float)
+        for g, v in gc.items():
+            agg[bucket(g)] += v
+        row = [y, round(100 * iret, 1)] + [round(100 * agg.get(c, 0.0), 1) for c in cols]
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+        r += 1
+
+    # ---- Block 2: full-period cumulative contribution by group, ranked ----
+    r += 1
+    ws.cell(r, 1, f"Full-period cumulative contribution (pts) by {group_label}, ranked -- what drove "
+                  "the return over the whole window").font = Font(bold=True, size=11, color="7A3B2E")
+    r += 1
+    hh = [group_label, "R2KG pts", "R2KG % of return"] + (["600G pts", "600G % of return"] if rel else [])
+    _hdr(ws, r, hh, fill=HDR2)
+    r += 1
+    sr_ir, sr_gc = full["SP600G"] if rel else (None, {})
+    for g in ranked:
+        row = [g, round(100 * fr_gc[g], 1),
+               round(100 * fr_gc[g] / fr_ir, 0) if fr_ir and fr_ir > 0 else None]
+        if rel:
+            row += [round(100 * sr_gc.get(g, 0.0), 1),
+                    round(100 * sr_gc.get(g, 0.0) / sr_ir, 0) if sr_ir and sr_ir > 0 else None]
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+        r += 1
+    ws.cell(r + 1, 1, f"Contribution = sum over months of (beginning-of-month held weight x that month's "
+                      f"return), Carino-linked so the {group_label} parts sum to the index's compounded "
+                      f"return for the span. '% of return' = the group's pts / the index return; blank when "
+                      f"the index return is <= 0. Names lacking a return stream fall in the coverage residual, "
+                      f"so the parts sum to slightly under the index return (see the Return Contribution tab).")
+    ws.column_dimensions["A"].width = 30
+    ws.freeze_panes = "B5"
+    return ws.title
 
 
 def build():
@@ -430,6 +519,14 @@ def build():
     # ---- Return Contribution (top-name contribution, both indices, absolute + relative) ----
     rc_idxs = return_contribution(wb, series, idx, pdates, ret_rec)
 
+    # ---- Sector & Industry Contribution (what sectors/industries drove the return over time) ----
+    group_contribution(wb, idx, pdates, ret_rec, lambda h: h.get("gics") or "Unknown",
+                        "Sector Contribution", "Contribution to index return by GICS sector, over time",
+                        "GICS sector")
+    group_contribution(wb, idx, pdates, ret_rec, lambda h: h.get("ms_industry") or "Unknown",
+                        "Industry Contribution", "Contribution to index return by Morningstar industry, over time",
+                        "Morningstar industry", top_n=15)
+
     # ---- Notes ----
     nd = wb.create_sheet("Notes")
     for i, ln in enumerate([
@@ -445,7 +542,12 @@ def build():
         "   BOTH indices and the R2KG-minus-600G difference -- turns the weight run-up into the return it delivered,",
         "   absolute and relative to the earnings-screened S&P600G." + ("" if len(rc_idxs) == 2 else
         "  (S&P600G constituents absent from the perf file -> R2000G only.)"),
-        "Calendar years 2015 (from May) and 2026 (through Apr) are partial.",
+        "   Top-N %ret columns show each year's top-10/25/50 as a share of THAT year's index return.",
+        "Sector Contribution: contribution (pts) to the index return by GICS sector -- calendar-year (each year's",
+        "   bar sums to the index return) and full-period ranked, R2KG vs 600G, with each sector's % of the return.",
+        "Industry Contribution: same, by Morningstar industry (top 15 by |contribution|, the rest collapse to 'Other').",
+        f"Calendar years {min(pdates):%Y} (from {min(pdates):%b}) and "
+        f"{max(pdates):%Y} (through {max(pdates):%b}) are partial.",
     ], 1): nd.cell(i, 1, ln)
     nd.column_dimensions["A"].width = 115
 

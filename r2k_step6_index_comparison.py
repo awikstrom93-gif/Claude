@@ -36,6 +36,7 @@ from openpyxl.chart import LineChart, Reference
 from r2k_perf_io import load_monthly_holdings, BASE, ntk
 from r2k_step3_analytics import (load_fundamentals, company_metrics, pick_fy0,
                                  aggregate, dollar_agg, load_maps, dedup_cik)
+from r2k_calc import roe_equity   # positive-avg-equity ROE $agg denominator (shared, ROIC-consistent)
 
 OUT = BASE / "R2000G_vs_SP600G_Quality.xlsx"
 TARGET_MONTH = int(os.environ.get("SNAP_MONTH", "6"))     # annual spine: snapshot nearest this month
@@ -126,7 +127,7 @@ def snapshot_quality(rows, snap_dt, facts, tmap, temporal=None):
         net_da=dollar_agg([(m["net_income"], m["revenue"]) for m in covd]),
         gross_da=dollar_agg([(m["gross_profit"], m["revenue"]) for m in covd]),
         roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, and the views)
-        roe_da=dollar_agg([(m["net_income"], m["_aeq"] if m.get("_aeq") is not None else m["equity"]) for m in covd]),
+        roe_da=dollar_agg([(m["net_income"], roe_equity(m)) for m in covd]),   # positive avg equity only (ROIC-consistent)
         roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(m["_nopat"], m["_ic"]) for m in covd]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],

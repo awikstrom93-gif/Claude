@@ -261,6 +261,7 @@ def build():
     wcap = wb.create_sheet("Up-Down Capture")
     wcap.cell(row=1, column=1, value="Capture of S&P 600 Growth vs R2000G (R2KG = benchmark)").font = TITLE
     _hdr(wcap, 3, ["Window", "Up capture %", "Down capture %", "Up months", "Down months",
+                   "R2KG up geomean %", "SP6G up geomean %", "R2KG down geomean %", "SP6G down geomean %",
                    "R2KG up-leg %", "R2KG down-leg %", "SP6G up-leg %", "SP6G down-leg %",
                    "R2KG cumul %", "SP6G cumul %"])
     full = capture(R, S, dts)
@@ -270,7 +271,14 @@ def build():
         # cumulative rebuilt from the SAME up/down/flat legs the capture is measured on
         cumR = leg["up_b"] * leg["dn_b"] * leg["fl_b"] - 1
         cumS = leg["up_p"] * leg["dn_p"] * leg["fl_p"] - 1
+        # per-period geomean legs = the ACTUAL inputs to the capture ratio (geomean = growth^(1/n)-1).
+        # Up capture % == SP6G-up-geomean / R2KG-up-geomean EXACTLY, so a reviewer can rebuild the
+        # published ratio straight from the displayed cells -- the growth-of-$1 legs to their right
+        # instead rebuild each index's cumulative. Two independent reconciliation paths, both shown.
+        gm = lambda g, nn: (g ** (1.0 / nn) - 1) if nn else None
         vals = [label, _p(up, 1) if up is not None else None, _p(dn, 1) if dn is not None else None, nu, nd,
+                _p(gm(leg["up_b"], nu), 3), _p(gm(leg["up_p"], nu), 3),
+                _p(gm(leg["dn_b"], nd), 3), _p(gm(leg["dn_p"], nd), 3),
                 _p(leg["up_b"] - 1), _p(leg["dn_b"] - 1), _p(leg["up_p"] - 1), _p(leg["dn_p"] - 1),
                 _p(cumR), _p(cumS)]
         for c, v in enumerate(vals, 1):
@@ -285,10 +293,13 @@ def build():
               "in months R2KG was up / down (Morningstar convention: geomean = growth^(1/n)-1). This matches the "
               "capture ratios Morningstar publishes; the earlier compound-total ratio overstated down-capture (~98 vs "
               "~87) because a long run of deeply-negative down-month compounds pulls that ratio toward 100.")
-    wcap.cell(row=8, column=1, value="HOW TO READ: the leg columns show growth-of-$1 in the up-months and down-months "
-              "for BOTH indices; (up-leg x down-leg) rebuilds each index's cumulative (last two columns), which ties to "
-              "the Summary tab EXACTLY -- the reconstruction is independent of the ratio convention. Compare capture to "
-              "the SAME row's cumulative; never cross-wire full-period cumulative with the window's capture.")
+    wcap.cell(row=8, column=1, value="HOW TO READ / RECONCILE: two independent paths are shown. (1) RATIO: Up capture % = "
+              "SP6G-up-geomean / R2KG-up-geomean EXACTLY (down capture likewise) -- the geomean columns ARE the ratio's "
+              "inputs, so the published capture rebuilds from them directly. (2) CUMULATIVE: the growth-of-$1 leg columns "
+              "show $1 grown over the up- and down-months; (up-leg x down-leg) rebuilds each index's cumulative (last two "
+              "columns), tying to the Summary tab EXACTLY. Do NOT divide the growth-of-$1 legs to get capture -- that gives "
+              "the compound-total ratio (~98), not the geomean capture (~87). Compare capture to the SAME row's cumulative; "
+              "never cross-wire full-period cumulative with the window's capture.")
     wcap.cell(row=9, column=1, value="Down-capture < 100 means SP6G fell less than R2KG in R2KG's down months; up-capture "
               "< 100 means it rose less in the up months. The window (2011-01 start here) can differ from a vendor's, "
               "which shifts which months count as up/down and moves the ratio a little.")

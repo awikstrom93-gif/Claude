@@ -50,17 +50,49 @@ def carino_k(r):
 DEFAULT_TOP_NS = [1, 5, 10, 25, 50]
 
 
+def _dedup_weights(rows):
+    """Collapse `rows` to one weight per company: rows sharing a truthy 'cik' are summed (dual share
+    classes / a company held under two tickers count ONCE), rows with no cik stay distinct. Returns a
+    list of collapsed weights. Keeping this here means EVERY concentration stat -- top-N, HHI, effN,
+    max -- dedupes identically, so a dual-class name can't inflate concentration on one tab and not
+    another."""
+    by_cik, loose = {}, []
+    for r in rows:
+        w = r["weight"]
+        cik = r.get("cik") if hasattr(r, "get") else getattr(r, "cik", None)
+        if cik:
+            by_cik[cik] = by_cik.get(cik, 0.0) + w
+        else:
+            loose.append(w)
+    return list(by_cik.values()) + loose
+
+
 def weight_conc(rows, top_ns=DEFAULT_TOP_NS):
     """Concentration statistics from `rows` (each a dict/object with a 'weight' key, any scale):
     top-N weight %, max name %, HHI (sum of squared percent weights), and effective-N (1/sum(share^2)).
-    Weights are normalized internally, so raw index weights or fractions both work."""
-    ws = sorted((r["weight"] for r in rows), reverse=True)
+    Weights are normalized internally, so raw index weights or fractions both work. Rows sharing a
+    truthy 'cik' are collapsed to one company first (dual share classes count once)."""
+    ws = sorted(_dedup_weights(rows), reverse=True)
     tw = sum(ws) or 1e-9
     shares = [w / tw for w in ws]
     return {"n": len(ws), "top": {k: round(sum(ws[:k]) / tw * 100, 2) for k in top_ns},
             "max": round(ws[0] / tw * 100, 2) if ws else None,
             "hhi": round(sum((s * 100) ** 2 for s in shares), 1),
             "effn": round(1 / sum(s * s for s in shares), 0) if shares else None}
+
+
+def roe_equity(r):
+    """The denominator for a dollar-aggregate ROE: a row's AVERAGE equity (`_aeq`, opening+closing),
+    falling back to ending `equity` only for an old cached panel that predates the `_aeq` column --
+    but ONLY when it is strictly positive, else None. A non-positive book value makes ROE meaningless
+    (a loss on negative equity reads as a positive return), so the per-name ROE already drops those
+    names (roe = ni/aeq only if aeq>0) and ROIC $agg already drops non-positive invested capital
+    (via _ic=None). Returning None here lets dollar_agg() skip the same names, so the ROE $agg family
+    stops being the one member that quietly aggregated over negative equity."""
+    aeq = r.get("_aeq")
+    if aeq is None:
+        aeq = r.get("equity")
+    return aeq if (aeq is not None and aeq > 0) else None
 
 
 def annual_spine(holdings, target_month):
@@ -92,6 +124,11 @@ def _selftest():
     # weight_conc: two equal names -> top1 50%, HHI 5000, effN 2
     wc = weight_conc([{"weight": 1.0}, {"weight": 1.0}])
     assert wc["top"][1] == 50.0 and wc["hhi"] == 5000.0 and wc["effn"] == 2
+    # weight_conc dedup: two share classes of ONE company (same cik) collapse to a single 100% name;
+    # a third distinct company then makes it 2 effective names, not 3.
+    wcd = weight_conc([{"weight": 1.0, "cik": 111}, {"weight": 1.0, "cik": 111},
+                       {"weight": 2.0, "cik": 222}])
+    assert wcd["n"] == 2 and wcd["top"][1] == 50.0 and wcd["effn"] == 2
     # annual_spine picks the April-nearest snapshot per year
     sp = annual_spine([date(2020, 3, 31), date(2020, 4, 30), date(2021, 6, 30)], 4)
     assert sp[2020] == date(2020, 4, 30) and sp[2021] == date(2021, 6, 30)

@@ -83,6 +83,12 @@ _METHOD_NAMED = {
                           "the tail is structurally (not transiently) unprofitable.",
     "Valuation of the Tail": "Sales and book multiples of each cohort as a multiple of the index; a "
                              "quarterly block shows the tail's intra-year re-rating.",
+    "Conc Sector Contrib": "Contribution = sum over months of (beginning-of-month held weight x that month's "
+                           "return), Carino-linked so each GICS sector's pts sum to the index's compounded "
+                           "return (per year in the top block, over the whole window in the ranked block).",
+    "Conc Industry Contrib": "Same Carino-linked held-weight-x-return contribution as the sector tab, at the "
+                             "Morningstar-industry level; the top 15 by absolute contribution are shown and the "
+                             "rest collapse to 'Other'.",
 }
 
 # (source path, original sheet, new name)  -- skip per-file README/Charts
@@ -101,6 +107,7 @@ SHEETS = [
     # ---- concentration deep-dive (step 8, optional) ----
     (CONC, "Weight Concentration", "Conc Weight"), (CONC, "Return Breadth", "Conc Breadth"),
     (CONC, "Return Concentration", "Conc Return"), (CONC, "Return Contribution", "Conc Contribution"),
+    (CONC, "Sector Contribution", "Conc Sector Contrib"), (CONC, "Industry Contribution", "Conc Industry Contrib"),
     # ---- biotech deep-dive (step 9, optional) ----
     (BIO, "Biotech Weight & Quality", "Bio Weight & Quality"), (BIO, "Biotech in the Tail", "Bio In Tail"),
     (BIO, "Unprofitable by Theme", "Bio Unprof by Theme"), (BIO, "Unprofitable by Industry", "Bio Unprof by Industry"),
@@ -212,10 +219,12 @@ def copy_sheet(src_ws, dst_ws, row_off=0):
 
 
 def _method_note(name):
+    if name in _METHOD_NAMED:              # a named override beats the family prefix below
+        return _METHOD_NAMED[name]
     for pre, note in _METHOD:
         if name.startswith(pre):
             return note
-    return _METHOD_NAMED.get(name)
+    return None
 
 
 def inject_summary(dst_ws, name, ncols):
@@ -416,8 +425,9 @@ TAB_GUIDE = [
      "Cum excess = compounded R2000G-minus-600G monthly difference."),
     ("Perf Rolling 12m", "Rolling 12-month return for each index and the rolling excess.",
      "Shows when the relative-performance gap opened and closed."),
-    ("Perf Capture", "Up/down capture of S&P 600 Growth vs R2000G (R2000G = benchmark).",
-     "Up capture = compounded 600G return / compounded R2000G return in months R2000G rose; down capture likewise."),
+    ("Perf Capture", "Up/down capture of S&P 600 Growth vs R2000G (R2000G = benchmark), Morningstar geometric-mean convention.",
+     "Up capture = per-period geomean of 600G / per-period geomean of R2000G in months R2000G rose (geomean = growth^(1/n)-1); "
+     "down capture likewise. The geomean-leg columns rebuild this ratio exactly; the growth-of-$1 legs rebuild each index's cumulative."),
     ("Perf Drawdown", "Peak-to-trough drawdown path for each index.", ""),
     ("Perf Window Proof", "Data-driven justification for the manager-window dates.",
      "Finds when R2000G's cumulative excess over S&P 600 Growth troughed (its relative low) and began a "
@@ -464,7 +474,14 @@ TAB_GUIDE = [
     ("Conc Contribution", "How much RETURN the top names delivered -- both indices, absolute and relative.",
      "Calendar-year AND rolling-12m contribution (pts) of the top-N return drivers for R2000G and S&P600G, "
      "with the R2KG-minus-600G difference -- turns the weight run-up into the return it produced and shows "
-     "when concentration drove R2000G vs the earnings-screened S&P600G."),
+     "when concentration drove R2000G vs the earnings-screened S&P600G. Top-N %ret columns give each year's "
+     "top-10/25/50 as a share of THAT year's index return, so a pts contribution and its % of the return sit side by side."),
+    ("Conc Sector Contrib", "Which GICS sectors drove the index return over time.",
+     "R2000G calendar-year contribution (pts) by sector (each year's row sums to the index return), then the "
+     "full-period ranking with each sector's pts and % of the index return, R2000G vs S&P600G."),
+    ("Conc Industry Contrib", "Which Morningstar industries drove the index return over time.",
+     "Same construction as Conc Sector Contrib, at the finer Morningstar-industry level (top 15 by absolute "
+     "contribution; smaller industries collapse to 'Other')."),
     ("Biotech deep-dive (step 9)", None, None),
     ("Bio Weight & Quality", "Biotech weight in each index + its quality -- annual AND quarterly.",
      "Biotech weight R2000G vs 600G over time (with a quarter-end block for the intra-year swing), and "

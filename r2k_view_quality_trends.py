@@ -13,6 +13,7 @@ RUN:  python r2k_view_quality_trends.py        # builds the sheet from the panel
 """
 from r2k_universe import get_panel, diff_sheet, print_sheet, year_snapshot
 from r2k_step3_analytics import aggregate, dollar_agg, _p, _x, dedup_cik
+from r2k_calc import roe_equity   # positive-avg-equity ROE $agg denominator (shared, ROIC-consistent)
 
 SHEET = "Index Quality Trends"
 TITLE_TEXT = "Russell 2000 Growth -- Index Quality Trends (weight-weighted / median / dollar-aggregate)"
@@ -58,10 +59,10 @@ def quality_trends_rows(panel):
         up_oi = (100 * sum(r["weight"] for r in oi_cls if r["prof_oi"] is False) /
                  (sum(r["weight"] for r in oi_cls) or 1)) if oi_cls else None
         opm_da = dollar_agg([(r["operating_income"], r["revenue"]) for r in covd])
-        # ROE $agg on AVERAGE equity (matches per-name ROE and ROIC $agg); fall back to ending equity
-        # only for an old cached panel that predates the _aeq column.
-        aeq = lambda r: r["_aeq"] if r.get("_aeq") is not None else r["equity"]
-        roe_da = dollar_agg([(r["net_income"], aeq(r)) for r in covd])
+        # ROE $agg on AVERAGE equity, POSITIVE only (matches per-name ROE, which drops non-positive
+        # equity, and ROIC $agg, which drops non-positive invested capital). roe_equity() falls back to
+        # ending equity for an old cached panel without _aeq, and returns None for non-positive equity.
+        roe_da = dollar_agg([(r["net_income"], roe_equity(r)) for r in covd])
         roic_da = dollar_agg([(r["_nopat"], r["_ic"]) for r in covd])
         dcap_da = dollar_agg([(r["debt"], (r["debt"] + r["equity"])
                               if (r["debt"] is not None and r["equity"] is not None) else None) for r in covd])

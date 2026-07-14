@@ -67,7 +67,7 @@ def ticker_cik_map(base, temporal):
     return tmap
 
 
-from r2k_calc import annual_spine as _annual_spine   # single impl in the shared calc module
+from r2k_calc import annual_spine as _annual_spine, roe_equity   # single impl in the shared calc module
 
 SNAP_DRIFT_TOL = int(os.environ.get("SNAP_DRIFT_TOL", "4"))        # drop a year whose only snapshot is >this many months from target
 MIN_MEMBER_FRAC = float(os.environ.get("MIN_MEMBER_FRAC", "0.5"))  # drop a snapshot with < this fraction of the median membership
@@ -475,7 +475,7 @@ def index_quality(members, tops=(10, 25, 50)):
         net_da=dollar_agg([(r["net_income"], r["revenue"]) for r in covd]),
         gross_da=dollar_agg([(r["gross_profit"], r["revenue"]) for r in covd]),
         roe_w=ag("roe")["wavg"],   # ROE $agg on AVERAGE equity (matches per-name ROE, ROIC $agg, the views)
-        roe_da=dollar_agg([(r["net_income"], r["_aeq"] if r.get("_aeq") is not None else r["equity"]) for r in covd]),
+        roe_da=dollar_agg([(r["net_income"], roe_equity(r)) for r in covd]),   # positive avg equity only (ROIC-consistent)
         roic_w=ag("roic")["wavg"], roic_da=dollar_agg([(r["_nopat"], r["_ic"]) for r in covd]),
         gp_assets=ag("gp_to_assets")["median"], accruals=ag("accruals")["median"],
         cashconv=ag("cash_conversion")["median"],
