@@ -413,8 +413,12 @@ def _tstat(series):
 
 def report(res):
     print(f"\n===== {res['label']} =====")
-    nyr = len(res["mos"]) / 12 if res["mos"] else 0
-    print(f"  months {res['mos'][0]}..{res['mos'][-1]}  ({len(res['mos'])} obs, {nyr:.1f} yr)")
+    # annualize the efficacy series over the EFFECTIVE months (emos: factor at t -> return at t+1, one
+    # fewer than the factor months mos), matching the Factor Summary tab. Using len(mos) here would
+    # divide the same cumulative by one extra month and print an annualized figure that disagreed with
+    # the workbook for the identical factor.
+    nyr = len(res["emos"]) / 12 if res.get("emos") else (len(res["mos"]) / 12 if res["mos"] else 0)
+    print(f"  months {res['mos'][0]}..{res['mos'][-1]}  ({len(res['mos'])} obs, {nyr:.1f} yr effective)")
     print(f"\n  FACTOR EFFICACY (cap-wtd top-minus-bottom quintile, sector-neutral, next-month):")
     print(f"    {'factor':10s} {'cum L/S %':>10s} {'ann %':>8s} {'t-stat':>7s}")
     for ff in FACTORS:

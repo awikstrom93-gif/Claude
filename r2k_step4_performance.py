@@ -23,6 +23,7 @@ how the cumulative export is converted to periodic returns.
 """
 from pathlib import Path
 from datetime import date
+from collections import Counter
 import os, math
 
 import openpyxl
@@ -196,7 +197,12 @@ def build():
 
     # ---- Calendar Year ----
     wc = wb.create_sheet("Calendar Year")
-    wc.cell(row=1, column=1, value="Calendar-year total return (2015 & 2026 partial)").font = TITLE
+    # name the partial years (fewer than 12 monthly obs) from the data, not a hardcoded "2015 & 2026",
+    # so the title stays correct as the return history extends.
+    _ycount = Counter(d.year for d in dts)
+    _partial = [y for y in sorted(_ycount) if _ycount[y] < 12]
+    _ptxt = (" (%s partial)" % " & ".join(str(y) for y in _partial)) if _partial else ""
+    wc.cell(row=1, column=1, value=f"Calendar-year total return{_ptxt}").font = TITLE
     _hdr(wc, 3, ["Year", "R2000G", "S&P 600 Growth", "Excess", "Months"])
     yrs = sorted(set(d.year for d in dts)); cr = 4
     for y in yrs:

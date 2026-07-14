@@ -343,6 +343,17 @@ def build():
     spine_s = annual_spine(hold_s) if hold_s else {}
     years = sorted(spine_r)
 
+    def boy_membership(hold, y):
+        """Beginning-of-year membership: the EARLIEST holdings snapshot in calendar year `y` (its January
+        reconstitution). Breadth buckets a name's full calendar-year return, so counting it against
+        beginning-of-year membership keeps that point-in-time: a name added mid-year is not credited for
+        the months before it joined, and a name deleted mid-year is still counted for the year it was in
+        at the start. The prior code used the JUNE (annual-spine) snapshot, which quietly credited names
+        added Feb-Jun with the whole year's return (the same pre-membership look-ahead the Return
+        Concentration tab already avoids)."""
+        ds = [d for d in hold if d.year == y]
+        return hold[min(ds)] if ds else None
+
     # return lookup
     by_cik, by_nt = {}, {}
     for rec in series:
@@ -432,10 +443,12 @@ def build():
         ym = [d for d in pdates if d.year == y]
         if not ym:
             continue
-        a = breadth(hold_r[spine_r[y]], "R2KG", ym)
+        mem_r = boy_membership(hold_r, y)
+        a = breadth(mem_r, "R2KG", ym) if mem_r else None
         if a is None:
             continue
-        b = breadth(hold_s[spine_s[y]], "SP6G", ym) if (have_s and y in spine_s) else None
+        mem_s = boy_membership(hold_s, y) if have_s else None
+        b = breadth(mem_s, "SP6G", ym) if mem_s else None
         row = [y] + a + (b if b else ([None] * len(metric) if have_s else []))
         for c, v in enumerate(row, 1):
             wb2.cell(r, c, v)

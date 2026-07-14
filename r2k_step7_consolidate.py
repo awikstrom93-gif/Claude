@@ -69,8 +69,8 @@ _METHOD = [
               "the counterfactual reweights the index's OWN names on an earnings screen."),
     ("Conc ", "Weight and return-contribution by rank (top-5/10/25), with breadth counting how many "
               "names beat the index; a quarterly block tracks the intra-year path."),
-    ("Bio ", "Biotech is identified by GICS/industry; unprofitable and no-revenue shares are measured "
-             "within the biotech book, point-in-time."),
+    ("Bio ", "Biotech is identified from Morningstar Industry (contains 'biotech'); unprofitable and "
+             "no-revenue shares are measured within the biotech book, point-in-time."),
     ("R2KG ", "R2000G-only trends from the as-filed panel -- dollar aggregates, point-in-time, "
               "survivorship-free."),
 ]
