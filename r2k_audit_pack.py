@@ -20,6 +20,13 @@ layers:
      intercept, and the residual -- so the factor attribution is independently reproducible. The
      workbook reproduces one month in-sheet with LINEST.
 
+  4. FACTOR RELIABILITY (audit_factor_correlation.csv + audit_factor_uni_vs_multi.csv, and the 'Factor
+     Reliability' tab): the collinearity and stability diagnostics behind the coefficients -- the average
+     cross-sectional correlation matrix of the raw z-score regressors, the VIF per factor, and each
+     factor's slope in a UNIVARIATE vs the MULTIVARIATE regression with Fama-MacBeth t-stats -- so a
+     reviewer can see directly how much any coefficient could be contaminated by the others (momentum is
+     significant and stable across specs; the correlated fundamental factors are read together).
+
 Reuses the SAME functions the pipeline uses (r2k_universe.index_quality / dedup_cik and the
 r2k_factor_analysis building blocks), so the audit reconciles to the published workbook by construction.
 
@@ -54,6 +61,49 @@ def _yn(v):
 
 def _prof(v):
     return "profitable" if v is True else ("unprofitable" if v is False else "")
+
+
+# --------------------------------------------------------------------------- small stats helpers
+def _pearson(xs, ys):
+    """Pearson correlation of two equal-length lists; None if undegenerate."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx = sum(xs) / n; my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs); syy = sum((y - my) ** 2 for y in ys)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    d = (sxx * syy) ** 0.5
+    return (sxy / d) if d > 1e-12 else None
+
+
+def _inv(M):
+    """Inverse of an n x n matrix via Gauss-Jordan with partial pivot; None if singular."""
+    n = len(M)
+    A = [list(M[i]) + [1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for c in range(n):
+        piv = max(range(c, n), key=lambda r: abs(A[r][c]))
+        if abs(A[piv][c]) < 1e-12:
+            return None
+        A[c], A[piv] = A[piv], A[c]
+        pv = A[c][c]; A[c] = [v / pv for v in A[c]]
+        for r in range(n):
+            if r != c and A[r][c]:
+                f = A[r][c]; A[r] = [A[r][k] - f * A[c][k] for k in range(2 * n)]
+    return [row[n:] for row in A]
+
+
+def _fm_stat(series):
+    """Fama-MacBeth aggregate of a monthly slope series: (mean, t-stat, n). The t-stat divides the mean
+    by the standard error of the month-to-month slopes -- so a slope that jumps around across months
+    (noise / instability) earns a low t, which is the whole point of the reliability read."""
+    s = [x for x in series if x is not None]
+    n = len(s)
+    if n < 2:
+        return (None, None, n)
+    m = sum(s) / n
+    sd = (sum((x - m) ** 2 for x in s) / (n - 1)) ** 0.5
+    t = (m / (sd / n ** 0.5)) if sd > 1e-12 else None
+    return (m, t, n)
 
 
 # --------------------------------------------------------------------------- constituent backup
@@ -404,6 +454,200 @@ def factor_audit(wb):
     ws.column_dimensions["A"].width = 16
 
 
+# --------------------------------------------------------------------------- factor collinearity / stability
+OUT_CORR = BASE / "audit_factor_correlation.csv"
+OUT_UVM = BASE / "audit_factor_uni_vs_multi.csv"
+
+
+def factor_reliability(wb):
+    """Quantify how much the MULTIVARIATE factor coefficients can be contaminated by cross-factor
+    correlation and measurement error, using the SAME building blocks as the attribution:
+
+      A. average cross-sectional CORRELATION MATRIX of the raw factor z-scores (the regressors);
+      B. VIF per factor (variance-inflation = diagonal of the inverse correlation matrix): how much a
+         factor's coefficient variance is inflated by its correlation with the other five;
+      C. UNIVARIATE vs MULTIVARIATE Fama-MacBeth slope per factor, each with its FM t-stat -- a factor
+         whose slope barely moves between the two specs (and stays significant) is robust to the joint
+         estimation; one that swings is collinearity-sensitive and its multivariate coefficient should
+         not be read on its own.
+
+    Both are per index. Correlation/VIF/regressions use the RAW z (zr) the attribution regresses on."""
+    try:
+        import r2k_factor_analysis as fa
+    except Exception as e:
+        print(f"  (factor reliability skipped -- cannot import r2k_factor_analysis: {e})")
+        return
+    try:
+        months, ret, t2c, c2t = fa.load_returns()
+        mcap = fa.load_mktcap(months)
+        fund = fa.load_fundamentals()
+    except FileNotFoundError as e:
+        print(f"  (factor reliability skipped -- input file not found: {e})")
+        return
+    FF = fa.FACTORS; nF = len(FF)
+    midx = {m: i for i, m in enumerate(months)}
+    per_index = {}   # label -> dict(corr_sum, corr_n, uni{ff:[]}, multi{ff:[]})
+
+    for pat, label in [("*Russell*Growth*Holdings*.xlsx", "R2000G"), ("*600*Growth*Holdings*.xlsx", "S&P600G")]:
+        univ, sect = fa.load_holdings(pat)
+        hmonths = sorted(univ)
+
+        def snap(ym):
+            prior = [h for h in hmonths if h <= ym]
+            return prior[-1] if prior else None
+
+        corr_sum = [[0.0] * nF for _ in range(nF)]; corr_n = [[0] * nF for _ in range(nF)]
+        uni = {ff: [] for ff in FF}; multi = {ff: [] for ff in FF}
+        for ym in months:
+            if int(ym[:4]) < fa.Y0:
+                continue
+            mi = midx.get(ym); s = snap(ym)
+            if mi is None or mi + 1 >= len(months) or s is None:
+                continue
+            univ_ym = univ[s]
+            names = [c for c in univ_ym if (mi + 1) in ret.get(c, {})]
+            if len(names) < fa.MIN_NAMES:
+                continue
+            w = {c: univ_ym[c] for c in names}
+            raw = fa.build_factor_scores(names, mi, ym, ret, mcap, fund)
+            zr = {ff: fa.zscore(raw[ff]) for ff in FF}                 # raw z = the attribution regressors
+            common = [c for c in names if all(c in zr[ff] for ff in FF)]
+            if len(common) < fa.MIN_NAMES:
+                continue
+            fwd = {c: ret[c][mi + 1] for c in common}
+            cols = {ff: [zr[ff][c] for c in common] for ff in FF}
+            # A. accumulate this month's pairwise correlations
+            for a in range(nF):
+                for b in range(a, nF):
+                    r = _pearson(cols[FF[a]], cols[FF[b]])
+                    if r is not None:
+                        corr_sum[a][b] += r; corr_n[a][b] += 1
+                        if a != b:
+                            corr_sum[b][a] += r; corr_n[b][a] += 1
+            # C. multivariate slopes (all six + intercept) and univariate slopes (one factor + intercept)
+            y = [fwd[c] for c in common]
+            bm = fa.ols([[1.0] + [zr[ff][c] for ff in FF] for c in common], y)
+            if bm:
+                for i, ff in enumerate(FF):
+                    multi[ff].append(bm[i + 1])
+            for ff in FF:
+                bu = fa.ols([[1.0, zr[ff][c]] for c in common], y)
+                if bu:
+                    uni[ff].append(bu[1])
+        # average correlation matrix
+        corr = [[(corr_sum[a][b] / corr_n[a][b]) if corr_n[a][b] else (1.0 if a == b else 0.0)
+                 for b in range(nF)] for a in range(nF)]
+        inv = _inv(corr)
+        vif = [inv[i][i] if inv else None for i in range(nF)]
+        per_index[label] = dict(corr=corr, vif=vif, uni=uni, multi=multi)
+
+    if not per_index:
+        print("  (factor reliability skipped -- no index-months produced)")
+        return
+
+    # ---- CSVs ----
+    with open(OUT_CORR, "w", newline="", encoding="utf-8") as f:
+        wtr = csv.writer(f); wtr.writerow(["index", "factor"] + list(FF) + ["VIF"])
+        for label, d in per_index.items():
+            for i, ff in enumerate(FF):
+                wtr.writerow([label, ff] + [round(d["corr"][i][j], 4) for j in range(nF)]
+                             + [round(d["vif"][i], 3) if d["vif"][i] is not None else ""])
+    print(f"  wrote {OUT_CORR.name}")
+
+    def _ann(m):     # monthly slope (return per +1 SD of z) -> annualized %
+        return round(m * 12 * 100, 2) if m is not None else None
+
+    uvm_rows = []
+    for label, d in per_index.items():
+        for ff in FF:
+            um, ut, un = _fm_stat(d["uni"][ff])
+            mm, mt, mn = _fm_stat(d["multi"][ff])
+            dchg = (mm - um) if (um is not None and mm is not None) else None
+            pct = (100 * abs(dchg) / abs(um)) if (dchg is not None and um not in (None, 0)) else None
+            # verdict: reliable only if the multivariate slope is significant AND close to univariate
+            rel = (mt is not None and abs(mt) >= 2.0)
+            stable = (pct is not None and pct <= 25)
+            verdict = ("reliable (significant, stable across specs)" if rel and stable else
+                       "significant but collinearity-sensitive" if rel and not stable else
+                       "not individually significant")
+            uvm_rows.append([label, ff, un, _ann(um), round(ut, 2) if ut is not None else None,
+                             _ann(mm), round(mt, 2) if mt is not None else None,
+                             _ann(dchg), round(pct, 0) if pct is not None else None, verdict])
+    with open(OUT_UVM, "w", newline="", encoding="utf-8") as f:
+        wtr = csv.writer(f)
+        wtr.writerow(["index", "factor", "n_months", "univariate_slope_ann_pct", "univariate_t",
+                      "multivariate_slope_ann_pct", "multivariate_t", "delta_ann_pct", "abs_pct_change", "verdict"])
+        wtr.writerows(uvm_rows)
+    print(f"  wrote {OUT_UVM.name}")
+
+    # ---- workbook tab ----
+    ws = wb.create_sheet("Factor Reliability")
+    ws.cell(1, 1, "Factor reliability -- collinearity (correlation, VIF) and coefficient stability "
+                  "(univariate vs multivariate)").font = TITLE
+    ws.cell(2, 1, "The attribution is ONE multivariate regression per month, so correlated factors share "
+                  "explanatory power and errors in one regressor can move the others' coefficients. This tab "
+                  "sizes that: (A) how correlated the regressors are, (B) VIF = how much each coefficient's "
+                  "variance is inflated by that correlation, (C) whether each factor's slope survives moving "
+                  "from a one-factor regression to the full six-factor regression. A factor that is "
+                  "significant AND stable across the two specs is not an artifact of the joint estimation.").font = BODY
+    ws.cell(2, 1).alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[2].height = 74
+    r = 4
+    for label in per_index:
+        d = per_index[label]
+        ws.cell(r, 1, f"{label} — A. Average cross-sectional correlation of the raw factor z-scores "
+                      "(|r|>0.5 = materially collinear)").font = H
+        r += 1
+        _hdr(ws, r, [""] + list(FF));
+        for i, ff in enumerate(FF):
+            ws.cell(r + 1 + i, 1, ff).font = Font(bold=True, size=10)
+            for j in range(nF):
+                cell = ws.cell(r + 1 + i, 2 + j, round(d["corr"][i][j], 2))
+                if i != j and abs(d["corr"][i][j]) > 0.5:
+                    cell.font = Font(bold=True, color="B00000")
+        r += nF + 2
+        ws.cell(r, 1, f"{label} — B. Variance Inflation Factor (VIF < 5 low · 5–10 moderate · > 10 high "
+                      "collinearity)").font = H
+        r += 1
+        _hdr(ws, r, list(FF));
+        for i in range(nF):
+            v = d["vif"][i]
+            cell = ws.cell(r + 1, 1 + i, round(v, 2) if v is not None else "n/a")
+            if v is not None and v > 5:
+                cell.font = Font(bold=True, color="B00000")
+        r += 3
+        ws.cell(r, 1, f"{label} — C. Univariate vs multivariate Fama-MacBeth slope (annualized %, per +1 SD "
+                      "of the factor) with FM t-stats").font = H
+        r += 1
+        _hdr(ws, r, ["Factor", "Univariate slope %", "Univ t", "Multivariate slope %", "Multi t",
+                     "Δ slope (pts)", "|Δ| / univ %", "Verdict"])
+        r += 1
+        for row in [x for x in uvm_rows if x[0] == label]:
+            _, ff, un, us, ut, ms, mt, dl, pc, verdict = row
+            vals = [ff, us, ut, ms, mt, dl, pc, verdict]
+            for c, v in enumerate(vals, 1):
+                cell = ws.cell(r, c, v)
+                if c == 1:
+                    cell.font = Font(bold=True, size=10)
+                if c == 8 and verdict.startswith("reliable"):
+                    cell.font = Font(bold=True, color="1F6E1F")
+            r += 1
+        r += 2
+    ws.cell(r, 1, "How to read it: Momentum uses only returns (no accounting data), is significant, and its "
+                  "slope barely moves between the univariate and multivariate specs — so its result is not a "
+                  "product of the joint regression. The fundamental factors (Value / Quality / Growth) are "
+                  "correlated (they load on the same profitability/tail axis), so their individual multivariate "
+                  "coefficients are a partition of a shared effect and should not be read in isolation; the "
+                  "quality conclusion is corroborated separately by the profitability-cohort attribution and the "
+                  "biotech contribution, which use no factor regression. Sector-neutral demeaning (the efficacy "
+                  "lens) further reduces sector-driven correlation; VIF here is for the raw-z attribution, the "
+                  "conservative case.").font = Font(italic=True, size=9)
+    ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical="top"); ws.row_dimensions[r].height = 88
+    ws.column_dimensions["A"].width = 24
+    for col in "BCDEFGH":
+        ws.column_dimensions[col].width = 17
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+
+
 # --------------------------------------------------------------------------- readme + main
 def readme(wb):
     ws = wb.create_sheet("READ ME", 0)
@@ -439,6 +683,16 @@ def readme(wb):
          "month)' tab reproduces one month in-sheet with LINEST. Contribution = slope x exposure; "
          "market + Σ contributions + residual = the index return, by construction.", BODY),
         ("", BODY),
+        ("4. TEST THE FACTOR COEFFICIENTS.  The 'Factor Reliability' tab quantifies how much the "
+         "multivariate coefficients can be moved by cross-factor correlation and measurement error: (A) the "
+         "average cross-sectional correlation matrix of the raw z-score regressors, (B) VIF per factor "
+         "(variance inflation from that correlation), and (C) each factor's slope in a one-factor regression "
+         "vs the full six-factor regression, with Fama-MacBeth t-stats. A factor that is significant AND "
+         "stable across the two specs (momentum) is not an artifact of the joint estimation; correlated "
+         "fundamental factors (Value/Quality/Growth) share explanatory power, so their individual "
+         "coefficients are a partition of one effect and are read together, not in isolation. Flat copies: "
+         "audit_factor_correlation.csv and audit_factor_uni_vs_multi.csv.", BODY),
+        ("", BODY),
         ("Provenance note: fundamentals are as originally filed (by original accession, no restatement "
          "blending); the per-value tag/derivation that produced each figure is in fundamentals_dera.csv "
          "(the file this pack joins for filing dates and confidence).", BODY),
@@ -471,11 +725,13 @@ def main():
         _agg_tab(wb, tag, cons_tab, by_year)
 
     factor_audit(wb)
+    factor_reliability(wb)
     readme(wb)
-    # order: READ ME, Aggregates/Constituents per index, Regression
+    # order: READ ME, Aggregates/Constituents per index, Regression, Factor Reliability
     order = ["READ ME"] + [s for s in wb.sheetnames if s.startswith("Aggregates")] \
         + [s for s in wb.sheetnames if s.startswith("Constituents")] \
-        + [s for s in wb.sheetnames if s.startswith("Regression")]
+        + [s for s in wb.sheetnames if s.startswith("Regression")] \
+        + [s for s in wb.sheetnames if s.startswith("Factor Reliability")]
     wb._sheets.sort(key=lambda s: order.index(s.title) if s.title in order else 999)
     wb.save(OUT_WB)
     print(f"  wrote {OUT_WB.name}  ({len(wb.sheetnames)} tabs)")
