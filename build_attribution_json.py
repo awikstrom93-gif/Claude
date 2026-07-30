@@ -1,0 +1,2053 @@
+#!/usr/bin/env python3
+"""
+build_attribution_json.py
+=========================
+
+Phase 2 of the Battle Book Agent data pipeline.
+
+Converts Morningstar Direct attribution exports into per-manager JSON that
+answers one question for the commentary agent:
+
+    "Why did this manager outperform or underperform?"
+
+This is a COMMENTARY tool, not an attribution audit tool. The battle-book-facing
+JSON deliberately contains no residual, attribution-gap, coverage, expense-ratio
+or benchmark-reconstruction fields. Those numbers are still computed, but they
+live only in debug_attribution_report.json for internal QA.
+
+Usage
+-----
+    python build_attribution_json.py --quarter "2026 Q2"
+    python build_attribution_json.py --quarter latest
+    python build_attribution_json.py --quarter "2026 Q2" --no-patch
+    python build_attribution_json.py --quarter "2026 Q2" \
+        --input-root "D:\\test\\in" --output-root "D:\\test\\out"
+
+Prerequisite
+------------
+Phase 1 must have run for the same quarter. This script reads the asset-class
+JSON files to resolve each manager, confirm the asset class and benchmark, and
+then patches attribution availability pointers back into them.
+
+Inputs
+------
+    <input-root>/<quarter>/Attribution/*.xlsx
+
+Outputs
+-------
+    <output-root>/<quarter>/attribution/<manager_slug>.json
+    <output-root>/<quarter>/debug_attribution_report.json
+    <output-root>/<quarter>/{large,mid,small}_growth.json   (patched in place)
+
+Workbook layout
+---------------
+Every attribution export carries two sheets, `Template` (an export manifest) and
+`Attribution` (the grid). The grid is:
+
+    rows 1-5    metadata (Name / Portfolio / Benchmark / Currency / Exported)
+    row  8      period band labels, e.g. "4-1-2026 - 6-30-2026"
+    row  9      metric group labels (Weights % / Return % / ...)
+    row  10     leaf headers (Portfolio / Benchmark / +/- / Allocation % / ...)
+    row  11+    data: column A opens a section, column B/C are securities
+
+Columns A-C are identity; the remainder is seven 13-column period bands. Nothing
+here is addressed by fixed cell reference: bands are matched on the date range
+parsed from their label, and leaf columns are mapped from the row 9/10 header
+text, so a workbook with a different band count or column order still parses.
+
+Structure the code so additional attribution views can be added later.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+try:
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.worksheet import Worksheet
+except ImportError:  # pragma: no cover - guidance for a fresh machine
+    sys.stderr.write(
+        "ERROR: openpyxl is not installed.\n"
+        "       Run:  pip install -r requirements.txt\n"
+    )
+    raise
+
+
+# =============================================================================
+# SECTION 1 - CONSTANTS / DISCOVERED LAYOUT ASSUMPTIONS
+# -----------------------------------------------------------------------------
+# Everything derived from inspecting real Morningstar attribution exports. If a
+# template changes, this should be the only section that needs editing.
+# =============================================================================
+
+SCRIPT_VERSION = "1.0.0"
+
+# --- Roots (mirror build_quarterly_json.py) -----------------------------------
+DEFAULT_INPUT_ROOT = (
+    r"C:\Users\alex.wikstrom\OneDrive - NFP Corp\Research\Battle Book Agent"
+    r"\Quarterly Battle Book Inputs"
+)
+DEFAULT_OUTPUT_ROOT = (
+    r"C:\Users\alex.wikstrom\OneDrive - NFP Corp\Research\Battle Book Agent"
+    r"\Quarterly Battle Book Data"
+)
+
+ATTRIBUTION_INPUT_SUBFOLDER = "Attribution"
+ATTRIBUTION_OUTPUT_SUBFOLDER = "attribution"
+DEBUG_REPORT_FILENAME = "debug_attribution_report.json"
+
+# --- Quarter folder naming ----------------------------------------------------
+QUARTER_FOLDER_PATTERNS = (
+    re.compile(r"^\s*(?P<year>\d{4})\s*[-_ ]?\s*[Qq](?P<quarter>[1-4])\s*$"),
+    re.compile(r"^\s*[Qq](?P<quarter>[1-4])\s*[-_ ]?\s*(?P<year>\d{4})\s*$"),
+)
+QUARTER_FOLDER_TEMPLATE = "{year} Q{quarter}"
+
+# --- Phase 1 asset-class files -----------------------------------------------
+ASSET_CLASS_FILES: Tuple[Tuple[str, str], ...] = (
+    ("large_growth", "large_growth.json"),
+    ("mid_growth", "mid_growth.json"),
+    ("small_growth", "small_growth.json"),
+)
+
+# --- Worksheet names ----------------------------------------------------------
+TEMPLATE_SHEET_ALIASES = ("template",)
+ATTRIBUTION_SHEET_ALIASES = ("attribution",)
+
+# --- Template / metadata keys -------------------------------------------------
+METADATA_KEYS = {
+    "name": "name",
+    "portfolio": "portfolio",
+    "benchmark": "benchmark",
+    "currency": "currency",
+    "date exported": "exported_at",
+}
+CLASSIFICATION_HINT_RE = re.compile(r"^\s*\d+\.\s*(?P<value>.+?)\s*$")
+ATTRIBUTION_MODEL_RE = re.compile(r"three[- ]factor", re.IGNORECASE)
+
+# --- Grid geometry ------------------------------------------------------------
+# Expected positions; all of them are validated by content, never trusted blind.
+EXPECTED_BAND_LABEL_ROW = 8
+EXPECTED_METRIC_GROUP_ROW = 9
+EXPECTED_LEAF_HEADER_ROW = 10
+HEADER_SEARCH_MAX_ROW = 30
+IDENTITY_COLUMN_COUNT = 3  # A=GICS Sector, B=Name, C=Ticker
+EXPECTED_BAND_WIDTH = 13
+
+# Band labels look like "4-1-2026 - 6-30-2026".
+BAND_LABEL_DATE_RANGE_RE = re.compile(
+    r"^\s*(?P<start>\d{1,2}-\d{1,2}-\d{4})\s*-\s*(?P<end>\d{1,2}-\d{1,2}-\d{4})\s*$"
+)
+BAND_LABEL_DATE_FORMATS = ("%m-%d-%Y", "%m/%d/%Y")
+
+# --- Metric mapping: (metric group, leaf header) -> logical field -------------
+METRIC_GROUP_ALIASES = {
+    "weights %": "weights",
+    "weight %": "weights",
+    "return %": "returns",
+    "contribution to return %": "contribution",
+    "attribution effect": "effects",
+}
+LEAF_FIELD_MAP: Dict[Tuple[str, str], str] = {
+    ("weights", "portfolio"): "portfolio_weight",
+    ("weights", "benchmark"): "benchmark_weight",
+    ("weights", "+/-"): "active_weight",
+    ("returns", "portfolio"): "portfolio_return",
+    ("returns", "benchmark"): "benchmark_return",
+    ("returns", "+/-"): "return_differential",
+    ("contribution", "portfolio"): "contribution_portfolio",
+    ("contribution", "benchmark"): "contribution_benchmark",
+    ("contribution", "+/-"): "contribution_active",
+    ("effects", "allocation %"): "allocation_effect",
+    ("effects", "selection %"): "selection_effect",
+    ("effects", "interaction %"): "interaction_effect",
+    ("effects", "active ret%"): "total_effect",
+    ("effects", "active ret %"): "total_effect",
+    ("effects", "active return %"): "total_effect",
+}
+# Fields required before a band is considered usable.
+REQUIRED_BAND_FIELDS = ("portfolio_weight", "total_effect")
+
+# --- Row taxonomy -------------------------------------------------------------
+GICS_SECTORS: Tuple[str, ...] = (
+    "Communication Services",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Energy",
+    "Financials",
+    "Health Care",
+    "Industrials",
+    "Information Technology",
+    "Materials",
+    "Real Estate",
+    "Utilities",
+)
+GICS_SECTOR_LOOKUP = {s.lower(): s for s in GICS_SECTORS}
+
+# Attributed non-GICS buckets: they carry effects and belong in reconciliation,
+# but they are not GICS sectors so they stay out of sector_attribution.
+ATTRIBUTED_NON_SECTOR_ROWS = ("cash", "unclassified")
+# Buckets with no attribution effects at all - their securities are never stored.
+UNATTRIBUTED_SECTION_ROWS = ("bond", "missing performance", "other")
+# Control/total rows.
+ROW_ATTRIBUTION_TOTAL = "attribution total"
+ROW_TOTAL = "total"
+ROW_REPORTED_TOTAL = "reported total"
+ROW_EXPENSE_RATIO = "expense ratio"
+ROW_RESIDUAL_PREFIX = "residual"
+CONTROL_ROWS = (
+    ROW_ATTRIBUTION_TOTAL,
+    ROW_TOTAL,
+    ROW_REPORTED_TOTAL,
+    ROW_EXPENSE_RATIO,
+)
+
+# --- Logical periods ----------------------------------------------------------
+# Resolved by matching each band's parsed date range against the calendar
+# quarter, exactly as build_quarterly_json.py resolves its period blocks.
+LOGICAL_PERIODS: Tuple[Tuple[str, int], ...] = (
+    ("selected_quarter", 0),
+    ("two_quarters_ago", 1),
+    ("three_quarters_ago", 2),
+    ("four_quarters_ago", 3),
+)
+QUARTER_TREND_SEQUENCE = tuple(key for key, _ in LOGICAL_PERIODS)  # newest first
+
+# --- Materiality / sizing -----------------------------------------------------
+# A security is stored when |total_effect| reaches this many percentage points.
+# 0.05 pp == 5 bps.
+MATERIALITY_THRESHOLD_PP = 0.05
+TOP_N_SECURITIES = 10
+TOP_N_SECTORS = 5
+CONCENTRATION_TOP_N = 5
+
+# --- Classification thresholds ------------------------------------------------
+# Active weight (pp) within this band counts as neutral rather than over/under.
+NEUTRAL_ACTIVE_WEIGHT_PP = 0.10
+# A security is "held" when its portfolio weight exceeds this.
+HELD_WEIGHT_EPSILON = 0.0
+# Driver dominance: largest |effect| vs second largest.
+DRIVER_HIGH_CONFIDENCE_RATIO = 2.00
+DRIVER_MIN_DOMINANCE_RATIO = 1.25
+
+# --- Output shaping -----------------------------------------------------------
+ROUND_PCT_DECIMALS = 4
+ROUND_BPS_DECIMALS = 1
+ROUND_SHARE_DECIMALS = 4
+
+# --- Reconciliation tolerances (debug only) -----------------------------------
+RECONCILE_TOLERANCE_PP = 0.05
+
+LOG = logging.getLogger("build_attribution_json")
+
+
+# =============================================================================
+# SECTION 2 - SHARED UTILITIES (same conventions as build_quarterly_json.py)
+# =============================================================================
+
+
+def normalize_header(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def normalize_lookup_name(value: Any) -> str:
+    """
+    Normalise a manager name for lookup keys.
+
+    Identical rules to build_quarterly_json.py: lowercase, trim, collapse
+    duplicate spaces, remove periods. Must stay in sync - this is the join key.
+    """
+    if value is None:
+        return ""
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    text = text.replace(".", "")
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def manager_slug(manager_name: str) -> str:
+    """Filesystem-safe slug derived from the normalised manager name."""
+    key = normalize_lookup_name(manager_name)
+    slug = re.sub(r"[^a-z0-9]+", "_", key).strip("_")
+    return slug or "unnamed_manager"
+
+
+def to_float(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        result = float(value)
+        return None if result != result else result
+    text = str(value).strip()
+    if not text or text in {"-", "--", "n/a", "N/A", "NA", "nan"}:
+        return None
+    text = text.replace(",", "").replace("%", "")
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+    try:
+        result = float(text)
+    except ValueError:
+        return None
+    return -result if negative else result
+
+
+def round_pct(value: Optional[float]) -> Optional[float]:
+    return None if value is None else round(value, ROUND_PCT_DECIMALS)
+
+
+def to_bps(percent_value: Optional[float]) -> Optional[float]:
+    """
+    Basis points from an already-rounded percentage.
+
+    Battle books quote basis points while the workbook is in percent. Deriving
+    bps from the rounded percent keeps `bps == pct * 100` exactly true, which is
+    a validation gate.
+    """
+    if percent_value is None:
+        return None
+    return round(percent_value * 100, ROUND_BPS_DECIMALS)
+
+
+def round_share(value: Optional[float]) -> Optional[float]:
+    return None if value is None else round(value, ROUND_SHARE_DECIMALS)
+
+
+def cell_text(worksheet: Worksheet, row: int, column: int) -> Optional[str]:
+    value = worksheet.cell(row=row, column=column).value
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def iso_or_empty(day: Optional[date]) -> str:
+    return day.isoformat() if day else ""
+
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    LOG.info("Wrote %s (%.1f KB)", path, path.stat().st_size / 1024)
+
+
+# =============================================================================
+# SECTION 3 - QUARTER RESOLUTION
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class Quarter:
+    year: int
+    quarter: int
+
+    @property
+    def label(self) -> str:
+        return QUARTER_FOLDER_TEMPLATE.format(year=self.year, quarter=self.quarter)
+
+    @property
+    def start_date(self) -> date:
+        return date(self.year, 3 * (self.quarter - 1) + 1, 1)
+
+    @property
+    def end_date(self) -> date:
+        month = 3 * self.quarter
+        return date(self.year, month, {3: 31, 6: 30, 9: 30, 12: 31}[month])
+
+    def contains(self, day: date) -> bool:
+        return self.start_date <= day <= self.end_date
+
+    def shifted(self, quarters_back: int) -> "Quarter":
+        absolute = self.year * 4 + (self.quarter - 1) - quarters_back
+        return Quarter(absolute // 4, absolute % 4 + 1)
+
+
+def parse_quarter_token(token: str) -> Optional[Quarter]:
+    for pattern in QUARTER_FOLDER_PATTERNS:
+        match = pattern.match(token)
+        if match:
+            return Quarter(int(match.group("year")), int(match.group("quarter")))
+    return None
+
+
+def discover_quarter_folders(input_root: Path) -> List[Tuple[Quarter, Path]]:
+    if not input_root.is_dir():
+        raise FileNotFoundError(
+            f"Input root folder does not exist: {input_root}\n"
+            f"       Check --input-root or the DEFAULT_INPUT_ROOT constant."
+        )
+    found: List[Tuple[Quarter, Path]] = []
+    for child in sorted(input_root.iterdir()):
+        if child.is_dir():
+            quarter = parse_quarter_token(child.name)
+            if quarter is not None:
+                found.append((quarter, child))
+    found.sort(key=lambda item: (item[0].year, item[0].quarter))
+    return found
+
+
+def resolve_quarter(input_root: Path, requested: str) -> Tuple[Quarter, Path]:
+    available = discover_quarter_folders(input_root)
+    if not available:
+        raise FileNotFoundError(
+            f"No quarter folders found under: {input_root}\n"
+            f"       Expected folders named like '2026 Q2'."
+        )
+    if requested.strip().lower() == "latest":
+        quarter, folder = available[-1]
+        LOG.info("--quarter latest resolved to '%s'", quarter.label)
+        return quarter, folder
+
+    quarter = parse_quarter_token(requested)
+    if quarter is None:
+        raise ValueError(
+            f"Could not understand --quarter {requested!r}.\n"
+            f'       Use a value like "2026 Q2" or the keyword "latest".'
+        )
+    for candidate, folder in available:
+        if candidate == quarter:
+            return quarter, folder
+    known = ", ".join(q.label for q, _ in available)
+    raise FileNotFoundError(
+        f"Quarter folder '{quarter.label}' not found under: {input_root}\n"
+        f"       Available quarters: {known}"
+    )
+
+
+# =============================================================================
+# SECTION 4 - PHASE 1 INDEX (manager linkage)
+# =============================================================================
+
+
+@dataclass
+class ManagerRef:
+    """A manager located inside a Phase 1 asset-class JSON."""
+
+    lookup_key: str
+    manager: str
+    asset_class: str
+    asset_class_key: str
+    asset_class_file: str
+    index: int
+    benchmark: str
+    excess_return: Optional[float]
+    match_type: str = "manager_name"
+
+
+@dataclass
+class Phase1Index:
+    """Everything Phase 2 needs from the Phase 1 outputs."""
+
+    documents: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    paths: Dict[str, Path] = field(default_factory=dict)
+    by_manager_name: Dict[str, List[ManagerRef]] = field(default_factory=dict)
+    by_alias: Dict[str, List[ManagerRef]] = field(default_factory=dict)
+
+    def resolve(self, lookup_key: str) -> Tuple[List[ManagerRef], str]:
+        """Primary manager-name matches win; aliases are the fallback."""
+        primary = self.by_manager_name.get(lookup_key, [])
+        if primary:
+            return primary, "manager_name"
+        return self.by_alias.get(lookup_key, []), "alias"
+
+
+def load_phase1_index(output_folder: Path) -> Phase1Index:
+    """Load the asset-class JSONs written by build_quarterly_json.py."""
+    index = Phase1Index()
+    missing: List[str] = []
+
+    for asset_class_key, filename in ASSET_CLASS_FILES:
+        path = output_folder / filename
+        if not path.is_file():
+            missing.append(filename)
+            continue
+        with path.open("r", encoding="utf-8") as handle:
+            document = json.load(handle)
+        index.documents[asset_class_key] = document
+        index.paths[asset_class_key] = path
+
+        managers = document.get("managers", [])
+        for position, manager in enumerate(managers):
+            key = normalize_lookup_name(manager.get("manager"))
+            if not key:
+                continue
+            index.by_manager_name.setdefault(key, []).append(
+                ManagerRef(
+                    lookup_key=key,
+                    manager=manager.get("manager", ""),
+                    asset_class=document.get("asset_class", ""),
+                    asset_class_key=asset_class_key,
+                    asset_class_file=filename,
+                    index=position,
+                    benchmark=manager.get("benchmark", ""),
+                    excess_return=manager.get("excess_return_cumulative"),
+                )
+            )
+
+        # Phase 1 also indexes tickers and strategy names. Keep them as a
+        # clearly-labelled fallback so a slightly different portfolio label
+        # still resolves, without letting an alias outrank a real name.
+        for alias, position in document.get("manager_lookup", {}).items():
+            if not isinstance(position, int) or not 0 <= position < len(managers):
+                continue
+            manager = managers[position]
+            if normalize_lookup_name(manager.get("manager")) == alias:
+                continue
+            index.by_alias.setdefault(alias, []).append(
+                ManagerRef(
+                    lookup_key=alias,
+                    manager=manager.get("manager", ""),
+                    asset_class=document.get("asset_class", ""),
+                    asset_class_key=asset_class_key,
+                    asset_class_file=filename,
+                    index=position,
+                    benchmark=manager.get("benchmark", ""),
+                    excess_return=manager.get("excess_return_cumulative"),
+                    match_type="alias",
+                )
+            )
+
+    if missing:
+        raise FileNotFoundError(
+            f"Phase 1 output missing from {output_folder}: {', '.join(missing)}\n"
+            f"       Run build_quarterly_json.py for this quarter first."
+        )
+    return index
+
+
+# =============================================================================
+# SECTION 5 - WORKBOOK LAYOUT DETECTION
+# =============================================================================
+
+
+@dataclass
+class PeriodBand:
+    """One 13-column attribution period band."""
+
+    label: str
+    first_column: int
+    last_column: int
+    start_date: Optional[date]
+    end_date: Optional[date]
+    field_columns: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def column_range(self) -> str:
+        return (
+            f"{get_column_letter(self.first_column)}:"
+            f"{get_column_letter(self.last_column)}"
+        )
+
+    @property
+    def width(self) -> int:
+        return self.last_column - self.first_column + 1
+
+    def describe(self) -> Dict[str, Any]:
+        return {
+            "label": self.label,
+            "columns": self.column_range,
+            "width": self.width,
+            "start_date": iso_or_empty(self.start_date),
+            "end_date": iso_or_empty(self.end_date),
+            "fields_mapped": sorted(self.field_columns),
+        }
+
+
+def parse_band_dates(label: str) -> Tuple[Optional[date], Optional[date]]:
+    """Parse '4-1-2026 - 6-30-2026' into start and end dates."""
+    match = BAND_LABEL_DATE_RANGE_RE.match(label or "")
+    if not match:
+        return None, None
+
+    def parse_one(token: str) -> Optional[date]:
+        for fmt in BAND_LABEL_DATE_FORMATS:
+            try:
+                return datetime.strptime(token, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    return parse_one(match.group("start")), parse_one(match.group("end"))
+
+
+def find_header_rows(worksheet: Worksheet) -> Tuple[int, int, int]:
+    """
+    Locate (band label row, metric group row, leaf header row).
+
+    Anchored on the leaf header row, which is the row containing the
+    'Allocation %' header. The two rows above it are the group and band rows.
+    """
+    target_leaves = {"allocation %", "selection %", "interaction %"}
+    limit = min(worksheet.max_row, HEADER_SEARCH_MAX_ROW)
+    for row in range(1, limit + 1):
+        seen = set()
+        for column in range(1, min(worksheet.max_column, 200) + 1):
+            header = normalize_header(worksheet.cell(row=row, column=column).value)
+            if header in target_leaves:
+                seen.add(header)
+                if len(seen) == len(target_leaves):
+                    break
+        if len(seen) == len(target_leaves):
+            leaf_row = row
+            return max(1, leaf_row - 2), max(1, leaf_row - 1), leaf_row
+
+    raise ValueError(
+        "Could not locate the attribution header rows (no row containing "
+        "'Allocation %', 'Selection %' and 'Interaction %'). "
+        "The export template may have changed."
+    )
+
+
+def detect_period_bands(
+    worksheet: Worksheet, band_row: int, group_row: int, leaf_row: int
+) -> List[PeriodBand]:
+    """
+    Discover every period band and map its leaf columns to logical fields.
+
+    Band starts are the populated cells of the band label row beyond the
+    identity columns. Within a band, the metric group is carried forward from
+    the merged group row and combined with the leaf header to identify a field.
+    """
+    max_column = worksheet.max_column
+    starts: List[int] = []
+    labels: Dict[int, str] = {}
+
+    for column in range(IDENTITY_COLUMN_COUNT + 1, max_column + 1):
+        text = cell_text(worksheet, band_row, column)
+        if text:
+            starts.append(column)
+            labels[column] = text
+
+    if not starts:
+        raise ValueError(
+            f"No period bands found on header row {band_row}. "
+            f"The export template may have changed."
+        )
+
+    bands: List[PeriodBand] = []
+    for position, first_column in enumerate(starts):
+        last_column = (
+            starts[position + 1] - 1 if position + 1 < len(starts) else max_column
+        )
+        label = labels[first_column]
+        start_date, end_date = parse_band_dates(label)
+
+        field_columns: Dict[str, int] = {}
+        current_group: Optional[str] = None
+        for column in range(first_column, last_column + 1):
+            group_text = normalize_header(worksheet.cell(row=group_row, column=column).value)
+            if group_text:
+                current_group = METRIC_GROUP_ALIASES.get(group_text, group_text)
+            leaf_text = normalize_header(worksheet.cell(row=leaf_row, column=column).value)
+            if not leaf_text or current_group is None:
+                continue
+            logical = LEAF_FIELD_MAP.get((current_group, leaf_text))
+            if logical and logical not in field_columns:
+                field_columns[logical] = column
+
+        bands.append(
+            PeriodBand(
+                label=label,
+                first_column=first_column,
+                last_column=last_column,
+                start_date=start_date,
+                end_date=end_date,
+                field_columns=field_columns,
+            )
+        )
+    return bands
+
+
+def select_band_for_quarter(
+    bands: Sequence[PeriodBand], quarter: Quarter
+) -> Optional[PeriodBand]:
+    """
+    Find the band covering a calendar quarter.
+
+    Date match first (the label carries an explicit range); falls back to a
+    quarter-shaped label such as 'Q2 2026' or '2026 Q2' if a future export
+    stops using date ranges. Position is never used.
+    """
+    usable = [
+        band
+        for band in bands
+        if all(f in band.field_columns for f in REQUIRED_BAND_FIELDS)
+    ]
+    for band in usable:
+        if band.start_date == quarter.start_date and band.end_date == quarter.end_date:
+            return band
+
+    wanted = {
+        f"q{quarter.quarter} {quarter.year}",
+        f"{quarter.year} q{quarter.quarter}",
+        quarter.label.lower(),
+    }
+    for band in usable:
+        if normalize_header(band.label) in wanted:
+            return band
+    return None
+
+
+# =============================================================================
+# SECTION 6 - ROW CLASSIFICATION AND EXTRACTION
+# =============================================================================
+
+ROW_KIND_GICS_SECTOR = "gics_sector"
+ROW_KIND_ATTRIBUTED_BUCKET = "attributed_bucket"      # Cash, Unclassified
+ROW_KIND_UNATTRIBUTED_BUCKET = "unattributed_bucket"  # Bond, Other, Missing Perf
+ROW_KIND_CONTROL = "control"                          # Attribution Total, Total...
+ROW_KIND_RESIDUAL = "residual"
+ROW_KIND_SECURITY = "security"
+ROW_KIND_BLANK = "blank"
+
+
+def classify_section_label(label: str) -> str:
+    lowered = normalize_header(label)
+    if lowered in GICS_SECTOR_LOOKUP:
+        return ROW_KIND_GICS_SECTOR
+    if lowered in ATTRIBUTED_NON_SECTOR_ROWS:
+        return ROW_KIND_ATTRIBUTED_BUCKET
+    if lowered in UNATTRIBUTED_SECTION_ROWS:
+        return ROW_KIND_UNATTRIBUTED_BUCKET
+    if lowered.startswith(ROW_RESIDUAL_PREFIX):
+        return ROW_KIND_RESIDUAL
+    if lowered in CONTROL_ROWS:
+        return ROW_KIND_CONTROL
+    return ROW_KIND_ATTRIBUTED_BUCKET  # unknown but effect-bearing; keep visible
+
+
+def read_band_values(
+    worksheet: Worksheet, row: int, band: PeriodBand
+) -> Dict[str, Optional[float]]:
+    """Read every mapped field of one band for one row."""
+    return {
+        name: to_float(worksheet.cell(row=row, column=column).value)
+        for name, column in band.field_columns.items()
+    }
+
+
+@dataclass
+class RawRow:
+    """One parsed grid row, before it becomes an output record."""
+
+    row: int
+    kind: str
+    section_label: Optional[str]
+    section_kind: Optional[str]
+    security_name: Optional[str]
+    ticker: Optional[str]
+    values: Dict[str, Optional[float]]
+
+
+def scan_rows(
+    worksheet: Worksheet, first_data_row: int, band: PeriodBand
+) -> Tuple[List[RawRow], Dict[str, int]]:
+    """Walk the grid once, classifying every row and reading the chosen band."""
+    rows: List[RawRow] = []
+    counts: Dict[str, int] = {}
+    current_section: Optional[str] = None
+    current_section_kind: Optional[str] = None
+
+    for row in range(first_data_row, worksheet.max_row + 1):
+        section_label = cell_text(worksheet, row, 1)
+        security_name = cell_text(worksheet, row, 2)
+        ticker = cell_text(worksheet, row, 3)
+
+        if section_label:
+            current_section = section_label
+            current_section_kind = classify_section_label(section_label)
+            kind = current_section_kind
+        elif security_name:
+            kind = ROW_KIND_SECURITY
+        else:
+            counts[ROW_KIND_BLANK] = counts.get(ROW_KIND_BLANK, 0) + 1
+            continue
+
+        counts[kind] = counts.get(kind, 0) + 1
+        rows.append(
+            RawRow(
+                row=row,
+                kind=kind,
+                section_label=section_label or current_section,
+                section_kind=current_section_kind,
+                security_name=security_name,
+                ticker=ticker,
+                values=read_band_values(worksheet, row, band),
+            )
+        )
+    return rows, counts
+
+
+# =============================================================================
+# SECTION 7 - DERIVED CLASSIFICATION (driver, position, reason)
+# =============================================================================
+
+
+def resolve_driver(
+    allocation: Optional[float],
+    selection: Optional[float],
+    interaction: Optional[float],
+) -> Tuple[str, str]:
+    """
+    Decide which effect drove a result, by absolute magnitude.
+
+    Returns (driver, confidence). When no single effect clearly dominates the
+    driver is 'mixed', so the commentary agent never claims a driver the numbers
+    do not support.
+    """
+    candidates = [
+        ("allocation", abs(allocation) if allocation is not None else None),
+        ("selection", abs(selection) if selection is not None else None),
+        ("interaction", abs(interaction) if interaction is not None else None),
+    ]
+    present = [(name, value) for name, value in candidates if value is not None]
+    if not present:
+        return "mixed", "insufficient_data"
+
+    present.sort(key=lambda item: item[1], reverse=True)
+    top_name, top_value = present[0]
+    if top_value == 0:
+        return "mixed", "low"
+
+    runner_up = present[1][1] if len(present) > 1 else 0.0
+    ratio = float("inf") if runner_up == 0 else top_value / runner_up
+
+    if ratio >= DRIVER_HIGH_CONFIDENCE_RATIO:
+        return top_name, "high"
+    if ratio >= DRIVER_MIN_DOMINANCE_RATIO:
+        return top_name, "medium"
+    return "mixed", "low"
+
+
+def resolve_position(
+    portfolio_weight: Optional[float], active_weight: Optional[float]
+) -> str:
+    """overweight / underweight / neutral / not_held."""
+    if portfolio_weight is None or portfolio_weight <= HELD_WEIGHT_EPSILON:
+        return "not_held"
+    if active_weight is None:
+        return "neutral"
+    if abs(active_weight) < NEUTRAL_ACTIVE_WEIGHT_PP:
+        return "neutral"
+    return "overweight" if active_weight > 0 else "underweight"
+
+
+def resolve_security_reason(
+    held: bool,
+    active_weight: Optional[float],
+    security_return: Optional[float],
+    benchmark_total_return: Optional[float],
+    total_effect: Optional[float],
+) -> str:
+    """
+    Turn a security row into a phrase the commentary agent can use safely.
+
+    The held / not-held split is the point of this enum: describing a benchmark
+    constituent the manager never owned as a "holding" is the most damaging
+    error attribution commentary can make.
+    """
+    outperformed: Optional[bool] = None
+    if security_return is not None and benchmark_total_return is not None:
+        outperformed = security_return > benchmark_total_return
+
+    if not held:
+        if outperformed is None:
+            return "mixed"
+        return "not_held_outperformer" if outperformed else "not_held_underperformer"
+
+    if active_weight is None or abs(active_weight) < NEUTRAL_ACTIVE_WEIGHT_PP:
+        if total_effect is None:
+            return "mixed"
+        return "held_positive_selection" if total_effect > 0 else "held_negative_selection"
+
+    if outperformed is None:
+        return "mixed"
+    if active_weight > 0:
+        return "overweight_outperformer" if outperformed else "overweight_underperformer"
+    return "underweight_outperformer" if outperformed else "underweight_underperformer"
+
+
+# =============================================================================
+# SECTION 8 - BATTLE-BOOK SECTION BUILDERS
+# -----------------------------------------------------------------------------
+# Everything in this section feeds the manager-facing JSON. It answers "why did
+# this manager outperform or underperform" and deliberately carries no
+# reconciliation, residual, coverage or expense language - those belong to
+# SECTION 9 and the debug report only.
+# =============================================================================
+
+
+def build_attribution_summary(total_values: Dict[str, Optional[float]]) -> Dict[str, Any]:
+    allocation = round_pct(total_values.get("allocation_effect"))
+    selection = round_pct(total_values.get("selection_effect"))
+    interaction = round_pct(total_values.get("interaction_effect"))
+    total_active = round_pct(total_values.get("total_effect"))
+    driver, confidence = resolve_driver(allocation, selection, interaction)
+    return {
+        "allocation_effect": allocation,
+        "allocation_effect_bps": to_bps(allocation),
+        "selection_effect": selection,
+        "selection_effect_bps": to_bps(selection),
+        "interaction_effect": interaction,
+        "interaction_effect_bps": to_bps(interaction),
+        "total_active_return": total_active,
+        "total_active_return_bps": to_bps(total_active),
+        "primary_driver": driver,
+        "driver_confidence": confidence,
+    }
+
+
+def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, Any]]:
+    """One record per GICS sector, ranked by absolute total effect."""
+    records: List[Dict[str, Any]] = []
+    for raw in sector_rows:
+        values = raw.values
+        allocation = round_pct(values.get("allocation_effect"))
+        selection = round_pct(values.get("selection_effect"))
+        interaction = round_pct(values.get("interaction_effect"))
+        total = round_pct(values.get("total_effect"))
+        portfolio_weight = round_pct(values.get("portfolio_weight"))
+        active_weight = round_pct(values.get("active_weight"))
+        driver, _ = resolve_driver(allocation, selection, interaction)
+
+        records.append(
+            {
+                "sector": GICS_SECTOR_LOOKUP.get(
+                    normalize_header(raw.section_label), raw.section_label
+                ),
+                "portfolio_weight": portfolio_weight,
+                "benchmark_weight": round_pct(values.get("benchmark_weight")),
+                "active_weight": active_weight,
+                "portfolio_return": round_pct(values.get("portfolio_return")),
+                "benchmark_return": round_pct(values.get("benchmark_return")),
+                "return_differential": round_pct(values.get("return_differential")),
+                "allocation_effect": allocation,
+                "allocation_effect_bps": to_bps(allocation),
+                "selection_effect": selection,
+                "selection_effect_bps": to_bps(selection),
+                "interaction_effect": interaction,
+                "interaction_effect_bps": to_bps(interaction),
+                "total_effect": total,
+                "total_effect_bps": to_bps(total),
+                "position": resolve_position(portfolio_weight, active_weight),
+                "driver": driver,
+                "effect_rank": 0,
+            }
+        )
+
+    ranked = sorted(
+        records,
+        key=lambda record: abs(record["total_effect"] or 0.0),
+        reverse=True,
+    )
+    for position, record in enumerate(ranked, start=1):
+        record["effect_rank"] = position
+    return records
+
+
+def build_security_records(
+    security_rows: Sequence[RawRow], benchmark_total_return: Optional[float]
+) -> List[Dict[str, Any]]:
+    """Every security inside a GICS sector, before materiality filtering."""
+    records: List[Dict[str, Any]] = []
+    for raw in security_rows:
+        values = raw.values
+        portfolio_weight = round_pct(values.get("portfolio_weight"))
+        benchmark_weight = round_pct(values.get("benchmark_weight"))
+        active_weight = round_pct(values.get("active_weight"))
+        portfolio_return = round_pct(values.get("portfolio_return"))
+        benchmark_return = round_pct(values.get("benchmark_return"))
+        selection = round_pct(values.get("selection_effect"))
+        # Securities carry selection only; Morningstar repeats it as Active Ret%.
+        total = round_pct(values.get("total_effect"))
+        if total is None:
+            total = selection
+        if selection is None:
+            selection = total
+
+        held = portfolio_weight is not None and portfolio_weight > HELD_WEIGHT_EPSILON
+        security_return = portfolio_return if held and portfolio_return is not None else benchmark_return
+
+        records.append(
+            {
+                "security": raw.security_name,
+                "ticker": raw.ticker or "",
+                "sector": GICS_SECTOR_LOOKUP.get(
+                    normalize_header(raw.section_label), raw.section_label
+                ),
+                "held": held,
+                "portfolio_weight": portfolio_weight,
+                "benchmark_weight": benchmark_weight,
+                "active_weight": active_weight,
+                "portfolio_return": portfolio_return,
+                "benchmark_return": benchmark_return,
+                "contribution_portfolio": round_pct(values.get("contribution_portfolio")),
+                "contribution_benchmark": round_pct(values.get("contribution_benchmark")),
+                "contribution_active": round_pct(values.get("contribution_active")),
+                "selection_effect": selection,
+                "selection_effect_bps": to_bps(selection),
+                "total_effect": total,
+                "total_effect_bps": to_bps(total),
+                "reason": resolve_security_reason(
+                    held, active_weight, security_return, benchmark_total_return, total
+                ),
+                "source_row": raw.row,
+            }
+        )
+    return records
+
+
+def filter_material_securities(
+    securities: Sequence[Dict[str, Any]], keep_names: Iterable[Tuple[str, str]]
+) -> List[Dict[str, Any]]:
+    """
+    Keep securities whose effect reaches the materiality threshold.
+
+    Names appearing in the top contributor / detractor lists are kept regardless,
+    so those lists can never reference a security absent from the file.
+    """
+    protected = set(keep_names)
+    kept: List[Dict[str, Any]] = []
+    for record in securities:
+        effect = record.get("total_effect")
+        identity = (record.get("security") or "", record.get("ticker") or "")
+        material = effect is not None and abs(effect) >= MATERIALITY_THRESHOLD_PP
+        if material or identity in protected:
+            kept.append(record)
+    kept.sort(key=lambda record: abs(record.get("total_effect") or 0.0), reverse=True)
+    return kept
+
+
+def build_top_movers(
+    securities: Sequence[Dict[str, Any]], contributors: bool
+) -> List[Dict[str, Any]]:
+    """Top N contributors (positive effect) or detractors (negative effect)."""
+    pool = [
+        record
+        for record in securities
+        if record.get("total_effect") is not None
+        and (record["total_effect"] > 0 if contributors else record["total_effect"] < 0)
+    ]
+    pool.sort(key=lambda record: record["total_effect"], reverse=contributors)
+
+    movers: List[Dict[str, Any]] = []
+    for position, record in enumerate(pool[:TOP_N_SECURITIES], start=1):
+        movers.append(
+            {
+                "rank": position,
+                "security": record["security"],
+                "ticker": record["ticker"],
+                "sector": record["sector"],
+                "held": record["held"],
+                "total_effect": record["total_effect"],
+                "total_effect_bps": record["total_effect_bps"],
+                "active_weight": record["active_weight"],
+                "portfolio_return": record["portfolio_return"],
+                "benchmark_return": record["benchmark_return"],
+                "reason": record["reason"],
+            }
+        )
+    return movers
+
+
+def build_sector_rankings(sectors: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pre-sorted sector leaders and laggards, in basis points."""
+
+    def by(field_name: str, best: bool) -> List[Dict[str, Any]]:
+        pool = [s for s in sectors if s.get(field_name) is not None]
+        pool.sort(key=lambda s: s[field_name], reverse=best)
+        return pool
+
+    def brief(record: Optional[Dict[str, Any]], field_name: str) -> Optional[Dict[str, Any]]:
+        if record is None:
+            return None
+        return {
+            "sector": record["sector"],
+            field_name: record[field_name],
+            "position": record["position"],
+        }
+
+    contributing = [
+        {
+            "sector": s["sector"],
+            "total_effect_bps": s["total_effect_bps"],
+            "driver": s["driver"],
+            "position": s["position"],
+        }
+        for s in by("total_effect_bps", True)[:TOP_N_SECTORS]
+        if (s["total_effect_bps"] or 0) > 0
+    ]
+    detracting = [
+        {
+            "sector": s["sector"],
+            "total_effect_bps": s["total_effect_bps"],
+            "driver": s["driver"],
+            "position": s["position"],
+        }
+        for s in by("total_effect_bps", False)[:TOP_N_SECTORS]
+        if (s["total_effect_bps"] or 0) < 0
+    ]
+
+    selection_ranked = by("selection_effect_bps", True)
+    allocation_ranked = by("allocation_effect_bps", True)
+
+    return {
+        "top_contributing_sectors": contributing,
+        "top_detracting_sectors": detracting,
+        "strongest_sector_selection": brief(
+            selection_ranked[0] if selection_ranked else None, "selection_effect_bps"
+        ),
+        "weakest_sector_selection": brief(
+            selection_ranked[-1] if selection_ranked else None, "selection_effect_bps"
+        ),
+        "strongest_sector_allocation": brief(
+            allocation_ranked[0] if allocation_ranked else None, "allocation_effect_bps"
+        ),
+        "weakest_sector_allocation": brief(
+            allocation_ranked[-1] if allocation_ranked else None, "allocation_effect_bps"
+        ),
+    }
+
+
+def build_period_record(
+    band: Optional[PeriodBand], values: Optional[Dict[str, Optional[float]]]
+) -> Dict[str, Any]:
+    """One entry of attribution_periods."""
+    if band is None or values is None:
+        return {
+            "label": "",
+            "period_start_date": "",
+            "period_end_date": "",
+            "allocation_effect": None,
+            "allocation_effect_bps": None,
+            "selection_effect": None,
+            "selection_effect_bps": None,
+            "interaction_effect": None,
+            "interaction_effect_bps": None,
+            "total_active_return": None,
+            "total_active_return_bps": None,
+            "available": False,
+        }
+    allocation = round_pct(values.get("allocation_effect"))
+    selection = round_pct(values.get("selection_effect"))
+    interaction = round_pct(values.get("interaction_effect"))
+    total = round_pct(values.get("total_effect"))
+    return {
+        "label": band.label,
+        "period_start_date": iso_or_empty(band.start_date),
+        "period_end_date": iso_or_empty(band.end_date),
+        "allocation_effect": allocation,
+        "allocation_effect_bps": to_bps(allocation),
+        "selection_effect": selection,
+        "selection_effect_bps": to_bps(selection),
+        "interaction_effect": interaction,
+        "interaction_effect_bps": to_bps(interaction),
+        "total_active_return": total,
+        "total_active_return_bps": to_bps(total),
+        "available": total is not None,
+    }
+
+
+def build_attribution_trends(periods: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Streaks and driver persistence across the quarter chain.
+
+    Streaks walk newest to oldest and stop at the first quarter that breaks the
+    run or has no data, matching the convention used by performance_trends in
+    Phase 1.
+    """
+
+    def effect_of(period_key: str, field_name: str) -> Optional[float]:
+        return periods.get(period_key, {}).get(field_name)
+
+    def streak(field_name: str, negative: bool) -> int:
+        count = 0
+        for period_key in QUARTER_TREND_SEQUENCE:
+            value = effect_of(period_key, field_name)
+            if value is None:
+                break
+            if (value < 0) if negative else (value > 0):
+                count += 1
+            else:
+                break
+        return count
+
+    drivers: Dict[str, str] = {}
+    for period_key in QUARTER_TREND_SEQUENCE:
+        record = periods.get(period_key, {})
+        if not record.get("available"):
+            continue
+        driver, _ = resolve_driver(
+            record.get("allocation_effect"),
+            record.get("selection_effect"),
+            record.get("interaction_effect"),
+        )
+        drivers[period_key] = driver
+
+    totals = {"allocation": 0.0, "selection": 0.0, "interaction": 0.0}
+    for period_key in QUARTER_TREND_SEQUENCE:
+        record = periods.get(period_key, {})
+        if not record.get("available"):
+            continue
+        for name, field_name in (
+            ("allocation", "allocation_effect"),
+            ("selection", "selection_effect"),
+            ("interaction", "interaction_effect"),
+        ):
+            value = record.get(field_name)
+            if value is not None:
+                totals[name] += abs(value)
+
+    if drivers:
+        trailing_driver, _ = resolve_driver(
+            totals["allocation"], totals["selection"], totals["interaction"]
+        )
+    else:
+        trailing_driver = "mixed"
+
+    distinct = {d for d in drivers.values() if d != "mixed"}
+    if len(drivers) < 2:
+        stability = "insufficient_data"
+    elif len(distinct) <= 1:
+        stability = "consistent"
+    else:
+        stability = "variable"
+
+    return {
+        "consecutive_quarters_selection_negative": streak("selection_effect", True),
+        "consecutive_quarters_selection_positive": streak("selection_effect", False),
+        "consecutive_quarters_allocation_negative": streak("allocation_effect", True),
+        "consecutive_quarters_allocation_positive": streak("allocation_effect", False),
+        "dominant_driver_selected_quarter": drivers.get("selected_quarter", "mixed"),
+        "dominant_driver_trailing_4_quarters": trailing_driver,
+        "driver_stability": stability,
+        "quarters_available": len(drivers),
+    }
+
+
+def build_concentration(
+    securities: Sequence[Dict[str, Any]], sectors: Sequence[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Concentrated or broad-based?
+
+    Computed over the FULL security universe inside GICS sectors, before
+    materiality filtering, so the denominators are honest.
+    """
+    effects = [
+        record["total_effect"]
+        for record in securities
+        if record.get("total_effect") is not None
+    ]
+    positives = sorted((e for e in effects if e > 0), reverse=True)
+    negatives = sorted((e for e in effects if e < 0))
+    absolutes = sorted((abs(e) for e in effects), reverse=True)
+
+    def share(part: float, whole: float) -> Optional[float]:
+        return round_share(part / whole) if whole else None
+
+    sector_effects = [
+        s["total_effect"] for s in sectors if s.get("total_effect") is not None
+    ]
+
+    return {
+        "top_5_contributors_share_of_positive_effect": share(
+            sum(positives[:CONCENTRATION_TOP_N]), sum(positives)
+        ),
+        "top_5_detractors_share_of_negative_effect": share(
+            abs(sum(negatives[:CONCENTRATION_TOP_N])), abs(sum(negatives))
+        ),
+        "top_5_absolute_effect_share": share(
+            sum(absolutes[:CONCENTRATION_TOP_N]), sum(absolutes)
+        ),
+        "number_of_positive_securities": len(positives),
+        "number_of_negative_securities": len(negatives),
+        "number_of_sectors_positive": sum(1 for e in sector_effects if e > 0),
+        "number_of_sectors_negative": sum(1 for e in sector_effects if e < 0),
+    }
+
+
+# =============================================================================
+# SECTION 9 - RECONCILIATION (DEBUG / INTERNAL QA ONLY)
+# -----------------------------------------------------------------------------
+# None of this reaches the battle-book JSON. It exists so a build can be trusted
+# without the commentary agent ever being tempted to write about residuals,
+# coverage or expense ratios.
+# =============================================================================
+
+
+def build_reconciliation(
+    sectors: Sequence[Dict[str, Any]],
+    securities: Sequence[Dict[str, Any]],
+    bucket_rows: Sequence[RawRow],
+    total_values: Dict[str, Optional[float]],
+    control_values: Dict[str, Dict[str, Optional[float]]],
+    manager_ref: Optional[ManagerRef],
+) -> Dict[str, Any]:
+    sector_sum = sum(s["total_effect"] or 0.0 for s in sectors)
+    bucket_sum = sum(row.values.get("total_effect") or 0.0 for row in bucket_rows)
+    security_sum = sum(s["total_effect"] or 0.0 for s in securities)
+
+    attribution_total = total_values.get("total_effect")
+    selection_total = total_values.get("selection_effect")
+    coverage = total_values.get("portfolio_weight")
+
+    reported = control_values.get(ROW_REPORTED_TOTAL, {})
+    expense = control_values.get(ROW_EXPENSE_RATIO, {})
+    residual = control_values.get("residual", {})
+
+    reported_portfolio = reported.get("portfolio_return")
+    reported_benchmark = reported.get("benchmark_return")
+    reported_excess = (
+        reported_portfolio - reported_benchmark
+        if reported_portfolio is not None and reported_benchmark is not None
+        else None
+    )
+
+    def close(left: Optional[float], right: Optional[float]) -> Optional[bool]:
+        if left is None or right is None:
+            return None
+        return abs(left - right) <= RECONCILE_TOLERANCE_PP
+
+    return {
+        "sector_total_effect_sum_gics_only": round_pct(sector_sum),
+        "attributed_bucket_effect_sum": round_pct(bucket_sum),
+        "sector_plus_bucket_sum": round_pct(sector_sum + bucket_sum),
+        "attribution_total_active_return": round_pct(attribution_total),
+        "sector_sum_matches_attribution_total": close(
+            sector_sum + bucket_sum, attribution_total
+        ),
+        "security_total_effect_sum": round_pct(security_sum),
+        "sector_level_selection_total": round_pct(selection_total),
+        "security_sum_matches_selection_total": close(security_sum, selection_total),
+        "attribution_coverage_percent": round_pct(coverage),
+        "reported_portfolio_return": round_pct(reported_portfolio),
+        "reported_benchmark_return": round_pct(reported_benchmark),
+        "reported_excess_return": round_pct(reported_excess),
+        "phase1_excess_return": manager_ref.excess_return if manager_ref else None,
+        "attribution_vs_reported_gap": round_pct(
+            reported_excess - attribution_total
+            if reported_excess is not None and attribution_total is not None
+            else None
+        ),
+        "expense_ratio": round_pct(expense.get("portfolio_return")),
+        "residual_portfolio": round_pct(residual.get("portfolio_return")),
+        "residual_benchmark": round_pct(residual.get("benchmark_return")),
+        "attribution_benchmark_return": round_pct(total_values.get("benchmark_return")),
+        "note": (
+            "Internal QA only. None of these values appear in the battle-book "
+            "attribution JSON by design."
+        ),
+    }
+
+
+# =============================================================================
+# SECTION 10 - WORKBOOK PARSING
+# =============================================================================
+
+
+def find_sheet(workbook, aliases: Sequence[str]) -> Optional[Worksheet]:
+    for name in workbook.sheetnames:
+        if normalize_header(name) in aliases:
+            return workbook[name]
+    return None
+
+
+def parse_template_metadata(worksheet: Optional[Worksheet]) -> Dict[str, Any]:
+    """Read the Template sheet manifest: portfolio, benchmark, model, dates."""
+    metadata: Dict[str, Any] = {
+        "name": "",
+        "portfolio": "",
+        "benchmark": "",
+        "currency": "",
+        "exported_at": "",
+        "classification": "",
+        "model": "",
+    }
+    if worksheet is None:
+        return metadata
+
+    for row in range(1, min(worksheet.max_row, 60) + 1):
+        for column in range(1, min(worksheet.max_column, 6) + 1):
+            text = cell_text(worksheet, row, column)
+            if not text:
+                continue
+            if ":" in text:
+                label, _, value = text.partition(":")
+                key = METADATA_KEYS.get(normalize_header(label))
+                if key and not metadata[key]:
+                    metadata[key] = value.strip()
+            match = CLASSIFICATION_HINT_RE.match(text)
+            if match and not metadata["classification"]:
+                candidate = match.group("value")
+                if "sector" in candidate.lower() or "industry" in candidate.lower():
+                    metadata["classification"] = candidate
+            if not metadata["model"] and ATTRIBUTION_MODEL_RE.search(text):
+                metadata["model"] = "three_factor_brinson"
+    return metadata
+
+
+def parse_attribution_workbook(
+    path: Path, quarter: Quarter
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Parse one attribution workbook into its raw building blocks.
+
+    Returns (parsed, debug). The caller links the manager and assembles the
+    output document; this function only reads the workbook.
+    """
+    LOG.info("Parsing attribution workbook: %s", path.name)
+    warnings: List[str] = []
+
+    workbook = openpyxl.load_workbook(path, data_only=True)
+    try:
+        sheet_names = list(workbook.sheetnames)
+        template_sheet = find_sheet(workbook, TEMPLATE_SHEET_ALIASES)
+        attribution_sheet = find_sheet(workbook, ATTRIBUTION_SHEET_ALIASES)
+        if attribution_sheet is None:
+            raise ValueError(
+                f"No 'Attribution' worksheet found in {path.name}; "
+                f"sheets present: {sheet_names}"
+            )
+        if template_sheet is None:
+            warnings.append(
+                f"{path.name}: no 'Template' worksheet; metadata will be read "
+                f"from the Attribution sheet header instead."
+            )
+
+        metadata = parse_template_metadata(template_sheet)
+        # Rows 1-5 of the Attribution sheet repeat the same manifest.
+        if not metadata["portfolio"]:
+            fallback = parse_template_metadata(attribution_sheet)
+            for key, value in fallback.items():
+                if value and not metadata[key]:
+                    metadata[key] = value
+
+        band_row, group_row, leaf_row = find_header_rows(attribution_sheet)
+        first_data_row = leaf_row + 1
+        bands = detect_period_bands(attribution_sheet, band_row, group_row, leaf_row)
+
+        selected_band = select_band_for_quarter(bands, quarter)
+        if selected_band is None:
+            available = "; ".join(
+                f"{b.label} [{iso_or_empty(b.start_date)} -> {iso_or_empty(b.end_date)}]"
+                for b in bands
+            )
+            raise ValueError(
+                f"{path.name}: no attribution period band matches {quarter.label} "
+                f"({quarter.start_date} - {quarter.end_date}).\n"
+                f"       Bands present: {available}"
+            )
+
+        missing_fields = [
+            name
+            for name in ("allocation_effect", "selection_effect", "interaction_effect")
+            if name not in selected_band.field_columns
+        ]
+        if missing_fields:
+            warnings.append(
+                f"{path.name}: band {selected_band.label!r} is missing columns for "
+                f"{missing_fields}; those effects will be null."
+            )
+        if selected_band.width != EXPECTED_BAND_WIDTH:
+            warnings.append(
+                f"{path.name}: band {selected_band.label!r} is {selected_band.width} "
+                f"columns wide, expected {EXPECTED_BAND_WIDTH}. Columns were mapped "
+                f"by header text, so this is informational."
+            )
+
+        rows, row_counts = scan_rows(attribution_sheet, first_data_row, selected_band)
+
+        # Split the scan into the pieces the builders need.
+        sector_rows = [r for r in rows if r.kind == ROW_KIND_GICS_SECTOR]
+        bucket_rows = [r for r in rows if r.kind == ROW_KIND_ATTRIBUTED_BUCKET]
+        security_rows_all = [r for r in rows if r.kind == ROW_KIND_SECURITY]
+        security_rows_in_sectors = [
+            r for r in security_rows_all if r.section_kind == ROW_KIND_GICS_SECTOR
+        ]
+
+        control_values: Dict[str, Dict[str, Optional[float]]] = {}
+        for raw in rows:
+            if raw.kind in (ROW_KIND_CONTROL, ROW_KIND_RESIDUAL):
+                label = normalize_header(raw.section_label)
+                key = "residual" if raw.kind == ROW_KIND_RESIDUAL else label
+                control_values.setdefault(key, raw.values)
+
+        total_values = control_values.get(ROW_ATTRIBUTION_TOTAL)
+        if total_values is None:
+            raise ValueError(
+                f"{path.name}: no 'Attribution Total' row found. "
+                f"The export template may have changed."
+            )
+
+        found_sectors = {
+            GICS_SECTOR_LOOKUP.get(normalize_header(r.section_label)) for r in sector_rows
+        }
+        missing_sectors = [s for s in GICS_SECTORS if s not in found_sectors]
+        if missing_sectors:
+            warnings.append(
+                f"{path.name}: GICS sectors absent from the workbook: {missing_sectors}."
+            )
+
+        # Prior quarters, resolved by date the same way as the selected quarter.
+        period_bands: Dict[str, Optional[PeriodBand]] = {}
+        period_values: Dict[str, Optional[Dict[str, Optional[float]]]] = {}
+        period_debug: Dict[str, Any] = {}
+        total_row_number = next(
+            (
+                r.row
+                for r in rows
+                if normalize_header(r.section_label) == ROW_ATTRIBUTION_TOTAL
+                and r.kind == ROW_KIND_CONTROL
+            ),
+            None,
+        )
+        for period_key, offset in LOGICAL_PERIODS:
+            target = quarter.shifted(offset)
+            band = (
+                selected_band if offset == 0 else select_band_for_quarter(bands, target)
+            )
+            period_bands[period_key] = band
+            if band is not None and total_row_number is not None:
+                period_values[period_key] = read_band_values(
+                    attribution_sheet, total_row_number, band
+                )
+            else:
+                period_values[period_key] = None
+                if band is None:
+                    warnings.append(
+                        f"{path.name}: no attribution band for {target.label} "
+                        f"('{period_key}'); that period will be null."
+                    )
+            period_debug[period_key] = {
+                "target_quarter": target.label,
+                "workbook_band": band.label if band else None,
+                "columns": band.column_range if band else None,
+                "resolved_by": "matched_by_date" if band else "not_found",
+            }
+
+        parsed = {
+            "metadata": metadata,
+            "selected_band": selected_band,
+            "sector_rows": sector_rows,
+            "bucket_rows": bucket_rows,
+            "security_rows_in_sectors": security_rows_in_sectors,
+            "security_rows_all": security_rows_all,
+            "total_values": total_values,
+            "control_values": control_values,
+            "period_bands": period_bands,
+            "period_values": period_values,
+            "warnings": warnings,
+        }
+
+        debug = {
+            "file": path.name,
+            "absolute_path": str(path),
+            "worksheets_found": sheet_names,
+            "worksheet_parsed": attribution_sheet.title,
+            "template_metadata": metadata,
+            "header_rows": {
+                "band_label_row": band_row,
+                "metric_group_row": group_row,
+                "leaf_header_row": leaf_row,
+                "first_data_row": first_data_row,
+            },
+            "period_bands_detected": [band.describe() for band in bands],
+            "selected_period_band": selected_band.describe(),
+            "logical_period_map": period_debug,
+            "logical_period_map_summary": [
+                f"{key} -> {entry['workbook_band'] or 'NOT FOUND'}"
+                for key, entry in period_debug.items()
+            ],
+            "row_classification_counts": row_counts,
+            "sector_rows_found": len(sector_rows),
+            "sector_names_found": sorted(x for x in found_sectors if x),
+            "sectors_missing": missing_sectors,
+            "attributed_bucket_rows": [
+                {
+                    "label": r.section_label,
+                    "row": r.row,
+                    "total_effect": round_pct(r.values.get("total_effect")),
+                    "portfolio_weight": round_pct(r.values.get("portfolio_weight")),
+                }
+                for r in bucket_rows
+            ],
+            "security_rows_scanned_total": len(security_rows_all),
+            "security_rows_in_gics_sectors": len(security_rows_in_sectors),
+            "security_rows_outside_gics_sectors": len(security_rows_all)
+            - len(security_rows_in_sectors),
+            "warnings": warnings,
+        }
+        return parsed, debug
+    finally:
+        workbook.close()
+
+
+# =============================================================================
+# SECTION 11 - MANAGER LINKAGE AND DOCUMENT ASSEMBLY
+# =============================================================================
+
+
+def link_manager(
+    portfolio_name: str, phase1: Phase1Index
+) -> Tuple[Optional[ManagerRef], Optional[str]]:
+    """
+    Strict normalised match of the Template 'Portfolio:' value to a manager.
+
+    No fuzzy matching. Anything other than exactly one match is an error: a
+    silent mis-link would attach one manager's attribution to another, which is
+    the worst failure this pipeline can produce.
+    """
+    lookup_key = normalize_lookup_name(portfolio_name)
+    if not lookup_key:
+        return None, "Template 'Portfolio:' value is empty; cannot link to a manager."
+
+    matches, match_type = phase1.resolve(lookup_key)
+    if not matches:
+        return None, (
+            f"No manager matches portfolio {portfolio_name!r} "
+            f"(normalised {lookup_key!r}) in any asset-class JSON."
+        )
+    if len(matches) > 1:
+        where = ", ".join(f"{m.asset_class_file}[{m.index}]" for m in matches)
+        return None, (
+            f"Portfolio {portfolio_name!r} matched {len(matches)} managers ({where}); "
+            f"refusing to guess."
+        )
+
+    match = matches[0]
+    match.match_type = match_type
+    return match, None
+
+
+def build_attribution_document(
+    parsed: Dict[str, Any],
+    manager_ref: ManagerRef,
+    quarter: Quarter,
+    path: Path,
+    generated_at: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+    """Assemble the battle-book-facing attribution JSON for one manager."""
+    warnings: List[str] = []
+    metadata = parsed["metadata"]
+    band: PeriodBand = parsed["selected_band"]
+    total_values = parsed["total_values"]
+
+    benchmark_total_return = total_values.get("benchmark_return")
+
+    sectors = build_sector_attribution(parsed["sector_rows"])
+    all_securities = build_security_records(
+        parsed["security_rows_in_sectors"], benchmark_total_return
+    )
+
+    top_contributors = build_top_movers(all_securities, contributors=True)
+    top_detractors = build_top_movers(all_securities, contributors=False)
+    protected = [
+        (record["security"] or "", record["ticker"] or "")
+        for record in top_contributors + top_detractors
+    ]
+    stored_securities = filter_material_securities(all_securities, protected)
+    for record in stored_securities:
+        record.pop("source_row", None)
+
+    periods = {
+        period_key: build_period_record(
+            parsed["period_bands"].get(period_key),
+            parsed["period_values"].get(period_key),
+        )
+        for period_key, _ in LOGICAL_PERIODS
+    }
+
+    document = {
+        "manager": manager_ref.manager,
+        "manager_lookup_key": manager_ref.lookup_key,
+        "asset_class": manager_ref.asset_class,
+        "asset_class_key": manager_ref.asset_class_key,
+        "benchmark": metadata.get("benchmark") or manager_ref.benchmark,
+        "period": quarter.label,
+        "period_start_date": quarter.start_date.isoformat(),
+        "period_end_date": quarter.end_date.isoformat(),
+        "period_band_label": band.label,
+        "model": metadata.get("model") or "three_factor_brinson",
+        "classification": metadata.get("classification") or "GICS Sector",
+        "lineage": {
+            "source_file": path.name,
+            "worksheet": "Attribution",
+            "exported_at": metadata.get("exported_at", ""),
+            "generated_at": generated_at,
+        },
+        "attribution_summary": build_attribution_summary(total_values),
+        "sector_attribution": sectors,
+        "security_attribution": stored_securities,
+        "security_attribution_meta": {
+            "securities_in_gics_sectors": len(all_securities),
+            "securities_held": sum(1 for s in all_securities if s["held"]),
+            "securities_stored": len(stored_securities),
+            "materiality_threshold_pp": MATERIALITY_THRESHOLD_PP,
+            "materiality_threshold_bps": round(MATERIALITY_THRESHOLD_PP * 100, 1),
+            "note": (
+                "Securities carry a selection effect only; allocation and "
+                "interaction exist at sector level. `held` distinguishes portfolio "
+                "holdings from benchmark constituents the manager did not own."
+            ),
+        },
+        "top_contributors": top_contributors,
+        "top_detractors": top_detractors,
+        "sector_rankings": build_sector_rankings(sectors),
+        "attribution_periods": periods,
+        "attribution_trends": build_attribution_trends(periods),
+        "concentration": build_concentration(all_securities, sectors),
+    }
+
+    # Benchmark agreement is a linkage check, not commentary material.
+    template_benchmark = (metadata.get("benchmark") or "").strip()
+    if (
+        template_benchmark
+        and manager_ref.benchmark
+        and normalize_lookup_name(template_benchmark)
+        != normalize_lookup_name(manager_ref.benchmark)
+    ):
+        warnings.append(
+            f"{path.name}: Template benchmark {template_benchmark!r} does not match "
+            f"the Phase 1 benchmark {manager_ref.benchmark!r} for "
+            f"{manager_ref.manager!r}."
+        )
+
+    reconciliation = build_reconciliation(
+        sectors,
+        all_securities,
+        parsed["bucket_rows"],
+        total_values,
+        parsed["control_values"],
+        manager_ref,
+    )
+    return document, reconciliation, warnings
+
+
+# =============================================================================
+# SECTION 12 - PATCHING PHASE 1 ASSET-CLASS FILES
+# =============================================================================
+
+
+def patch_asset_class_files(
+    phase1: Phase1Index,
+    linked: Dict[str, Dict[str, Any]],
+    output_folder: Path,
+) -> Dict[str, Any]:
+    """
+    Add attribution pointers to the Phase 1 asset-class JSONs.
+
+    Additive and idempotent: every manager gains `attribution_available` and
+    `attribution_path`, and each document gains an `attribution_index`. Nothing
+    else is touched, so Phase 1 output is not degraded.
+    """
+    summary: Dict[str, Any] = {}
+
+    for asset_class_key, filename in ASSET_CLASS_FILES:
+        document = phase1.documents.get(asset_class_key)
+        path = phase1.paths.get(asset_class_key)
+        if document is None or path is None:
+            continue
+
+        available_keys: List[str] = []
+        slugs: Dict[str, str] = {}
+        patched = 0
+
+        for manager in document.get("managers", []):
+            key = normalize_lookup_name(manager.get("manager"))
+            entry = linked.get(key)
+            if entry is not None and entry["asset_class_key"] == asset_class_key:
+                manager["attribution_available"] = True
+                manager["attribution_path"] = entry["relative_path"]
+                available_keys.append(key)
+                slugs[key] = entry["slug"]
+                patched += 1
+            else:
+                manager["attribution_available"] = False
+                manager["attribution_path"] = None
+
+        document["attribution_index"] = {
+            "available": available_keys,
+            "count": len(available_keys),
+            "folder": ATTRIBUTION_OUTPUT_SUBFOLDER,
+            "path_pattern": f"{ATTRIBUTION_OUTPUT_SUBFOLDER}/{{manager_slug}}.json",
+            "manager_slugs": slugs,
+        }
+
+        write_json(path, document)
+        summary[asset_class_key] = {
+            "file": filename,
+            "managers_with_attribution": patched,
+            "managers_total": len(document.get("managers", [])),
+        }
+    return summary
+
+
+# =============================================================================
+# SECTION 13 - ORCHESTRATION
+# =============================================================================
+
+
+def build_attribution(
+    input_root: Path,
+    output_root: Path,
+    requested_quarter: str,
+    patch_phase1: bool = True,
+) -> Dict[str, Any]:
+    """Run the attribution build for one quarter. Returns the debug report."""
+    quarter, quarter_folder = resolve_quarter(input_root, requested_quarter)
+    LOG.info("Building attribution for %s", quarter.label)
+
+    generated_at = now_iso()
+    output_folder = output_root / quarter.label
+    attribution_folder = output_folder / ATTRIBUTION_OUTPUT_SUBFOLDER
+    input_folder = quarter_folder / ATTRIBUTION_INPUT_SUBFOLDER
+
+    phase1 = load_phase1_index(output_folder)
+    LOG.info(
+        "Loaded Phase 1 index: %d managers across %d asset classes",
+        sum(len(refs) for refs in phase1.by_manager_name.values()),
+        len(phase1.documents),
+    )
+
+    global_warnings: List[str] = []
+    errors: List[Dict[str, Any]] = []
+    workbook_reports: List[Dict[str, Any]] = []
+    linked: Dict[str, Dict[str, Any]] = {}
+    files_written: List[str] = []
+
+    workbooks: List[Path] = []
+    if not input_folder.is_dir():
+        message = (
+            f"No attribution folder at {input_folder}. Nothing to build; the "
+            f"asset-class files will still be patched to record that no "
+            f"attribution is available."
+        )
+        LOG.warning(message)
+        global_warnings.append(message)
+    else:
+        workbooks = sorted(
+            path
+            for path in input_folder.glob("*.xls*")
+            if not path.name.startswith("~$")
+        )
+        if not workbooks:
+            message = f"Attribution folder {input_folder} contains no workbooks."
+            LOG.warning(message)
+            global_warnings.append(message)
+
+    for path in workbooks:
+        try:
+            parsed, debug = parse_attribution_workbook(path, quarter)
+        except Exception as error:  # noqa: BLE001 - report and continue
+            message = f"Failed to parse {path.name}: {error}"
+            LOG.error(message)
+            errors.append({"file": path.name, "stage": "parse", "error": str(error)})
+            workbook_reports.append({"file": path.name, "error": str(error)})
+            continue
+
+        portfolio = parsed["metadata"].get("portfolio", "")
+        manager_ref, link_error = link_manager(portfolio, phase1)
+        if manager_ref is None:
+            message = f"{path.name}: {link_error}"
+            LOG.error(message)
+            errors.append(
+                {
+                    "file": path.name,
+                    "stage": "manager_linkage",
+                    "portfolio": portfolio,
+                    "error": link_error,
+                }
+            )
+            debug["manager_linkage"] = {
+                "portfolio": portfolio,
+                "normalized_key": normalize_lookup_name(portfolio),
+                "linked": False,
+                "error": link_error,
+            }
+            workbook_reports.append(debug)
+            continue
+
+        document, reconciliation, doc_warnings = build_attribution_document(
+            parsed, manager_ref, quarter, path, generated_at
+        )
+        slug = manager_slug(manager_ref.manager)
+        relative_path = f"{ATTRIBUTION_OUTPUT_SUBFOLDER}/{slug}.json"
+        write_json(attribution_folder / f"{slug}.json", document)
+        files_written.append(relative_path)
+
+        linked[manager_ref.lookup_key] = {
+            "slug": slug,
+            "relative_path": relative_path,
+            "asset_class_key": manager_ref.asset_class_key,
+        }
+
+        debug["manager_linkage"] = {
+            "portfolio": portfolio,
+            "normalized_key": manager_ref.lookup_key,
+            "linked": True,
+            "match_type": manager_ref.match_type,
+            "manager": manager_ref.manager,
+            "asset_class": manager_ref.asset_class,
+            "asset_class_file": manager_ref.asset_class_file,
+            "manager_index": manager_ref.index,
+            "benchmark_template": parsed["metadata"].get("benchmark", ""),
+            "benchmark_phase1": manager_ref.benchmark,
+            "benchmark_matches": normalize_lookup_name(
+                parsed["metadata"].get("benchmark", "")
+            )
+            == normalize_lookup_name(manager_ref.benchmark),
+        }
+        debug["output_file"] = relative_path
+        debug["securities_stored"] = document["security_attribution_meta"][
+            "securities_stored"
+        ]
+        debug["securities_filtered_out"] = (
+            document["security_attribution_meta"]["securities_in_gics_sectors"]
+            - document["security_attribution_meta"]["securities_stored"]
+        )
+        debug["reconciliation"] = reconciliation
+        debug["warnings"] = list(debug.get("warnings", [])) + doc_warnings
+        workbook_reports.append(debug)
+        global_warnings.extend(parsed["warnings"])
+        global_warnings.extend(doc_warnings)
+
+    patch_summary: Dict[str, Any] = {}
+    if patch_phase1:
+        patch_summary = patch_asset_class_files(phase1, linked, output_folder)
+    else:
+        LOG.info("--no-patch supplied; asset-class files left untouched.")
+
+    report = {
+        "script_version": SCRIPT_VERSION,
+        "period": quarter.label,
+        "period_start_date": quarter.start_date.isoformat(),
+        "period_end_date": quarter.end_date.isoformat(),
+        "generated_at": generated_at,
+        "input_folder": str(input_folder),
+        "output_folder": str(attribution_folder),
+        "materiality_threshold_pp": MATERIALITY_THRESHOLD_PP,
+        "workbooks_found": [p.name for p in workbooks],
+        "workbooks_processed": len(files_written),
+        "files_written": files_written,
+        "unmatched_attribution_files": [
+            e["file"] for e in errors if e["stage"] == "manager_linkage"
+        ],
+        "errors": errors,
+        "asset_class_patch_summary": patch_summary,
+        "phase1_patched": patch_phase1,
+        "workbooks": workbook_reports,
+        "warnings": global_warnings,
+    }
+    write_json(output_folder / DEBUG_REPORT_FILENAME, report)
+    return report
+
+
+# =============================================================================
+# SECTION 14 - CLI
+# =============================================================================
+
+
+def configure_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(levelname)-8s %(message)s",
+        stream=sys.stdout,
+    )
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="build_attribution_json.py",
+        description=(
+            "Convert Morningstar Direct attribution exports into per-manager JSON "
+            "for the Battle Book commentary agent (Phase 2)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            '  python build_attribution_json.py --quarter "2026 Q2"\n'
+            "  python build_attribution_json.py --quarter latest\n"
+            '  python build_attribution_json.py --quarter "2026 Q2" --no-patch\n'
+        ),
+    )
+    parser.add_argument(
+        "--quarter",
+        default="latest",
+        help='Quarter to build, e.g. "2026 Q2", or "latest" (default: latest).',
+    )
+    parser.add_argument("--input-root", default=DEFAULT_INPUT_ROOT)
+    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument(
+        "--no-patch",
+        action="store_true",
+        help="Do not write attribution pointers into the asset-class JSON files.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    configure_logging(args.verbose)
+
+    try:
+        report = build_attribution(
+            Path(args.input_root),
+            Path(args.output_root),
+            args.quarter,
+            patch_phase1=not args.no_patch,
+        )
+    except (FileNotFoundError, ValueError) as error:
+        LOG.error("%s", error)
+        return 2
+    except PermissionError as error:
+        LOG.error(
+            "Permission denied: %s\n"
+            "       Close the workbook in Excel (or pause OneDrive sync) and retry.",
+            error,
+        )
+        return 2
+
+    found = len(report["workbooks_found"])
+    processed = report["workbooks_processed"]
+    LOG.info(
+        "Done. %s: %d of %d attribution workbooks written (%d warnings, %d errors).",
+        report["period"],
+        processed,
+        found,
+        len(report["warnings"]),
+        len(report["errors"]),
+    )
+    if report["errors"]:
+        LOG.error(
+            "%d attribution workbook(s) failed. See %s for detail.",
+            len(report["errors"]),
+            DEBUG_REPORT_FILENAME,
+        )
+        return 1
+    if found and not processed:
+        LOG.error("No attribution files were produced despite finding %d workbook(s).", found)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
