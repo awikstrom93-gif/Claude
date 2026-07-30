@@ -99,6 +99,49 @@ Pick three managers per file, including one you write about often:
       does, the Morningstar universes overlap and the agent's asset-class
       inference is ambiguous — resolve at the export.
 
+## 7b. Historical periods (`performance_periods`)
+
+Pick one manager you know well and check all nine periods:
+
+- [ ] All nine keys present: `selected_quarter`, `ytd`, `two_quarters_ago`,
+      `three_quarters_ago`, `four_quarters_ago`, `trailing_1_year`,
+      `trailing_3_year`, `trailing_5_year`, `trailing_10_year`.
+- [ ] `selected_quarter` values are **identical** to the manager's top-level
+      `return_cumulative` / `benchmark_return` / `peer_percentile` /
+      `excess_return_cumulative`. This is the backward-compatibility guarantee.
+- [ ] `period_start_date` / `period_end_date` on each period are the windows you
+      expect — in particular `two_quarters_ago` is the quarter **immediately
+      before** the selected quarter (Morningstar's own naming counts from the
+      current quarter, not the selected one).
+- [ ] `basis` is `annualized` on `trailing_3_year`, `trailing_5_year` and
+      `trailing_10_year`, and `cumulative` on everything else.
+      **If this is wrong the agent will describe annualized returns as total
+      returns.** Verify against the Excel header text (`Return (Annualized)`).
+- [ ] Arithmetic holds on every period, not just the quarter (see §11).
+- [ ] Spot-check two historical periods against Excel using the column letters
+      in `debug_layout_report.json → logical_period_map`.
+
+## 7c. Trends and rankings
+
+- [ ] `performance_trends.consecutive_quarters_underperforming` and
+      `..._outperforming` are never both non-zero on the same manager.
+- [ ] Both streaks are between 0 and 4.
+- [ ] Manually verify one streak: read `excess_return_cumulative` for
+      `selected_quarter` → `two_quarters_ago` → `three_quarters_ago` →
+      `four_quarters_ago` and confirm the count stops where the sign flips.
+- [ ] `trend_direction` is one of `improving`, `deteriorating`, `mixed`,
+      `insufficient_data`.
+- [ ] Managers with no return data show `insufficient_data` and an empty
+      `periods_evaluated` — not `improving`.
+- [ ] `underperformed_*` flags agree with the sign of each period's excess return.
+- [ ] Remember a `false` flag can mean *"beat the benchmark"* **or**
+      *"no data"* — `periods_evaluated` distinguishes them. Confirm it is
+      populated for the managers you write about.
+- [ ] `ranking_trend` percentiles match the `peer_percentile` on the
+      corresponding `performance_periods` entries.
+- [ ] Sanity: a manager with a strongly negative excess in the selected quarter
+      should not show `improving` unless earlier quarters were worse.
+
 ## 8. Market data and summaries
 
 For each asset-class file:
@@ -116,6 +159,22 @@ For each asset-class file:
 - [ ] The same sector does not appear in both the top and bottom list —
       that only happens when a category has fewer than 20 members, which is
       normal for 9-sector lists. Confirm it is the expected overlap.
+
+Multi-period market context:
+
+- [ ] `market_data_periods` has `selected_quarter`, `ytd`, `trailing_1_year`.
+- [ ] Top-level `market_data` is **identical** to
+      `market_data_periods.selected_quarter` factors/sectors/industries, and
+      top-level `summaries` is identical to that period's `summaries`
+      (the §11 script asserts both).
+- [ ] `market_data_periods.ytd.aligned_with_selected_quarter_end` is `false`
+      and carries a `note` — the market workbook's YTD runs to the **export
+      date**, not quarter end, so it is a different window from manager YTD.
+      Confirm the note is present before letting the agent pair the two.
+- [ ] `market_trends` names sectors/factors that match the top and bottom of the
+      corresponding `summaries` lists.
+- [ ] `best_sector_ytd` is derived from that wider market YTD window — do not
+      let commentary present it as the same period as manager YTD.
 
 Known and accepted for the current export template:
 
@@ -196,11 +255,75 @@ for path in sorted(pathlib.Path(".").glob("*_growth.json")):
         if vals != ordered:
             problems.append(f"{name} is not sorted correctly")
 
+    # ---- historical periods -------------------------------------------------
+    expected_periods = ["selected_quarter", "ytd", "two_quarters_ago",
+                        "three_quarters_ago", "four_quarters_ago",
+                        "trailing_1_year", "trailing_3_year",
+                        "trailing_5_year", "trailing_10_year"]
+    annualized = {"trailing_3_year", "trailing_5_year", "trailing_10_year"}
+
+    for m in managers:
+        periods = m["performance_periods"]
+        if list(periods) != expected_periods:
+            problems.append(f"{m['manager']}: period keys {list(periods)}")
+
+        for key, p in periods.items():
+            r, b, e = (p["return_cumulative"], p["benchmark_return"],
+                       p["excess_return_cumulative"])
+            if None not in (r, b, e) and abs((r - e) - b) > 0.02:
+                problems.append(f"{m['manager']}/{key}: benchmark arithmetic")
+            if p["available"]:
+                want = "annualized" if key in annualized else "cumulative"
+                if p["basis"] != want:
+                    problems.append(
+                        f"{m['manager']}/{key}: basis {p['basis']}, expected {want}")
+
+        # selected_quarter must mirror the top-level fields exactly
+        sel = periods["selected_quarter"]
+        for fname in ["return_cumulative", "benchmark_return", "peer_percentile",
+                      "excess_return_cumulative", "benchmark_return_calculated"]:
+            if m[fname] != sel[fname]:
+                problems.append(f"{m['manager']}: top-level {fname} != selected_quarter")
+
+        t = m["performance_trends"]
+        if t["consecutive_quarters_underperforming"] and t["consecutive_quarters_outperforming"]:
+            problems.append(f"{m['manager']}: both streaks non-zero")
+        for skey in ["consecutive_quarters_underperforming",
+                     "consecutive_quarters_outperforming"]:
+            if not 0 <= t[skey] <= 4:
+                problems.append(f"{m['manager']}: {skey} = {t[skey]}")
+        if t["trend_direction"] not in {"improving", "deteriorating",
+                                        "mixed", "insufficient_data"}:
+            problems.append(f"{m['manager']}: trend_direction {t['trend_direction']}")
+
+        for pkey, pct in m["ranking_trend"].items():
+            if pct != periods[pkey]["peer_percentile"]:
+                problems.append(f"{m['manager']}: ranking_trend {pkey} mismatch")
+
+    # ---- market aliases must stay byte-identical ----------------------------
+    selected_view = d["market_data_periods"]["selected_quarter"]
+    for cat in ["factors", "sectors", "industries"]:
+        if d["market_data"][cat] != selected_view[cat]:
+            problems.append(f"market_data.{cat} != market_data_periods.selected_quarter")
+    if d["summaries"] != selected_view["summaries"]:
+        problems.append("summaries alias != selected_quarter summaries")
+
     status = "OK" if not problems else f"{len(problems)} PROBLEM(S)"
     print(f"{path.name}: {len(managers)} managers, "
           f"{len(d['manager_lookup'])} lookup keys - {status}")
     for problem in problems:
         print("   ", problem)
+```
+
+Then confirm the period mapping is what you expect:
+
+```python
+import json
+report = json.load(open("debug_layout_report.json", encoding="utf-8"))
+for name, wb in report["workbooks"].items():
+    print(name)
+    for line in wb.get("logical_period_map_summary", ["<none>"]):
+        print("   ", line)
 ```
 
 ---

@@ -62,7 +62,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -176,6 +176,87 @@ METRIC_COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
         "excess return",
     ),
 }
+
+# --- Logical periods ----------------------------------------------------------
+# The workbook exposes ~26 period blocks. These are the ones the commentary
+# agent needs. Each is resolved against the *selected quarter* by date first
+# and by label only as a fallback, so the mapping stays correct no matter which
+# block the selected quarter landed in.
+#
+#   kind="selected"        the already-selected quarter block
+#   kind="quarter_offset"  N calendar quarters before the selected quarter
+#   kind="ytd"             1 Jan of the selected quarter's year -> quarter end
+#   kind="trailing"        N years back from the selected quarter end
+#
+# NOTE ON NAMING: `two_quarters_ago` follows Morningstar's own labelling, which
+# counts back from the *current* quarter. With the selected quarter being
+# "Last Quarter", `two_quarters_ago` is the quarter immediately BEFORE the
+# selected quarter. Every period record carries explicit start/end dates so the
+# agent never has to infer this.
+LOGICAL_PERIOD_DEFINITIONS: Tuple[Dict[str, Any], ...] = (
+    {"key": "selected_quarter", "kind": "selected", "labels": ("last quarter",)},
+    {
+        "key": "ytd",
+        "kind": "ytd",
+        "labels": ("ytd thru last q end", "ytd thru last quarter end", "ytd"),
+    },
+    {"key": "two_quarters_ago", "kind": "quarter_offset", "offset": 1,
+     "labels": ("2 quarters ago",)},
+    {"key": "three_quarters_ago", "kind": "quarter_offset", "offset": 2,
+     "labels": ("3 quarters ago",)},
+    {"key": "four_quarters_ago", "kind": "quarter_offset", "offset": 3,
+     "labels": ("4 quarters ago",)},
+    {"key": "trailing_1_year", "kind": "trailing", "years": 1,
+     "labels": ("1 year", "1 yr", "1 years")},
+    {"key": "trailing_3_year", "kind": "trailing", "years": 3,
+     "labels": ("3 years", "3 year", "3 yrs")},
+    {"key": "trailing_5_year", "kind": "trailing", "years": 5,
+     "labels": ("5 years", "5 year", "5 yrs")},
+    {"key": "trailing_10_year", "kind": "trailing", "years": 10,
+     "labels": ("10 years", "10 year", "10 yrs")},
+)
+
+# Periods embedded in the asset-class `market_data_periods` object. The market
+# workbook carries fewer blocks than the manager workbooks, so this is a subset.
+MARKET_LOGICAL_PERIODS: Tuple[str, ...] = ("selected_quarter", "ytd", "trailing_1_year")
+
+# Quarter chain used for streak and trend maths, NEWEST FIRST.
+QUARTER_TREND_SEQUENCE: Tuple[str, ...] = (
+    "selected_quarter",
+    "two_quarters_ago",
+    "three_quarters_ago",
+    "four_quarters_ago",
+)
+# Minimum quarters with excess-return data before a trend direction is claimed.
+TREND_MIN_QUARTERS = 3
+# Percentage-point move in average excess return needed to call a non-monotonic
+# sequence "improving" or "deteriorating" rather than "mixed".
+TREND_DIRECTION_THRESHOLD = 0.5
+
+# Periods reported in `ranking_trend`.
+RANKING_TREND_PERIODS: Tuple[str, ...] = (
+    "selected_quarter",
+    "ytd",
+    "trailing_1_year",
+    "trailing_3_year",
+    "trailing_5_year",
+    "trailing_10_year",
+)
+
+# Periods that get an `underperformed_*` flag in `performance_trends`.
+UNDERPERFORMANCE_FLAG_PERIODS: Tuple[str, ...] = (
+    "selected_quarter",
+    "ytd",
+    "trailing_1_year",
+    "trailing_3_year",
+    "trailing_5_year",
+    "trailing_10_year",
+)
+
+# Morningstar reports 3/5/10-year blocks annualized and shorter blocks
+# cumulatively. Detected from the return column's header text.
+BASIS_ANNUALIZED = "annualized"
+BASIS_CUMULATIVE = "cumulative"
 
 # --- Row classification -------------------------------------------------------
 BENCHMARK_ROW_RE = re.compile(r"^\s*benchmark\s*\d*\s*:\s*", re.IGNORECASE)
@@ -450,6 +531,18 @@ def utc_now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def shift_years(day: date, years: int) -> date:
+    """Move a date back N years, tolerating 29 February."""
+    try:
+        return day.replace(year=day.year - years)
+    except ValueError:  # 29 Feb -> 28 Feb
+        return day.replace(year=day.year - years, day=28)
+
+
+def iso_or_empty(day: Optional[date]) -> str:
+    return day.isoformat() if day else ""
+
+
 # =============================================================================
 # SECTION 3 - QUARTER RESOLUTION
 # =============================================================================
@@ -478,6 +571,11 @@ class Quarter:
 
     def contains(self, day: date) -> bool:
         return self.start_date <= day <= self.end_date
+
+    def shifted(self, quarters_back: int) -> "Quarter":
+        """Return the quarter `quarters_back` calendar quarters earlier."""
+        absolute = self.year * 4 + (self.quarter - 1) - quarters_back
+        return Quarter(absolute // 4, absolute % 4 + 1)
 
     def __str__(self) -> str:  # pragma: no cover - convenience
         return self.label
@@ -599,6 +697,10 @@ class PeriodBlock:
     start_date: Optional[date]
     end_date: Optional[date]
     metric_columns: Dict[str, int] = field(default_factory=dict)
+    # Morningstar reports 3/5/10-year blocks annualized and shorter blocks
+    # cumulatively; taken from the return column's own header text.
+    basis: str = BASIS_CUMULATIVE
+    return_header: str = ""
 
     @property
     def column_range(self) -> str:
@@ -610,6 +712,8 @@ class PeriodBlock:
             "columns": self.column_range,
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "end_date": self.end_date.isoformat() if self.end_date else None,
+            "basis": self.basis,
+            "return_header": self.return_header,
             "metric_columns": {
                 name: get_column_letter(col) for name, col in sorted(
                     self.metric_columns.items(), key=lambda kv: kv[1]
@@ -794,6 +898,7 @@ def detect_period_blocks(
         )
 
         metric_columns: Dict[str, int] = {}
+        return_header = ""
         for column in range(first_column, last_column + 1):
             header = normalize_header(worksheet.cell(row=header_row, column=column).value)
             if not header:
@@ -801,6 +906,10 @@ def detect_period_blocks(
             metric = _classify_metric(header)
             if metric and metric not in metric_columns:
                 metric_columns[metric] = column
+                if metric == "return_cumulative":
+                    return_header = header
+
+        basis = BASIS_ANNUALIZED if "annualized" in return_header else BASIS_CUMULATIVE
 
         blocks.append(
             PeriodBlock(
@@ -810,6 +919,8 @@ def detect_period_blocks(
                 start_date=start_date,
                 end_date=end_date,
                 metric_columns=metric_columns,
+                basis=basis,
+                return_header=return_header,
             )
         )
     return blocks
@@ -918,6 +1029,120 @@ def select_period_block(
     )
 
 
+def _find_block_by_dates(
+    blocks: Sequence[PeriodBlock], start: date, end: date
+) -> Optional[PeriodBlock]:
+    for block in blocks:
+        if block.start_date == start and block.end_date == end:
+            return block
+    return None
+
+
+def _find_block_by_label(
+    blocks: Sequence[PeriodBlock], labels: Sequence[str]
+) -> Optional[PeriodBlock]:
+    """Match on label aliases, honouring the alias order as a preference."""
+    by_label = {}
+    for block in blocks:
+        if block.label:
+            by_label.setdefault(normalize_header(block.label), block)
+    for alias in labels:
+        match = by_label.get(alias)
+        if match is not None:
+            return match
+    return None
+
+
+def resolve_logical_periods(
+    layout: SheetLayout,
+    quarter: Quarter,
+    selected_block: PeriodBlock,
+    wanted_keys: Sequence[str],
+    warnings: List[str],
+    context: str,
+) -> Tuple[Dict[str, Optional[PeriodBlock]], Dict[str, Any]]:
+    """
+    Map each logical period key onto a workbook period block.
+
+    Resolution is by date wherever a date can be derived from the selected
+    quarter, falling back to Morningstar's label text. Both the resolved block
+    and *how* it was resolved are recorded for the debug report.
+    """
+    usable = [b for b in layout.period_blocks if b.metric_columns.get("return_cumulative")]
+    resolved: Dict[str, Optional[PeriodBlock]] = {}
+    report: Dict[str, Any] = {}
+
+    selected_end = selected_block.end_date or quarter.end_date
+
+    for definition in LOGICAL_PERIOD_DEFINITIONS:
+        key = definition["key"]
+        if key not in wanted_keys:
+            continue
+
+        block: Optional[PeriodBlock] = None
+        method = "not_found"
+        target_start: Optional[date] = None
+        target_end: Optional[date] = None
+
+        if definition["kind"] == "selected":
+            block, method = selected_block, "selected_quarter_block"
+        else:
+            if definition["kind"] == "quarter_offset":
+                target = quarter.shifted(definition["offset"])
+                target_start, target_end = target.start_date, target.end_date
+            elif definition["kind"] == "ytd":
+                target_start, target_end = date(selected_end.year, 1, 1), selected_end
+            elif definition["kind"] == "trailing":
+                target_end = selected_end
+                # Morningstar trailing windows start the day after the
+                # anniversary: 1 YEAR = 2025-07-01 -> 2026-06-30.
+                target_start = shift_years(selected_end, definition["years"]) + timedelta(
+                    days=1
+                )
+
+            if target_start and target_end:
+                block = _find_block_by_dates(usable, target_start, target_end)
+                if block is not None:
+                    method = "matched_by_date"
+
+            if block is None:
+                block = _find_block_by_label(usable, definition["labels"])
+                if block is not None:
+                    method = "matched_by_label"
+
+        if block is None:
+            message = (
+                f"{context}: no period block found for '{key}' "
+                f"(wanted {target_start} -> {target_end}); it will be null."
+            )
+            LOG.warning(message)
+            warnings.append(message)
+        elif method == "matched_by_label" and target_end and block.end_date != target_end:
+            # A label match that does not cover the expected window is still
+            # usable, but the agent must not be told it lines up with the quarter.
+            message = (
+                f"{context}: '{key}' fell back to the {block.label!r} block, which "
+                f"covers {block.start_date} -> {block.end_date} rather than the "
+                f"expected {target_start} -> {target_end}."
+            )
+            LOG.warning(message)
+            warnings.append(message)
+
+        resolved[key] = block
+        report[key] = {
+            "workbook_block": block.label if block else None,
+            "columns": block.column_range if block else None,
+            "start_date": iso_or_empty(block.start_date) if block else "",
+            "end_date": iso_or_empty(block.end_date) if block else "",
+            "basis": block.basis if block else None,
+            "resolved_by": method,
+            "target_start_date": iso_or_empty(target_start),
+            "target_end_date": iso_or_empty(target_end),
+        }
+
+    return resolved, report
+
+
 # =============================================================================
 # SECTION 6 - ASSET-CLASS (MANAGER) WORKBOOK PARSING
 # =============================================================================
@@ -943,6 +1168,159 @@ def read_block_metrics(
         raw = worksheet.cell(row=row, column=column).value
         values[metric] = to_int(raw) if metric == "peer_percentile" else to_float(raw)
     return values
+
+
+def empty_period_record() -> Dict[str, Any]:
+    """A period the workbook did not supply. All values null, never zero."""
+    return {
+        "label": "",
+        "period_start_date": "",
+        "period_end_date": "",
+        "basis": "",
+        "return_cumulative": None,
+        "benchmark_return": None,
+        "benchmark_return_calculated": False,
+        "peer_percentile": None,
+        "excess_return_cumulative": None,
+        "available": False,
+    }
+
+
+def build_period_record(
+    block: Optional[PeriodBlock],
+    metrics: Dict[str, Optional[float]],
+    benchmark_return: Optional[float],
+    benchmark_return_calculated: bool,
+) -> Dict[str, Any]:
+    """One entry of a manager's `performance_periods` object."""
+    if block is None:
+        return empty_period_record()
+
+    return_value = metrics.get("return_cumulative")
+    return {
+        "label": block.label or "",
+        "period_start_date": iso_or_empty(block.start_date),
+        "period_end_date": iso_or_empty(block.end_date),
+        # 'annualized' for the 3/5/10-year blocks, 'cumulative' otherwise.
+        # Commentary must not describe an annualized figure as a total return.
+        "basis": block.basis,
+        "return_cumulative": round_or_none(return_value),
+        "benchmark_return": round_or_none(benchmark_return),
+        "benchmark_return_calculated": benchmark_return_calculated,
+        "peer_percentile": metrics.get("peer_percentile"),
+        "excess_return_cumulative": round_or_none(
+            metrics.get("excess_return_cumulative")
+        ),
+        "available": return_value is not None,
+    }
+
+
+def resolve_benchmark_return(
+    metrics: Dict[str, Optional[float]],
+    benchmark_name: str,
+    benchmark_returns: Dict[str, float],
+) -> Tuple[Optional[float], bool]:
+    """
+    Benchmark return for one period.
+
+    Prefers the workbook's own benchmark row; falls back to
+    return - excess, flagging the value as calculated.
+    """
+    explicit = benchmark_returns.get(benchmark_name)
+    if explicit is not None:
+        return explicit, False
+
+    return_value = metrics.get("return_cumulative")
+    excess = metrics.get("excess_return_cumulative")
+    if return_value is not None and excess is not None:
+        return return_value - excess, True
+    return None, False
+
+
+def compute_performance_trends(
+    performance_periods: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Streaks, per-period underperformance flags, and a trend direction.
+
+    Streaks walk the quarter chain newest -> oldest and stop at the first
+    quarter that breaks the run or has no data. An excess return of exactly
+    zero breaks both streaks.
+    """
+
+    def excess_of(key: str) -> Optional[float]:
+        return performance_periods.get(key, {}).get("excess_return_cumulative")
+
+    under_streak = 0
+    for key in QUARTER_TREND_SEQUENCE:
+        value = excess_of(key)
+        if value is None or value >= 0:
+            break
+        under_streak += 1
+
+    over_streak = 0
+    for key in QUARTER_TREND_SEQUENCE:
+        value = excess_of(key)
+        if value is None or value <= 0:
+            break
+        over_streak += 1
+
+    # Oldest -> newest, only quarters that actually have an excess return.
+    chronological = [
+        excess_of(key) for key in reversed(QUARTER_TREND_SEQUENCE) if excess_of(key) is not None
+    ]
+
+    if len(chronological) < TREND_MIN_QUARTERS:
+        trend_direction = "insufficient_data"
+    else:
+        deltas = [
+            later - earlier
+            for earlier, later in zip(chronological, chronological[1:])
+        ]
+        if all(delta > 0 for delta in deltas):
+            trend_direction = "improving"
+        elif all(delta < 0 for delta in deltas):
+            trend_direction = "deteriorating"
+        else:
+            half = len(chronological) // 2
+            earlier_mean = sum(chronological[:half]) / half
+            recent_mean = sum(chronological[-half:]) / half
+            shift = recent_mean - earlier_mean
+            if shift > TREND_DIRECTION_THRESHOLD:
+                trend_direction = "improving"
+            elif shift < -TREND_DIRECTION_THRESHOLD:
+                trend_direction = "deteriorating"
+            else:
+                trend_direction = "mixed"
+
+    trends: Dict[str, Any] = {
+        "consecutive_quarters_underperforming": under_streak,
+        "consecutive_quarters_outperforming": over_streak,
+    }
+    for key in UNDERPERFORMANCE_FLAG_PERIODS:
+        value = excess_of(key)
+        trends[f"underperformed_{key}"] = value is not None and value < 0
+    trends["trend_direction"] = trend_direction
+    # An `underperformed_*` flag is False both when the manager beat the
+    # benchmark and when the period is missing. This lists what was actually
+    # evaluable so the agent can tell the two apart.
+    trends["periods_evaluated"] = [
+        key
+        for key in UNDERPERFORMANCE_FLAG_PERIODS
+        if excess_of(key) is not None
+    ]
+    trends["quarters_available"] = len(chronological)
+    return trends
+
+
+def build_ranking_trend(
+    performance_periods: Dict[str, Dict[str, Any]]
+) -> Dict[str, Optional[int]]:
+    """Peer percentile across the headline periods."""
+    return {
+        key: performance_periods.get(key, {}).get("peer_percentile")
+        for key in RANKING_TREND_PERIODS
+    }
 
 
 def classify_manager_row(
@@ -998,6 +1376,13 @@ def parse_asset_class_workbook(
         context = f"{path.name} [{worksheet.title}]"
         block = select_period_block(layout, quarter, warnings, context)
 
+        # Every logical period the commentary agent can reason over. The
+        # selected quarter remains the primary period; the rest add history.
+        period_keys = [definition["key"] for definition in LOGICAL_PERIOD_DEFINITIONS]
+        logical_blocks, logical_period_map = resolve_logical_periods(
+            layout, quarter, block, period_keys, warnings, context
+        )
+
         missing_metrics = [
             metric for metric in METRIC_COLUMN_ALIASES if metric not in block.metric_columns
         ]
@@ -1015,6 +1400,11 @@ def parse_asset_class_workbook(
         peer_group_stats: Dict[str, Dict[str, Optional[float]]] = {}
         section_benchmarks: Dict[str, List[Dict[str, Any]]] = {}
         benchmark_returns: Dict[str, float] = {}
+        # Benchmark returns per logical period, so history can resolve an
+        # explicit benchmark return rather than always deriving one.
+        benchmark_returns_by_period: Dict[str, Dict[str, float]] = {
+            key: {} for key in logical_blocks
+        }
         header_rows_detected = [layout.header_row]
         row_kind_counts: Dict[str, int] = {}
         seen_lookup_keys: Dict[str, int] = {}
@@ -1039,19 +1429,29 @@ def parse_asset_class_workbook(
                 current_section = name
             classified.append((row, kind, name, identity, metrics, current_section))
 
-            if kind == ROW_KIND_BENCHMARK and name:
-                clean = strip_benchmark_prefix(name)
-                section_benchmarks.setdefault(current_section or "", []).append(
-                    {
-                        "name": clean,
-                        "return_cumulative": round_or_none(metrics["return_cumulative"]),
-                        "row": row,
-                    }
-                )
+            if kind in (ROW_KIND_BENCHMARK, ROW_KIND_INDEX) and name:
+                clean = strip_benchmark_prefix(name) if kind == ROW_KIND_BENCHMARK else name
+                if kind == ROW_KIND_BENCHMARK:
+                    section_benchmarks.setdefault(current_section or "", []).append(
+                        {
+                            "name": clean,
+                            "return_cumulative": round_or_none(metrics["return_cumulative"]),
+                            "row": row,
+                        }
+                    )
                 if metrics["return_cumulative"] is not None:
                     benchmark_returns.setdefault(clean, metrics["return_cumulative"])
-            elif kind == ROW_KIND_INDEX and name and metrics["return_cumulative"] is not None:
-                benchmark_returns.setdefault(name, metrics["return_cumulative"])
+                # Same row, read across every logical period.
+                for period_key, period_block in logical_blocks.items():
+                    if period_block is None:
+                        continue
+                    period_return = read_block_metrics(worksheet, row, period_block)[
+                        "return_cumulative"
+                    ]
+                    if period_return is not None:
+                        benchmark_returns_by_period[period_key].setdefault(
+                            clean, period_return
+                        )
 
         # Pass 2 - build the manager records.
         for row, kind, name, identity, metrics, section in classified:
@@ -1123,17 +1523,36 @@ def parse_asset_class_workbook(
             return_cumulative = metrics["return_cumulative"]
             excess_return = metrics["excess_return_cumulative"]
 
-            benchmark_return = benchmark_returns.get(benchmark)
-            benchmark_return_calculated = False
+            # --- every logical period for this manager ------------------------
+            performance_periods: Dict[str, Dict[str, Any]] = {}
+            for period_key in (d["key"] for d in LOGICAL_PERIOD_DEFINITIONS):
+                period_block = logical_blocks.get(period_key)
+                if period_block is None:
+                    performance_periods[period_key] = empty_period_record()
+                    continue
+                period_metrics = (
+                    metrics
+                    if period_block is block
+                    else read_block_metrics(worksheet, row, period_block)
+                )
+                period_benchmark_return, period_calculated = resolve_benchmark_return(
+                    period_metrics,
+                    benchmark,
+                    benchmark_returns_by_period.get(period_key, {}),
+                )
+                performance_periods[period_key] = build_period_record(
+                    period_block, period_metrics, period_benchmark_return, period_calculated
+                )
+
+            # Backward-compatible top-level fields mirror the selected quarter.
+            selected_record = performance_periods["selected_quarter"]
+            benchmark_return = selected_record["benchmark_return"]
+            benchmark_return_calculated = selected_record["benchmark_return_calculated"]
             if benchmark_return is None:
-                if return_cumulative is not None and excess_return is not None:
-                    benchmark_return = return_cumulative - excess_return
-                    benchmark_return_calculated = True
-                else:
-                    warnings.append(
-                        f"{context}: row {row} ({name}) has no benchmark return and it "
-                        f"could not be derived (return or excess return missing)."
-                    )
+                warnings.append(
+                    f"{context}: row {row} ({name}) has no benchmark return and it "
+                    f"could not be derived (return or excess return missing)."
+                )
 
             if return_cumulative is None:
                 warnings.append(
@@ -1153,6 +1572,10 @@ def parse_asset_class_workbook(
                 "peer_percentile": metrics["peer_percentile"],
                 "excess_return_cumulative": round_or_none(excess_return),
                 "source_file": path.name,
+                # --- historical context -------------------------------------
+                "performance_periods": performance_periods,
+                "performance_trends": compute_performance_trends(performance_periods),
+                "ranking_trend": build_ranking_trend(performance_periods),
                 # Additive context - useful when writing commentary, ignored by
                 # any consumer that only reads the required fields.
                 "ticker": identity.get("ticker") or "",
@@ -1208,6 +1631,11 @@ def parse_asset_class_workbook(
             "layout": layout.describe(),
             "manager_header_rows_detected": header_rows_detected,
             "selected_period_block": block.describe(),
+            "logical_period_map": logical_period_map,
+            "logical_period_map_summary": [
+                f"{key} -> {entry['workbook_block'] or 'NOT FOUND'}"
+                for key, entry in logical_period_map.items()
+            ],
             "metric_columns_selected": {
                 metric: get_column_letter(column)
                 for metric, column in sorted(block.metric_columns.items(), key=lambda kv: kv[1])
@@ -1315,6 +1743,10 @@ def parse_market_workbook(
         context = f"{path.name} [{worksheet.title}]"
         block = select_period_block(layout, quarter, warnings, context)
 
+        logical_blocks, logical_period_map = resolve_logical_periods(
+            layout, quarter, block, MARKET_LOGICAL_PERIODS, warnings, context
+        )
+
         name_column = layout.identity_columns.get("name", 1)
         benchmark_column = layout.identity_columns.get("calculation_benchmark")
 
@@ -1358,11 +1790,35 @@ def parse_market_workbook(
 
             current.last_row = row
 
+            # Read this row across every logical market period once.
+            period_metrics: Dict[str, Dict[str, Optional[float]]] = {}
+            for period_key, period_block in logical_blocks.items():
+                if period_block is None:
+                    period_metrics[period_key] = {
+                        "return_cumulative": None,
+                        "excess_return_cumulative": None,
+                        "peer_percentile": None,
+                    }
+                    continue
+                values = (
+                    metrics
+                    if period_block is block
+                    else read_block_metrics(worksheet, row, period_block)
+                )
+                period_metrics[period_key] = {
+                    "return_cumulative": round_or_none(values["return_cumulative"]),
+                    "excess_return_cumulative": round_or_none(
+                        values["excess_return_cumulative"]
+                    ),
+                    "peer_percentile": values["peer_percentile"],
+                }
+
             if BENCHMARK_ROW_RE.match(name):
                 current.benchmarks.append(
                     {
                         "name": strip_benchmark_prefix(name),
                         "return_cumulative": round_or_none(metrics["return_cumulative"]),
+                        "periods": period_metrics,
                         "row": row,
                     }
                 )
@@ -1384,6 +1840,7 @@ def parse_market_workbook(
                         metrics["excess_return_cumulative"]
                     ),
                     "peer_percentile": metrics["peer_percentile"],
+                    "periods": period_metrics,
                     "source_row": row,
                 }
             )
@@ -1399,6 +1856,7 @@ def parse_market_workbook(
         parsed = {
             "sections": sections,
             "sections_by_title": sections_by_title,
+            "logical_blocks": logical_blocks,
             "lineage": {
                 "source_file": path.name,
                 "worksheet": worksheet.title,
@@ -1415,6 +1873,11 @@ def parse_market_workbook(
             "worksheet_parsed": worksheet.title,
             "layout": layout.describe(),
             "selected_period_block": block.describe(),
+            "logical_period_map": logical_period_map,
+            "logical_period_map_summary": [
+                f"{key} -> {entry['workbook_block'] or 'NOT FOUND'}"
+                for key, entry in logical_period_map.items()
+            ],
             "metric_columns_selected": {
                 metric: get_column_letter(column)
                 for metric, column in sorted(block.metric_columns.items(), key=lambda kv: kv[1])
@@ -1517,6 +1980,90 @@ def select_market_data_for_asset_class(
         "factors": result["factors"],
         "sectors": result["sectors"],
         "industries": result["industries"],
+    }
+
+
+def flatten_market_row(member: Dict[str, Any], period_key: str) -> Dict[str, Any]:
+    """
+    Project a market series onto one period.
+
+    The returned shape matches the single-period V1 row exactly, so the
+    `market_data` alias stays byte-for-byte compatible for existing consumers.
+    """
+    values = member.get("periods", {}).get(period_key, {})
+    return {
+        "name": member["name"],
+        "display_name": member["display_name"],
+        "category": member["category"],
+        "section": member["section"],
+        "benchmark": member["benchmark"],
+        "return_cumulative": values.get("return_cumulative"),
+        "excess_return_cumulative": values.get("excess_return_cumulative"),
+        "peer_percentile": values.get("peer_percentile"),
+        "source_row": member["source_row"],
+    }
+
+
+def build_market_period_view(
+    selection: Dict[str, Any],
+    period_key: str,
+    period_block: Optional[PeriodBlock],
+    quarter_end: date,
+) -> Dict[str, Any]:
+    """One entry of the asset-class `market_data_periods` object."""
+    factors = [flatten_market_row(row, period_key) for row in selection["factors"]]
+    sectors = [flatten_market_row(row, period_key) for row in selection["sectors"]]
+    industries = [flatten_market_row(row, period_key) for row in selection["industries"]]
+
+    # The market workbook has no "YTD thru Last Q End" block, so its YTD runs
+    # to the export date rather than to quarter end. Manager YTD and market YTD
+    # therefore cover different windows; say so in the data, not just the log.
+    aligned = period_block is not None and period_block.end_date == quarter_end
+    note = ""
+    if period_block is not None and not aligned:
+        note = (
+            f"This market window ends {iso_or_empty(period_block.end_date)}, not the "
+            f"selected quarter end {quarter_end.isoformat()}. Do not present it as "
+            f"covering exactly the same window as the manager figures."
+        )
+
+    view = {
+        "label": period_block.label if period_block else "",
+        "period_start_date": iso_or_empty(period_block.start_date) if period_block else "",
+        "period_end_date": iso_or_empty(period_block.end_date) if period_block else "",
+        "basis": period_block.basis if period_block else "",
+        "available": period_block is not None,
+        "aligned_with_selected_quarter_end": aligned,
+        "note": note,
+        "source_file": selection["source_file"],
+        "sections_used": selection["sections_used"],
+        "factors": factors,
+        "sectors": sectors,
+        "industries": industries,
+    }
+    view["summaries"] = build_summaries(view)
+    return view
+
+
+def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Headline best/worst movers, pre-computed so the agent need not sort."""
+
+    def pick(period_key: str, category: str, best: bool) -> str:
+        summaries = market_periods.get(period_key, {}).get("summaries", {})
+        rows = summaries.get(f"{'top' if best else 'bottom'}_10_{category}", [])
+        return rows[0]["display_name"] if rows else ""
+
+    return {
+        "best_sector_selected_quarter": pick("selected_quarter", "sectors", True),
+        "worst_sector_selected_quarter": pick("selected_quarter", "sectors", False),
+        "best_sector_ytd": pick("ytd", "sectors", True),
+        "worst_sector_ytd": pick("ytd", "sectors", False),
+        "best_factor_selected_quarter": pick("selected_quarter", "factors", True),
+        "worst_factor_selected_quarter": pick("selected_quarter", "factors", False),
+        "best_industry_selected_quarter": pick("selected_quarter", "industries", True),
+        "worst_industry_selected_quarter": pick("selected_quarter", "industries", False),
+        "best_sector_trailing_1_year": pick("trailing_1_year", "sectors", True),
+        "worst_sector_trailing_1_year": pick("trailing_1_year", "sectors", False),
     }
 
 
@@ -1721,19 +2268,33 @@ def build_quarter(
             attach_attribution(parsed["managers"], attribution)
 
         if market_parsed is not None:
-            market_data = select_market_data_for_asset_class(
+            selection = select_market_data_for_asset_class(
                 market_parsed, key, file_warnings
             )
+            market_logical_blocks = market_parsed["logical_blocks"]
+            market_data_periods = {
+                period_key: build_market_period_view(
+                    selection,
+                    period_key,
+                    market_logical_blocks.get(period_key),
+                    quarter.end_date,
+                )
+                for period_key in MARKET_LOGICAL_PERIODS
+            }
             debug_report["asset_class_market_selection"][key] = {
-                "sections_used": market_data["sections_used"],
+                "sections_used": selection["sections_used"],
                 "counts": {
-                    "factors": len(market_data["factors"]),
-                    "sectors": len(market_data["sectors"]),
-                    "industries": len(market_data["industries"]),
+                    "factors": len(selection["factors"]),
+                    "sectors": len(selection["sectors"]),
+                    "industries": len(selection["industries"]),
+                },
+                "periods": {
+                    period_key: view["label"]
+                    for period_key, view in market_data_periods.items()
                 },
             }
         else:
-            market_data = {
+            selection = {
                 "period_header": "",
                 "source_file": "",
                 "sections_used": {"factors": [], "sectors": [], "industries": []},
@@ -1742,9 +2303,29 @@ def build_quarter(
                 "sectors": [],
                 "industries": [],
             }
+            market_data_periods = {
+                period_key: build_market_period_view(
+                    selection, period_key, None, quarter.end_date
+                )
+                for period_key in MARKET_LOGICAL_PERIODS
+            }
+
+        # `market_data` and `summaries` stay as top-level aliases of the
+        # selected quarter so V1 consumers keep working unchanged.
+        selected_view = market_data_periods["selected_quarter"]
+        market_data = {
+            "period_header": selection["period_header"],
+            "source_file": selection["source_file"],
+            "sections_used": selection["sections_used"],
+            "section_benchmarks": selection["section_benchmarks"],
+            "factors": selected_view["factors"],
+            "sectors": selected_view["sectors"],
+            "industries": selected_view["industries"],
+        }
+        summaries = selected_view["summaries"]
+        market_trends = build_market_trends(market_data_periods)
 
         manager_lookup = build_manager_lookup(parsed["managers"], file_warnings)
-        summaries = build_summaries(market_data)
 
         payload = {
             "asset_class": spec["asset_class"],
@@ -1759,8 +2340,12 @@ def build_quarter(
             "manager_lookup": manager_lookup,
             "reference_indexes": parsed["reference_indexes"],
             "peer_group_stats": parsed["peer_group_stats"],
+            # Selected-quarter aliases, unchanged from V1.
             "market_data": market_data,
             "summaries": summaries,
+            # Multi-period market context and pre-computed headline movers.
+            "market_data_periods": market_data_periods,
+            "market_trends": market_trends,
             "warnings": file_warnings,
         }
 

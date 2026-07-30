@@ -90,6 +90,13 @@ The asset-class files are the **source of truth**. There is no
    array — a direct jump, no scanning.
 6. `market_data` and `summaries` for that asset class are already embedded in
    the same file, so one retrieval covers performance *and* market backdrop.
+7. `performance_periods`, `performance_trends` and `ranking_trend` on the same
+   record carry the history, so trend claims need no extra retrieval either.
+
+This supports observations such as *"has underperformed for four consecutive
+quarters"*, *"trails the benchmark over ten years"*, *"underperformed in Q2 but
+remains ahead YTD"* and *"recent weakness looks short-term rather than
+long-term"* — all from one file.
 
 ```json
 "manager_lookup": {
@@ -130,12 +137,18 @@ turn that off.
   "manager_lookup": { "t rowe price blue chip growth": 19 },
   "reference_indexes": [ /* e.g. S&P MidCap 400 Growth vs the primary index */ ],
   "peer_group_stats":  { "median": { "return_cumulative": 24.76 } },
+
+  // selected-quarter aliases - unchanged from V1
   "market_data": { "factors": [], "sectors": [], "industries": [] },
   "summaries": {
     "top_10_factors": [], "bottom_10_factors": [],
     "top_10_sectors": [], "bottom_10_sectors": [],
     "top_10_industries": [], "bottom_10_industries": []
   },
+
+  // multi-period market context
+  "market_data_periods": { "selected_quarter": {}, "ytd": {}, "trailing_1_year": {} },
+  "market_trends": { "best_sector_selected_quarter": "Technology" },
   "warnings": []
 }
 ```
@@ -155,6 +168,11 @@ turn that off.
   "peer_percentile": 83,
   "excess_return_cumulative": -3.4679,
   "source_file": "US Large Growth.xlsx",
+
+  // historical context - see section 6
+  "performance_periods": { "selected_quarter": {}, "ytd": {}, "…": {} },
+  "performance_trends":  { "consecutive_quarters_underperforming": 2 },
+  "ranking_trend":       { "selected_quarter": 83, "trailing_10_year": 50 },
 
   // additive context - safe to ignore
   "ticker": "TRBCX",
@@ -211,7 +229,165 @@ cleaned for prose — `S&P MidCap 400 Sub/Electl Compnts&Eq PR` becomes
 
 ---
 
-## 6. Why period selection is date-based
+## 6. Historical context (`performance_periods`)
+
+The selected quarter remains the primary period — every top-level field still
+describes it, unchanged. Alongside it, each manager carries nine periods that
+already exist in the workbook:
+
+| Key | Workbook block (Q2 2026 build) | Window | Basis |
+| --- | --- | --- | --- |
+| `selected_quarter` | Last Quarter | 2026-04-01 → 06-30 | cumulative |
+| `ytd` | YTD thru Last Q End | 2026-01-01 → 06-30 | cumulative |
+| `two_quarters_ago` | 2 Quarters Ago | 2026-01-01 → 03-31 | cumulative |
+| `three_quarters_ago` | 3 Quarters Ago | 2025-10-01 → 12-31 | cumulative |
+| `four_quarters_ago` | 4 Quarters Ago | 2025-07-01 → 09-30 | cumulative |
+| `trailing_1_year` | 1 YEAR | 2025-07-01 → 2026-06-30 | cumulative |
+| `trailing_3_year` | 3 YEARS | 2023-07-01 → 2026-06-30 | **annualized** |
+| `trailing_5_year` | 5 YEARS | 2021-07-01 → 2026-06-30 | **annualized** |
+| `trailing_10_year` | 10 YEARS | 2016-07-01 → 2026-06-30 | **annualized** |
+
+```jsonc
+"trailing_3_year": {
+  "label": "3 YEARS",
+  "period_start_date": "2023-07-01",
+  "period_end_date": "2026-06-30",
+  "basis": "annualized",
+  "return_cumulative": 21.4637,
+  "benchmark_return": 22.5755,
+  "benchmark_return_calculated": false,
+  "peer_percentile": 52,
+  "excess_return_cumulative": -1.1119,
+  "available": true
+}
+```
+
+> **`basis` matters.** Morningstar reports the 3/5/10-year blocks
+> **annualized**, not cumulative. `21.4637` on `trailing_3_year` means 21.46%
+> *per year*, not 21.46% over three years. The field name
+> `return_cumulative` is kept for schema compatibility, so commentary must read
+> `basis` before describing a trailing figure. The value is detected from the
+> column's own header text (`Return (Annualized)`), not assumed.
+
+**Naming.** `two_quarters_ago` follows Morningstar's own labelling, which counts
+back from the *current* quarter. Because the selected quarter is normally
+"Last Quarter", `two_quarters_ago` holds the quarter **immediately before** the
+selected quarter. Every record carries explicit start/end dates so this never
+has to be inferred.
+
+**Resolution.** Periods are resolved against the selected quarter **by date**
+(`two_quarters_ago` = selected quarter minus one calendar quarter), falling back
+to label text only when no date match exists. This keeps the chain correct even
+when the selected quarter is not "Last Quarter" — building a partial Q3 2026
+correctly maps `two_quarters_ago` to the *Last Quarter* block. A missing period
+is `null` with `available: false`, never zero.
+
+### `performance_trends`
+
+```jsonc
+"performance_trends": {
+  "consecutive_quarters_underperforming": 2,
+  "consecutive_quarters_outperforming": 0,
+  "underperformed_selected_quarter": true,
+  "underperformed_ytd": true,
+  "underperformed_trailing_1_year": true,
+  "underperformed_trailing_3_year": true,
+  "underperformed_trailing_5_year": true,
+  "underperformed_trailing_10_year": true,
+  "trend_direction": "deteriorating",
+  "periods_evaluated": ["selected_quarter", "ytd", "…"],
+  "quarters_available": 4
+}
+```
+
+**Streaks** walk the quarter chain newest → oldest
+(`selected_quarter` → `two_quarters_ago` → `three_quarters_ago` →
+`four_quarters_ago`) and stop at the first quarter that breaks the run or has no
+data. Underperforming is `excess_return_cumulative < 0`, outperforming is `> 0`;
+an excess of exactly `0` breaks both. Both streaks can never be non-zero at once.
+
+**`underperformed_*`** is `true` only when excess return is present and negative.
+It is `false` both when the manager beat the benchmark **and** when the period is
+missing — so `periods_evaluated` lists which periods actually had data. Check it
+before writing "has not underperformed over any period".
+
+### `trend_direction` logic
+
+Evaluated on excess return across the four-quarter chain, oldest → newest:
+
+1. Fewer than **3** quarters with excess-return data → `insufficient_data`.
+2. Compute the differences between consecutive quarters.
+   * Every difference positive → `improving`.
+   * Every difference negative → `deteriorating`.
+3. Otherwise compare the mean excess of the most recent half against the
+   earliest half:
+   * recent − earlier > **+0.5 pp** → `improving`
+   * recent − earlier < **−0.5 pp** → `deteriorating`
+   * within ±0.5 pp → `mixed`
+
+Step 2 catches clean monotonic runs; step 3 gives a defensible read on choppy
+ones instead of collapsing everything to `mixed`. The threshold is
+`TREND_DIRECTION_THRESHOLD` and the minimum quarter count is
+`TREND_MIN_QUARTERS`.
+
+Worked example — T. Rowe Price Blue Chip Growth, Q2 2026. Excess by quarter
+(oldest → newest): `−2.54, +0.93, −1.46, −3.47`. Differences are
+`+3.47, −2.39, −2.01` — mixed signs, so step 3 applies: earlier mean `−0.80`,
+recent mean `−2.46`, shift `−1.66` → **deteriorating**.
+
+### `ranking_trend`
+
+Peer percentile across the six headline periods, so percentile drift is a
+single lookup:
+
+```jsonc
+"ranking_trend": {
+  "selected_quarter": 83, "ytd": 89, "trailing_1_year": 74,
+  "trailing_3_year": 52, "trailing_5_year": 70, "trailing_10_year": 50
+}
+```
+
+Morningstar percentiles run 1 (best) to 100 (worst) — a *falling* number is an
+*improving* rank.
+
+---
+
+## 7. Multi-period market data
+
+`market_data_periods` holds `selected_quarter`, `ytd` and `trailing_1_year`,
+each with its own `factors`, `sectors`, `industries` and `summaries`.
+`market_trends` pre-computes the headline movers:
+
+```jsonc
+"market_trends": {
+  "best_sector_selected_quarter":  "Technology",
+  "worst_sector_selected_quarter": "Energy",
+  "best_sector_ytd":               "Energy",
+  "worst_sector_ytd":              "Consumer Discretionary",
+  "best_factor_selected_quarter":  "S&P 500 Momentum",
+  "worst_factor_selected_quarter": "S&P 500 Low Volatility",
+  "best_industry_selected_quarter":  "Semiconductors & Equipment",
+  "worst_industry_selected_quarter": "Telecom Services",
+  "best_sector_trailing_1_year":   "Energy",
+  "worst_sector_trailing_1_year":  "Financials"
+}
+```
+
+> **Market YTD is not the same window as manager YTD.** The market workbook has
+> no "YTD thru Last Q End" block — only "YTD", which runs to the **export date**
+> (2026-07-24), while manager YTD ends at quarter end (2026-06-30). Each market
+> period therefore carries `aligned_with_selected_quarter_end` and, when false, a
+> `note` spelling out the mismatch. Do not present the two as covering an
+> identical window. If you need an aligned market YTD, add a
+> "YTD thru Last Q End" column set to the Morningstar export.
+
+**Backward compatibility:** top-level `market_data` and `summaries` remain and
+are exact aliases of `market_data_periods.selected_quarter`. Nothing that read
+V1 output needs to change.
+
+---
+
+## 8. Why period selection is date-based
 
 Row 7 of each export labels period blocks (`MTD`, `Last Quarter`,
 `Current Quarter`, …) and rows 8/9 hold each block's start and end dates. Which
@@ -223,12 +399,18 @@ For a 2026 Q2 build from a 27 Jul 2026 export, that resolves to the
 `Last Quarter` block (1 Apr – 30 Jun 2026) — recorded in
 `lineage.period_header` for auditability.
 
+The same date-first rule drives the whole history chain, which is what keeps it
+correct when the selected quarter is *not* "Last Quarter". Building a partial
+Q3 2026 from the same export maps `selected_quarter` → `Current Quarter` and
+`two_quarters_ago` → `Last Quarter`; a label-based mapping would have silently
+returned the wrong quarters.
+
 If only a partial block matches (you built the quarter you are still in), the
 script uses it, marks it quarter-to-date, and warns loudly.
 
 ---
 
-## 7. Handling the layout differences
+## 9. Handling the layout differences
 
 Nothing is addressed by fixed cell reference. Header rows, identity columns,
 period blocks and metric columns are all discovered at run time — which is what
@@ -253,14 +435,34 @@ they are never silently deleted.
 
 ---
 
-## 8. debug_layout_report.json
+## 10. debug_layout_report.json
 
 Written every run. Use it whenever a build looks wrong before touching the
 script:
 
 * worksheets found in each workbook, and which one was parsed
-* detected period blocks — label, column range, start/end date, metric columns
+* detected period blocks — label, column range, start/end date, basis, metric
+  columns
 * which period block was selected, and its metric column letters
+* `logical_period_map_summary` — the logical-period → workbook-block mapping in
+  one glance:
+
+  ```
+  selected_quarter   -> Last Quarter
+  ytd                -> YTD thru Last Q End
+  two_quarters_ago   -> 2 Quarters Ago
+  three_quarters_ago -> 3 Quarters Ago
+  four_quarters_ago  -> 4 Quarters Ago
+  trailing_1_year    -> 1 YEAR
+  trailing_3_year    -> 3 YEARS
+  trailing_5_year    -> 5 YEARS
+  trailing_10_year   -> 10 YEARS
+  ```
+
+* `logical_period_map` — the same mapping in full, with each period's column
+  range, resolved dates, basis, the dates that were *targeted*, and
+  `resolved_by` (`selected_quarter_block`, `matched_by_date`,
+  `matched_by_label`, or `not_found`)
 * detected manager header row and identity column letters
 * detected market section ranges with row counts and categories
 * row counts: managers parsed, reference indexes, benchmark rows, peer stat
@@ -269,7 +471,7 @@ script:
 
 ---
 
-## 9. Scope of V1
+## 11. Scope of V1
 
 Deliberately **not** in V1:
 
@@ -284,7 +486,7 @@ place, so `manager_lookup` indexes stay valid and nothing else changes.
 
 ---
 
-## 10. Adapting to a changed export
+## 12. Adapting to a changed export
 
 Section 1 of `build_quarterly_json.py` holds every layout assumption — file
 names, header aliases, metric aliases, market section preferences, name
