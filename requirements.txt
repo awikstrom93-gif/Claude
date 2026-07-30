@@ -1,0 +1,10 @@
+# Battle Book Agent - quarterly JSON builder (V1)
+# Install with:  pip install -r requirements.txt
+#
+# openpyxl does all workbook discovery, worksheet scanning, header detection,
+# period detection and value extraction. pandas is optional in V1 (the parser
+# does not require it) and is listed for the ad-hoc analysis that tends to
+# follow a build; remove the line if you want a minimal install.
+
+openpyxl>=3.1.0,<4.0
+pandas>=2.0.0
