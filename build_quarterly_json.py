@@ -330,8 +330,12 @@ MARKET_CATEGORY_RULES: Tuple[Tuple[str, str], ...] = (
 )
 
 # Row-level override: rows named "... Sub/Something" or "... Ig/Something" are
-# industry-level series even when they appear inside a sector section.
-MARKET_ROW_INDUSTRY_RE = re.compile(r"\b(sub|ig)/", re.IGNORECASE)
+# industry-level series even when they appear inside a sector section. The second
+# pattern catches industry series that carry no slash prefix, such as
+# "S&P Biotechnology Select Industry TR USD", which would otherwise be dropped.
+# It is applied to member rows only, so section titles like "S&P 500 Industry
+# Group" are unaffected.
+MARKET_ROW_INDUSTRY_RE = re.compile(r"\b(sub|ig)/|\bindustry\b", re.IGNORECASE)
 
 # --- Display-name cleanup for market series ----------------------------------
 # Morningstar index names are terse ("Russell 1000 Growth Ind/Tech TR USD").

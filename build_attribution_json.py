@@ -1000,6 +1000,65 @@ def build_cash_attribution(bucket_rows: Sequence[RawRow]) -> Dict[str, Any]:
     }
 
 
+def build_benchmark_sector_context(
+    sector_rows: Sequence[RawRow], total_values: Dict[str, Optional[float]]
+) -> Dict[str, Any]:
+    """
+    The benchmark's own GICS sector composition, for the market backdrop.
+
+    The attribution workbook's benchmark columns describe the index, not the
+    manager, so they supply the sector detail the market backdrop needs and that
+    the sector/industry/factor export cannot: all eleven GICS sectors (the market
+    export carries nine Russell-scheme sectors, without Communication Services or
+    Real Estate), plus each sector's index weight and its contribution to the
+    index return.
+    """
+    benchmark_return = round_pct(total_values.get("benchmark_return"))
+    sectors: List[Dict[str, Any]] = []
+
+    for raw in sector_rows:
+        values = raw.values
+        contribution = round_pct(values.get("contribution_benchmark"))
+        sectors.append(
+            {
+                "sector": GICS_SECTOR_LOOKUP.get(
+                    normalize_header(raw.section_label), raw.section_label
+                ),
+                "benchmark_weight": round_pct(values.get("benchmark_weight")),
+                "benchmark_return": round_pct(values.get("benchmark_return")),
+                "contribution_to_benchmark_return": contribution,
+                "contribution_to_benchmark_return_bps": to_bps(contribution),
+            }
+        )
+
+    ranked = sorted(
+        (s for s in sectors if s["benchmark_return"] is not None),
+        key=lambda s: s["benchmark_return"],
+        reverse=True,
+    )
+    contributors = sorted(
+        (s for s in sectors if s["contribution_to_benchmark_return"] is not None),
+        key=lambda s: s["contribution_to_benchmark_return"],
+        reverse=True,
+    )
+
+    return {
+        "benchmark_return": benchmark_return,
+        "sectors_positive": sum(
+            1 for s in sectors if (s["benchmark_return"] or 0) > 0
+        ),
+        "sectors_negative": sum(
+            1 for s in sectors if (s["benchmark_return"] or 0) < 0
+        ),
+        "sector_count": len(sectors),
+        "best_sector": ranked[0]["sector"] if ranked else None,
+        "worst_sector": ranked[-1]["sector"] if ranked else None,
+        "largest_contributor": contributors[0]["sector"] if contributors else None,
+        "largest_detractor": contributors[-1]["sector"] if contributors else None,
+        "sectors": sectors,
+    }
+
+
 def build_security_records(
     security_rows: Sequence[RawRow], benchmark_total_return: Optional[float]
 ) -> List[Dict[str, Any]]:
@@ -1731,6 +1790,12 @@ def build_attribution_document(
             "exported_at": metadata.get("exported_at", ""),
             "generated_at": generated_at,
         },
+        # Market backdrop input: the benchmark's own GICS sector composition.
+        # Placed before the manager's attribution because commentary runs
+        # market -> attribution -> sector -> security.
+        "benchmark_sector_context": build_benchmark_sector_context(
+            parsed["sector_rows"], total_values
+        ),
         "attribution_summary": build_attribution_summary(total_values),
         "sector_attribution": sectors,
         # Cash sits outside the GICS sector table by design; see §5.3 of the README.
@@ -1969,6 +2034,26 @@ def build_attribution(
         global_warnings.extend(parsed["warnings"])
         global_warnings.extend(doc_warnings)
 
+    # Attribution workbooks arrive one battle book at a time, so the output
+    # folder accumulates. Flag any attribution JSON with no matching workbook in
+    # this run: the pointers will say it is unavailable while the file is still
+    # on disk and retrievable. Reported, never deleted.
+    orphans: List[str] = []
+    if attribution_folder.is_dir():
+        expected = {f"{entry['slug']}.json" for entry in linked.values()}
+        for path in sorted(attribution_folder.glob("*.json")):
+            if path.name not in expected:
+                orphans.append(path.name)
+        if orphans:
+            message = (
+                f"Attribution JSON files present with no matching workbook in "
+                f"{input_folder}: {orphans}. They remain on disk but are marked "
+                f"unavailable in the asset-class files. Keep the source workbooks "
+                f"in the quarter folder, or remove these files."
+            )
+            LOG.warning(message)
+            global_warnings.append(message)
+
     patch_summary: Dict[str, Any] = {}
     if patch_phase1:
         patch_summary = patch_asset_class_files(phase1, linked, output_folder)
@@ -1990,6 +2075,7 @@ def build_attribution(
         "unmatched_attribution_files": [
             e["file"] for e in errors if e["stage"] == "manager_linkage"
         ],
+        "orphaned_attribution_json": orphans,
         "errors": errors,
         "asset_class_patch_summary": patch_summary,
         "phase1_patched": patch_phase1,
