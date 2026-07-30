@@ -136,6 +136,18 @@ PACK_MOVER_ENRICHMENT: Tuple[str, ...] = (
 # Warn when a pack grows past this; the whole file is returned in one response.
 PACK_SIZE_WARN_KB = 60
 
+# The manifest maps every lookup key a manager can be asked for - fund name,
+# ticker, strategy name - onto its pack path.
+#
+# It exists so nothing downstream has to rebuild the slug. Slugs strip
+# characters that normalisation keeps (hyphens in "Mid-Cap", the ampersand in
+# "Segall Bryant & Hamill", the mark in "Ultra(R)"), so a caller reconstructing a
+# filename from a manager name gets it wrong for a sixth of the universe.
+# Normalisation is reproducible anywhere with lowercase, strip periods and
+# collapse spaces; the filename is not. So callers normalise, and the manifest
+# resolves.
+PACK_MANIFEST_FILENAME = "_manifest.json"
+
 # --- Quarter folder naming ----------------------------------------------------
 QUARTER_FOLDER_PATTERNS = (
     re.compile(r"^\s*(?P<year>\d{4})\s*[-_ ]?\s*[Qq](?P<quarter>[1-4])\s*$"),
@@ -1999,6 +2011,67 @@ def build_pack(
     return pack
 
 
+def collect_lookup_keys(
+    asset_class_document: Dict[str, Any], manager_index: int
+) -> List[str]:
+    """
+    Every key that resolves to this manager - fund name, ticker, strategy name.
+
+    Taken from the Phase 1 manager_lookup so a pack is reachable by anything the
+    asset-class file already answers to, not just the exact fund name.
+    """
+    keys = [
+        key
+        for key, index in asset_class_document.get("manager_lookup", {}).items()
+        if index == manager_index
+    ]
+    return sorted(set(keys))
+
+
+def build_pack_manifest(
+    entries: Sequence[Dict[str, Any]], quarter: Quarter, generated_at: str
+) -> Dict[str, Any]:
+    """
+    Resolve any normalised manager key to a pack path.
+
+    Only managers with a pack appear, so absence from the manifest carries the
+    same meaning as a missing pack: no attribution was supplied, so no battle
+    book. `packs` is a flat dictionary for a single-step lookup by callers that
+    cannot easily search.
+    """
+    packs: Dict[str, str] = {}
+    collisions: List[str] = []
+    for entry in entries:
+        for key in entry["keys"]:
+            if key in packs and packs[key] != entry["path"]:
+                collisions.append(key)
+                continue
+            packs[key] = entry["path"]
+
+    return {
+        "period": quarter.label,
+        "generated_at": generated_at,
+        "pack_count": len(entries),
+        "packs": dict(sorted(packs.items())),
+        "managers": [
+            {
+                "manager": entry["manager"],
+                "asset_class": entry["asset_class"],
+                "path": entry["path"],
+                "keys": entry["keys"],
+            }
+            for entry in entries
+        ],
+        "key_collisions": sorted(set(collisions)),
+        "note": (
+            "Normalise the requested manager name (lowercase, remove periods, "
+            "collapse repeated spaces, trim) and look it up in `packs`. Do not "
+            "rebuild the filename from the manager name; slugs strip characters "
+            "that normalisation keeps."
+        ),
+    }
+
+
 # =============================================================================
 # SECTION 12 - PATCHING PHASE 1 ASSET-CLASS FILES
 # =============================================================================
@@ -2092,6 +2165,7 @@ def build_attribution(
     linked: Dict[str, Dict[str, Any]] = {}
     files_written: List[str] = []
     packs_written: List[str] = []
+    pack_entries: List[Dict[str, Any]] = []
 
     workbooks: List[Path] = []
     if not input_folder.is_dir():
@@ -2165,6 +2239,13 @@ def build_attribution(
         pack_relative = f"{PACK_OUTPUT_SUBFOLDER}/{slug}.json"
         packs_written.append(pack_relative)
 
+        pack_entries.append({
+            "manager": manager_ref.manager,
+            "asset_class": manager_ref.asset_class,
+            "path": pack_relative,
+            "keys": collect_lookup_keys(asset_class_document, manager_ref.index),
+        })
+
         pack_kb = pack_path.stat().st_size / 1024
         if pack_kb > PACK_SIZE_WARN_KB:
             message = (
@@ -2233,6 +2314,22 @@ def build_attribution(
             LOG.warning(message)
             global_warnings.append(message)
 
+    # Manifest of every key that resolves to a pack. Written whenever packs
+    # were produced, so it can never describe a stale set.
+    manifest_relative = ""
+    if pack_entries:
+        manifest = build_pack_manifest(pack_entries, quarter, generated_at)
+        write_json(pack_folder / PACK_MANIFEST_FILENAME, manifest)
+        manifest_relative = f"{PACK_OUTPUT_SUBFOLDER}/{PACK_MANIFEST_FILENAME}"
+        if manifest["key_collisions"]:
+            message = (
+                f"Pack manifest: keys resolving to more than one manager "
+                f"{manifest['key_collisions']}; the first pack wins. Ask for those "
+                f"managers by their full fund name."
+            )
+            LOG.warning(message)
+            global_warnings.append(message)
+
     patch_summary: Dict[str, Any] = {}
     if patch_phase1:
         patch_summary = patch_asset_class_files(phase1, linked, output_folder)
@@ -2252,6 +2349,7 @@ def build_attribution(
         "workbooks_processed": len(files_written),
         "files_written": files_written,
         "packs_written": packs_written,
+        "pack_manifest": manifest_relative,
         "pack_folder": str(pack_folder),
         "unmatched_attribution_files": [
             e["file"] for e in errors if e["stage"] == "manager_linkage"
