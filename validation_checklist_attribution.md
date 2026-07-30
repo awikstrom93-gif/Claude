@@ -14,7 +14,15 @@ Quarter built: `____________`  Run by: `____________`  Date: `____________`
       checklist.
 - [ ] **Phase 2 ran *after* Phase 1.** Phase 1 rewrites the asset-class files
       from scratch and removes the attribution pointers, so a Phase 1 rerun always
-      needs a Phase 2 rerun behind it.
+      needs a Phase 2 rerun behind it. Using
+      `build_battle_book_data.py --quarter "<quarter>"` guarantees this.
+- [ ] If the wrapper was used: it reported **`Battle book data build complete`**
+      and exited `0`. A Phase 1 failure stops the run before Phase 2, so a
+      missing completion line means Phase 2 never ran — do not assume the
+      attribution files on disk are current.
+- [ ] If `--quarter latest` was used with the wrapper, the logged
+      `Resolved --quarter latest to '<quarter>'` line names the quarter you
+      expected.
 - [ ] `build_attribution_json.py` completed with **exit code 0**
       (`echo %ERRORLEVEL%` on Windows).
 - [ ] Console reports `N of N attribution workbooks written`.
@@ -100,9 +108,9 @@ present in the debug file and absent from the manager files.
       `asset_class_key`, `benchmark`, `period`, `period_start_date`,
       `period_end_date`, `period_band_label`, `model`, `classification`,
       `lineage`, `attribution_summary`, `sector_attribution`,
-      `security_attribution`, `security_attribution_meta`, `top_contributors`,
-      `top_detractors`, `sector_rankings`, `attribution_periods`,
-      `attribution_trends`, `concentration`.
+      `cash_attribution`, `security_attribution`, `security_attribution_meta`,
+      `top_contributors`, `top_detractors`, `sector_rankings`,
+      `attribution_periods`, `attribution_trends`, `concentration`.
 
 ## 8. `attribution_summary`
 
@@ -129,7 +137,19 @@ present in the debug file and absent from the manager files.
       columns listed in `debug_attribution_report.json →
       selected_period_band.columns`.
 
-## 10. `security_attribution`, contributors and detractors
+## 9a. `cash_attribution`
+
+- [ ] Present on every attribution JSON with exactly four keys: `available`,
+      `allocation_effect`, `allocation_effect_bps`, `material`.
+- [ ] `available` is `true` where the workbook has a `Cash` row; when `false`,
+      both effect fields are `null` and `material` is `false`.
+- [ ] `allocation_effect_bps` equals `allocation_effect` × 100.
+- [ ] `material` is `true` exactly when |`allocation_effect`| ≥ 0.05 pp (5 bps).
+- [ ] **`Cash` does not appear in `sector_attribution`** — that list is the 11
+      GICS sectors only.
+- [ ] Cross-check one manager against
+      `debug_attribution_report.json → attributed_bucket_rows`, where the same
+      `Cash` row is recorded.
 
 - [ ] `held` is `true` exactly when `portfolio_weight > 0`, and `false` when
       `portfolio_weight` is 0 and `benchmark_weight > 0`.
@@ -264,6 +284,23 @@ for path in sorted(pathlib.Path("attribution").glob("*.json")):
         pw = sec["portfolio_weight"] or 0
         if (sec["position"] == "not_held") != (pw <= 0):
             problems.append(f"{sec['sector']}: not_held disagrees with weight")
+
+    # cash - separate from sector_attribution by design
+    cash = d["cash_attribution"]
+    if set(cash) != {"available", "allocation_effect", "allocation_effect_bps",
+                     "material"}:
+        problems.append(f"cash_attribution keys: {sorted(cash)}")
+    if cash["available"]:
+        effect = cash["allocation_effect"]
+        if effect is not None:
+            if abs(cash["allocation_effect_bps"] - round(effect * 100, 1)) > 1e-9:
+                problems.append("cash_attribution bps mismatch")
+            if cash["material"] != (abs(effect) >= 0.05):
+                problems.append("cash_attribution material flag wrong")
+    elif cash["allocation_effect"] is not None or cash["material"]:
+        problems.append("cash_attribution unavailable but populated")
+    if any(s["sector"] in ("Cash", "Unclassified") for s in sectors):
+        problems.append("Cash/Unclassified leaked into sector_attribution")
 
     # securities
     for sec in d["security_attribution"]:

@@ -21,6 +21,18 @@ python build_quarterly_json.py --quarter latest
 python build_quarterly_json.py --list-quarters
 ```
 
+> **Building a full quarter?** Use the wrapper instead — it runs this script and
+> then the Phase 2 attribution builder in the correct order:
+>
+> ```bash
+> python build_battle_book_data.py --quarter "2026 Q2"
+> ```
+>
+> This matters because the script below rewrites the asset-class JSON files from
+> scratch, which removes the attribution pointers Phase 2 adds. Running it on its
+> own leaves the commentary agent unable to find attribution data even when the
+> attribution files exist. See `README_attribution.md`.
+
 The input and output roots default to the OneDrive paths below and can be
 overridden for testing:
 

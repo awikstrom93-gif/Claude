@@ -196,6 +196,9 @@ GICS_SECTOR_LOOKUP = {s.lower(): s for s in GICS_SECTORS}
 # Attributed non-GICS buckets: they carry effects and belong in reconciliation,
 # but they are not GICS sectors so they stay out of sector_attribution.
 ATTRIBUTED_NON_SECTOR_ROWS = ("cash", "unclassified")
+# Cash is not a GICS sector, but a material cash allocation effect is a genuine
+# reason a manager lagged, so it is surfaced separately from sector_attribution.
+CASH_ROW_LABEL = "cash"
 # Buckets with no attribution effects at all - their securities are never stored.
 UNATTRIBUTED_SECTION_ROWS = ("bond", "missing performance", "other")
 # Control/total rows.
@@ -962,6 +965,41 @@ def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, An
     return records
 
 
+def build_cash_attribution(bucket_rows: Sequence[RawRow]) -> Dict[str, Any]:
+    """
+    Cash allocation effect, reported separately from sector_attribution.
+
+    Cash is not a GICS sector so it never joins the sector table, but holding
+    cash in a rising market is a real reason a manager lagged. `material` flags
+    whether the effect clears the same threshold used for securities, so the
+    commentary agent can ignore trivial cash drag without judging it.
+    """
+    cash_row = next(
+        (
+            row
+            for row in bucket_rows
+            if normalize_header(row.section_label) == CASH_ROW_LABEL
+        ),
+        None,
+    )
+    if cash_row is None:
+        return {
+            "available": False,
+            "allocation_effect": None,
+            "allocation_effect_bps": None,
+            "material": False,
+        }
+
+    allocation = round_pct(cash_row.values.get("allocation_effect"))
+    return {
+        "available": True,
+        "allocation_effect": allocation,
+        "allocation_effect_bps": to_bps(allocation),
+        "material": allocation is not None
+        and abs(allocation) >= MATERIALITY_THRESHOLD_PP,
+    }
+
+
 def build_security_records(
     security_rows: Sequence[RawRow], benchmark_total_return: Optional[float]
 ) -> List[Dict[str, Any]]:
@@ -1695,6 +1733,8 @@ def build_attribution_document(
         },
         "attribution_summary": build_attribution_summary(total_values),
         "sector_attribution": sectors,
+        # Cash sits outside the GICS sector table by design; see §5.3 of the README.
+        "cash_attribution": build_cash_attribution(parsed["bucket_rows"]),
         "security_attribution": stored_securities,
         "security_attribution_meta": {
             "securities_in_gics_sectors": len(all_securities),

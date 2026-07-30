@@ -16,7 +16,10 @@ benchmark, excess, percentile, history, trends, market context. Phase 2 tells it
 ```bash
 pip install -r requirements.txt
 
-# Phase 1 first - Phase 2 reads and patches its output
+# Recommended - runs both phases in the correct order
+python build_battle_book_data.py --quarter "2026 Q2"
+
+# Or run the phases individually (Phase 1 must come first)
 python build_quarterly_json.py   --quarter "2026 Q2"
 python build_attribution_json.py --quarter "2026 Q2"
 ```
@@ -36,6 +39,12 @@ missing quarter folder, or Phase 1 output not found.
 > files from scratch, which removes the attribution pointers. **Always run
 > Phase 2 after any Phase 1 rebuild for the same quarter.** Phase 2 on its own is
 > safe to re-run any number of times — it is idempotent.
+>
+> `build_battle_book_data.py` exists so this cannot go wrong by accident: it runs
+> both phases in order, resolves `latest` once so both phases target the same
+> quarter, and refuses to run Phase 2 if Phase 1 fails. Prefer it for routine
+> quarterly builds. Its exit codes are `0` both phases succeeded · `1` a phase
+> failed · `2` bad arguments or a phase script missing from the folder.
 
 ---
 
@@ -151,6 +160,7 @@ Managers without attribution get `attribution_available: false` and
 
   "attribution_summary":       { … },   // §5.1
   "sector_attribution":        [ … ],   // §5.2
+  "cash_attribution":          { … },   // §5.2a
   "security_attribution":      [ … ],   // §5.3
   "security_attribution_meta": { … },
   "top_contributors":          [ … ],   // §5.4
@@ -220,6 +230,33 @@ no Consumer Staples, worth +42 bps of allocation).
 * **`driver`** — same rule as `primary_driver`, applied per sector.
 * **`effect_rank`** — 1 = largest absolute total effect, so rank 1 is the sector
   that mattered most in either direction.
+
+### 5.2a `cash_attribution`
+
+Cash is **not** a GICS sector and never appears in `sector_attribution`. But
+holding cash in a rising market is a genuine reason a manager lagged, so its
+allocation effect is exposed separately:
+
+```jsonc
+"cash_attribution": {
+  "available": true,
+  "allocation_effect": -0.3102,
+  "allocation_effect_bps": -31.0,
+  "material": true
+}
+```
+
+* **`available`** — `false` when the workbook has no `Cash` row; the effect
+  fields are then `null` and `material` is `false`.
+* **`material`** — `true` when |allocation effect| reaches the same
+  `MATERIALITY_THRESHOLD_PP` used for securities (0.05 pp = 5 bps). Use it to
+  decide whether cash is worth a sentence; do not judge the size yourself.
+
+Q2 2026 across the three managers: Edgewood −31.0 bps (material), TRP −8.0 bps
+(material), Fidelity −1.0 bps (not material).
+
+Cash carries an allocation effect only — there is no cash selection or
+interaction effect to report.
 
 ### 5.3 `security_attribution`
 
@@ -417,10 +454,9 @@ Nothing is addressed by fixed cell reference:
 Optional sections are tolerated: Edgewood has no `Bond`, `Other` or
 `Unclassified` section at all, and parses without a warning.
 
-`Cash` carries a real allocation effect (−31 bps for Edgewood in Q2 2026) but is
-not a GICS sector, so it stays out of `sector_attribution` and is reported in the
-debug file under `attributed_bucket_rows`. If cash drag should be available to
-the commentary agent, that is a one-line change to the sector builder — ask.
+`Cash` carries a real allocation effect but is not a GICS sector, so it stays out
+of `sector_attribution` and is surfaced separately as `cash_attribution` (§5.2a).
+`Unclassified` remains debug-only, in `attributed_bucket_rows`.
 
 ---
 
