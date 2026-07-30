@@ -103,7 +103,38 @@ DEFAULT_OUTPUT_ROOT = (
 
 ATTRIBUTION_INPUT_SUBFOLDER = "Attribution"
 ATTRIBUTION_OUTPUT_SUBFOLDER = "attribution"
+PACK_OUTPUT_SUBFOLDER = "packs"
 DEBUG_REPORT_FILENAME = "debug_attribution_report.json"
+
+# --- Battle book packs --------------------------------------------------------
+# A pack is one self-contained file per manager per quarter: everything needed to
+# write that battle book, in a single fetch. It exists so runtime retrieval is a
+# deterministic file read rather than a search across large asset-class files.
+#
+# A pack is only written when an attribution workbook was supplied, so the
+# pack's existence IS the attribution-available gate: no pack means no battle
+# book. Nothing else has to stay in sync.
+#
+# Contents are trimmed deliberately, because the whole pack is returned into the
+# agent's context in one response:
+#   * `summaries` is carried instead of the full `market_data` row lists - the
+#     top and bottom tens are what the market backdrop actually cites.
+#   * Extra market periods are carried as summaries only, never full rows.
+#   * `security_attribution` is not carried; the securities that get discussed
+#     are the top movers, so those records are enriched with weights and
+#     contribution instead.
+PACK_EXTRA_MARKET_PERIODS: Tuple[str, ...] = ("ytd",)
+# Fields lifted from security_attribution onto each top mover.
+PACK_MOVER_ENRICHMENT: Tuple[str, ...] = (
+    "portfolio_weight",
+    "benchmark_weight",
+    "contribution_portfolio",
+    "contribution_benchmark",
+    "contribution_active",
+    "selection_effect_bps",
+)
+# Warn when a pack grows past this; the whole file is returned in one response.
+PACK_SIZE_WARN_KB = 60
 
 # --- Quarter folder naming ----------------------------------------------------
 QUARTER_FOLDER_PATTERNS = (
@@ -343,10 +374,15 @@ def iso_or_empty(day: Optional[date]) -> str:
     return day.isoformat() if day else ""
 
 
-def write_json(path: Path, payload: Any) -> None:
+def write_json(path: Path, payload: Any, compact: bool = False) -> None:
+    """Write JSON. `compact` drops indentation for files fetched into an agent's
+    context, where whitespace is pure cost; everything else stays readable."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False)
+        if compact:
+            json.dump(payload, handle, separators=(",", ":"), ensure_ascii=False)
+        else:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
     LOG.info("Wrote %s (%.1f KB)", path, path.stat().st_size / 1024)
 
@@ -1847,6 +1883,123 @@ def build_attribution_document(
 
 
 # =============================================================================
+# SECTION 11b - BATTLE BOOK PACK
+# -----------------------------------------------------------------------------
+# One self-contained file per manager, assembled here rather than at query time,
+# so runtime retrieval is a single deterministic file read.
+#
+# Field names are deliberately kept flat and identical to the names used in the
+# asset-class and attribution JSON, so the commentary agent's instructions work
+# against a pack without any change of path.
+# =============================================================================
+
+
+def enrich_movers(
+    movers: Sequence[Dict[str, Any]], securities: Sequence[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Add weights and contribution to each top mover, from its security record."""
+    by_identity = {
+        (s.get("security"), s.get("ticker")): s for s in securities
+    }
+    enriched: List[Dict[str, Any]] = []
+    for mover in movers:
+        record = dict(mover)
+        source = by_identity.get((mover.get("security"), mover.get("ticker")))
+        if source:
+            for field_name in PACK_MOVER_ENRICHMENT:
+                if field_name in source:
+                    record[field_name] = source[field_name]
+        enriched.append(record)
+    return enriched
+
+
+def build_pack(
+    manager_record: Dict[str, Any],
+    asset_class_document: Dict[str, Any],
+    attribution: Dict[str, Any],
+    quarter: Quarter,
+    generated_at: str,
+) -> Dict[str, Any]:
+    """Assemble the single file a battle book is written from."""
+    market_periods = asset_class_document.get("market_data_periods", {})
+    extra_market = {
+        f"market_summaries_{key}": {
+            "label": market_periods.get(key, {}).get("label", ""),
+            "period_start_date": market_periods.get(key, {}).get("period_start_date", ""),
+            "period_end_date": market_periods.get(key, {}).get("period_end_date", ""),
+            "aligned_with_selected_quarter_end": market_periods.get(key, {}).get(
+                "aligned_with_selected_quarter_end", False
+            ),
+            "note": market_periods.get(key, {}).get("note", ""),
+            "summaries": market_periods.get(key, {}).get("summaries", {}),
+        }
+        for key in PACK_EXTRA_MARKET_PERIODS
+        # In Q1 the year-to-date window is the quarter itself, so an extra
+        # market period would simply duplicate `summaries`.
+        if key in market_periods and not (key == "ytd" and quarter.quarter == 1)
+    }
+
+    pack = {
+        "pack_version": SCRIPT_VERSION,
+        "manager": manager_record.get("manager", ""),
+        "manager_lookup_key": normalize_lookup_name(manager_record.get("manager")),
+        "strategy_name": manager_record.get("strategy_name", ""),
+        "ticker": manager_record.get("ticker", ""),
+        "portfolio_managers": manager_record.get("portfolio_managers", []),
+        "asset_class": attribution.get("asset_class", ""),
+        "asset_class_key": attribution.get("asset_class_key", ""),
+        "benchmark": manager_record.get("benchmark", ""),
+        "period": quarter.label,
+        "period_start_date": quarter.start_date.isoformat(),
+        "period_end_date": quarter.end_date.isoformat(),
+        "lineage": {
+            "performance_source": manager_record.get("source_file", ""),
+            "attribution_source": attribution.get("lineage", {}).get("source_file", ""),
+            "attribution_exported_at": attribution.get("lineage", {}).get(
+                "exported_at", ""
+            ),
+            "generated_at": generated_at,
+        },
+        # --- headline performance -------------------------------------------
+        "return_cumulative": manager_record.get("return_cumulative"),
+        "benchmark_return": manager_record.get("benchmark_return"),
+        "benchmark_return_calculated": manager_record.get(
+            "benchmark_return_calculated", False
+        ),
+        "peer_percentile": manager_record.get("peer_percentile"),
+        "excess_return_cumulative": manager_record.get("excess_return_cumulative"),
+        # --- history ---------------------------------------------------------
+        "performance_periods": manager_record.get("performance_periods", {}),
+        "performance_trends": manager_record.get("performance_trends", {}),
+        "ranking_trend": manager_record.get("ranking_trend", {}),
+        # --- market backdrop --------------------------------------------------
+        "reference_indexes": asset_class_document.get("reference_indexes", []),
+        "peer_group_stats": asset_class_document.get("peer_group_stats", {}),
+        "summaries": asset_class_document.get("summaries", {}),
+        "market_trends": asset_class_document.get("market_trends", {}),
+        **extra_market,
+        # --- attribution ------------------------------------------------------
+        "benchmark_sector_context": attribution.get("benchmark_sector_context", {}),
+        "attribution_summary": attribution.get("attribution_summary", {}),
+        "sector_attribution": attribution.get("sector_attribution", []),
+        "cash_attribution": attribution.get("cash_attribution", {}),
+        "sector_rankings": attribution.get("sector_rankings", {}),
+        "top_contributors": enrich_movers(
+            attribution.get("top_contributors", []),
+            attribution.get("security_attribution", []),
+        ),
+        "top_detractors": enrich_movers(
+            attribution.get("top_detractors", []),
+            attribution.get("security_attribution", []),
+        ),
+        "attribution_periods": attribution.get("attribution_periods", {}),
+        "attribution_trends": attribution.get("attribution_trends", {}),
+        "concentration": attribution.get("concentration", {}),
+    }
+    return pack
+
+
+# =============================================================================
 # SECTION 12 - PATCHING PHASE 1 ASSET-CLASS FILES
 # =============================================================================
 
@@ -1923,6 +2076,7 @@ def build_attribution(
     generated_at = now_iso()
     output_folder = output_root / quarter.label
     attribution_folder = output_folder / ATTRIBUTION_OUTPUT_SUBFOLDER
+    pack_folder = output_folder / PACK_OUTPUT_SUBFOLDER
     input_folder = quarter_folder / ATTRIBUTION_INPUT_SUBFOLDER
 
     phase1 = load_phase1_index(output_folder)
@@ -1937,6 +2091,7 @@ def build_attribution(
     workbook_reports: List[Dict[str, Any]] = []
     linked: Dict[str, Dict[str, Any]] = {}
     files_written: List[str] = []
+    packs_written: List[str] = []
 
     workbooks: List[Path] = []
     if not input_folder.is_dir():
@@ -1998,6 +2153,28 @@ def build_attribution(
         write_json(attribution_folder / f"{slug}.json", document)
         files_written.append(relative_path)
 
+        # The battle book pack: everything for this manager in one file, so
+        # runtime retrieval is a single deterministic read.
+        asset_class_document = phase1.documents.get(manager_ref.asset_class_key, {})
+        manager_record = asset_class_document.get("managers", [])[manager_ref.index]
+        pack = build_pack(
+            manager_record, asset_class_document, document, quarter, generated_at
+        )
+        pack_path = pack_folder / f"{slug}.json"
+        write_json(pack_path, pack, compact=True)
+        pack_relative = f"{PACK_OUTPUT_SUBFOLDER}/{slug}.json"
+        packs_written.append(pack_relative)
+
+        pack_kb = pack_path.stat().st_size / 1024
+        if pack_kb > PACK_SIZE_WARN_KB:
+            message = (
+                f"{pack_relative} is {pack_kb:.1f} KB, above the {PACK_SIZE_WARN_KB} KB "
+                f"guideline. The whole pack is returned in one response, so check it "
+                f"still fits the retrieval path."
+            )
+            LOG.warning(message)
+            global_warnings.append(message)
+
         linked[manager_ref.lookup_key] = {
             "slug": slug,
             "relative_path": relative_path,
@@ -2021,6 +2198,8 @@ def build_attribution(
             == normalize_lookup_name(manager_ref.benchmark),
         }
         debug["output_file"] = relative_path
+        debug["pack_file"] = pack_relative
+        debug["pack_size_kb"] = round(pack_kb, 1)
         debug["securities_stored"] = document["security_attribution_meta"][
             "securities_stored"
         ]
@@ -2072,6 +2251,8 @@ def build_attribution(
         "workbooks_found": [p.name for p in workbooks],
         "workbooks_processed": len(files_written),
         "files_written": files_written,
+        "packs_written": packs_written,
+        "pack_folder": str(pack_folder),
         "unmatched_attribution_files": [
             e["file"] for e in errors if e["stage"] == "manager_linkage"
         ],
