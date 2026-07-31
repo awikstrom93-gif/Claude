@@ -68,7 +68,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import openpyxl
@@ -176,6 +176,11 @@ ASSET_CLASS_FILES: Tuple[Tuple[str, str], ...] = (
     ("small_growth", "small_growth.json"),
     ("smid_growth", "smid_growth.json"),
 )
+
+# Asset classes that need not be present every quarter. Missing Phase 1 output
+# is normally an error - it means Phase 1 was not run - but SMID coverage is
+# occasional, so a quarter with no SMID workbook is expected, not a failure.
+OPTIONAL_ASSET_CLASSES: FrozenSet[str] = frozenset({"smid_growth"})
 
 # --- Worksheet names ----------------------------------------------------------
 TEMPLATE_SHEET_ALIASES = ("template",)
@@ -546,7 +551,8 @@ def load_phase1_index(output_folder: Path) -> Phase1Index:
     for asset_class_key, filename in ASSET_CLASS_FILES:
         path = output_folder / filename
         if not path.is_file():
-            missing.append(filename)
+            if asset_class_key not in OPTIONAL_ASSET_CLASSES:
+                missing.append(filename)
             continue
         with path.open("r", encoding="utf-8") as handle:
             document = json.load(handle)
