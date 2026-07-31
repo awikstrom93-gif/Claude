@@ -1247,6 +1247,14 @@ def build_benchmark_sector_context(
     }
 
 
+def dedupe_preserving_order(messages: Sequence[str]) -> List[str]:
+    """Unique messages, first occurrence first."""
+    seen: Dict[str, None] = {}
+    for message in messages:
+        seen.setdefault(message, None)
+    return list(seen)
+
+
 def security_base_name(name: Optional[str]) -> str:
     """A security name with any trailing share-class wording removed."""
     text = (name or "").strip()
@@ -2912,7 +2920,12 @@ def build_attribution(
         "asset_class_patch_summary": patch_summary,
         "phase1_patched": patch_phase1,
         "workbooks": workbook_reports,
-        "warnings": global_warnings,
+        # Deduplicated: a benchmark-level observation - an unmerged share-class
+        # pair above all - otherwise repeats once per manager in the asset
+        # class and buries the one-off warnings that need acting on. Every
+        # workbook keeps its own full list in workbooks[].warnings, and the
+        # run-level messages are unique by construction, so nothing is lost.
+        "warnings": dedupe_preserving_order(global_warnings),
     }
     write_json(output_folder / DEBUG_REPORT_FILENAME, report)
     return report
