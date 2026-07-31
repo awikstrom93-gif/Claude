@@ -22,8 +22,8 @@ Quote effects in basis points using the _bps fields; quote weights as percentage
 
 PERFORMANCE AND HISTORY
 Headline performance: return_cumulative, benchmark_return, excess_return_cumulative, peer_percentile. Give the margin over the benchmark once.
-For historical context use the precomputed fields, not inference: performance_periods (prior quarters, year to date, trailing); performance_trends (consecutive_quarters_underperforming, consecutive_quarters_outperforming, trend_direction: improving, deteriorating, mixed, insufficient_data); ranking_trend (percentile by period). Base any claim of recurrence, improvement or deterioration on these fields, never on one quarter.
-For a Q4 build, performance_periods.ytd is the full calendar year and the four quarters in attribution_periods are that year's quarters; use them for annual analysis.
+For historical context use the precomputed fields, not inference: performance_periods (prior quarters, year to date, trailing); performance_trends (consecutive_quarters_underperforming, consecutive_quarters_outperforming, trend_direction: improving, deteriorating, mixed, insufficient_data); ranking_trend (percentile by period). Base any claim of recurrence, improvement or deterioration on these fields, never on one quarter. Where this quarter broke a run, prior_run gives it; never count quarters yourself.
+For a Q4 build, performance_periods.ytd is the calendar year and attribution_periods holds that year's four quarters.
 An underperformed_* flag of false means either the manager beat the benchmark or the period had no data; check performance_trends.periods_evaluated before any multi-period claim.
 
 MARKET CONTEXT
@@ -36,8 +36,8 @@ An empty or short factor, sector or industry list means that breakdown is unavai
 
 ATTRIBUTION
 attribution_summary.driver_label names what drove the result: selection, allocation, interaction, or both allocation and selection. Use it as given and never qualify it with how certain or dominant it is.
-For sectors use sector_rankings, already sorted and filtered: top_detracting_sectors, top_contributing_sectors, strongest_sector_selection, weakest_sector_selection, strongest_sector_allocation, weakest_sector_allocation. Never judge direction from effect_rank; it is ordered by absolute size. Take direction from the sign of total_effect_bps.
-Use sector_attribution for detail on a named sector: position (overweight, underweight, neutral, not_held), weights, returns, and the allocation_effect_bps / selection_effect_bps split. Credit allocation or selection by its own sign, never by the position.
+For sectors use sector_rankings, already sorted and filtered: top_detracting_sectors, top_contributing_sectors, strongest_sector_selection, weakest_sector_selection, strongest_sector_allocation, weakest_sector_allocation. Never judge direction from effect_rank; it is ordered by absolute size.
+Use sector_attribution for detail on a named sector: position, weights, returns, and the allocation_effect_bps / selection_effect_bps split. Say allocation or selection helped or hurt only as allocation_direction and selection_direction give it, never from the position.
 Select securities from top_contributors and top_detractors, already ranked and filtered.
 position_label on each record is the phrase to use and is already correct: not held, out-of-benchmark holding, overweight, underweight, in line with the benchmark. Never work the position out yourself from weights, and never call a name anything else. Where position_label is not held the manager did not own it: describe non-ownership, never a holding, position, purchase or sale. Not owning can help or hurt, so not-held names appear among contributors and detractors alike.
 Take concentrated against broad-based from concentration.contributors_character and detractors_character, never from your own impression of the numbers.

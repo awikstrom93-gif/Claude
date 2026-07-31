@@ -918,6 +918,24 @@ def resolve_position(
     return "overweight" if active_weight > 0 else "underweight"
 
 
+def effect_direction(effect: Optional[float]) -> Optional[str]:
+    """
+    Whether a sector's allocation or selection helped or hurt, in words.
+
+    The sign is right there in the _bps field, but three drafts have credited a
+    position for a gain its own effect contradicts - "an overweight position and
+    strong selection combined to add 52 bps" when allocation cost 16, and "on
+    the strength of both an overweight stance and strong stock picking" when the
+    overweight cost 35. Instructing the agent to read the sign has not held, so
+    the reading is done here.
+    """
+    if effect is None:
+        return None
+    if abs(effect) < MATERIALITY_THRESHOLD_PP:
+        return "negligible"
+    return "helped" if effect > 0 else "hurt"
+
+
 def resolve_driver_label(driver: str, confidence: str) -> str:
     """
     What drove the result, as a phrase the agent can only copy.
@@ -1051,8 +1069,10 @@ def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, An
                 "return_differential": round_pct(values.get("return_differential")),
                 "allocation_effect": allocation,
                 "allocation_effect_bps": to_bps(allocation),
+                "allocation_direction": effect_direction(allocation),
                 "selection_effect": selection,
                 "selection_effect_bps": to_bps(selection),
+                "selection_direction": effect_direction(selection),
                 "interaction_effect": interaction,
                 "interaction_effect_bps": to_bps(interaction),
                 "total_effect": total,
@@ -2006,6 +2026,55 @@ def enrich_movers(
     return enriched
 
 
+PRIOR_RUN_QUARTERS = ("two_quarters_ago", "three_quarters_ago", "four_quarters_ago")
+
+
+def with_prior_run(
+    trends: Dict[str, Any], periods: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Record the run of quarters that ended with the selected one.
+
+    consecutive_quarters_outperforming and its twin describe the run the
+    selected quarter belongs to, so when a quarter breaks a streak both read as
+    a small number and the streak it broke is recorded nowhere. Asked to
+    describe a reversal, the agent counted the quarters itself and got it
+    wrong - claiming T. Rowe Price Mid-Cap Growth had reversed three straight
+    quarters of outperformance when the run was two, the fourth quarter back
+    having trailed by 105 bps. Computing it here removes the counting.
+    """
+    if not periods:
+        return dict(trends)
+
+    def excess(key: str) -> Optional[float]:
+        record = periods.get(key) or {}
+        return record.get("excess_return_cumulative") if record.get("available") else None
+
+    current = excess("selected_quarter")
+    prior = [excess(key) for key in PRIOR_RUN_QUARTERS]
+    if current is None or prior[0] is None:
+        return dict(trends)
+
+    # Only a reversal has a run worth naming; an unbroken streak is already
+    # covered by consecutive_quarters_*.
+    outperformed_before = prior[0] > 0
+    if (current > 0) == outperformed_before:
+        return dict(trends)
+
+    quarters = 0
+    for value in prior:
+        if value is None or (value > 0) != outperformed_before:
+            break
+        quarters += 1
+
+    enriched = dict(trends)
+    enriched["prior_run"] = {
+        "direction": "outperforming" if outperformed_before else "underperforming",
+        "quarters": quarters,
+    }
+    return enriched
+
+
 def strip_active_return_total(record: Dict[str, Any]) -> Dict[str, Any]:
     """
     Drop the Brinson total from anything the agent reads.
@@ -2101,7 +2170,10 @@ def build_pack(
         "excess_return_cumulative": manager_record.get("excess_return_cumulative"),
         # --- history ---------------------------------------------------------
         "performance_periods": manager_record.get("performance_periods", {}),
-        "performance_trends": manager_record.get("performance_trends", {}),
+        "performance_trends": with_prior_run(
+            manager_record.get("performance_trends", {}),
+            manager_record.get("performance_periods", {}),
+        ),
         "ranking_trend": manager_record.get("ranking_trend", {}),
         # --- market backdrop --------------------------------------------------
         "reference_indexes": asset_class_document.get("reference_indexes", []),
