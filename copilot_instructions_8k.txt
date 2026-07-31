@@ -31,7 +31,7 @@ Use summaries, market_trends and market_summaries_ytd for the market backdrop: f
 For the benchmark's own sector detail use benchmark_sector_context: eleven GICS sectors with benchmark_weight, benchmark_return and contribution_to_benchmark_return. Give these in percentage points. Take best_sector and largest_contributor from that object; never rank the sectors yourself.
 Use reference_indexes and factor peer_percentile for benchmark-versus-benchmark context.
 Never introduce a theme, factor or index the data does not name.
-market_summaries_ytd covers a different window; not the quarter.
+Use market_summaries_ytd as year to date only if its note is empty.
 An empty or short factor, sector or industry list means that breakdown is unavailable.
 
 ATTRIBUTION

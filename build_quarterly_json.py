@@ -2092,9 +2092,11 @@ def build_market_period_view(
     sectors = [flatten_market_row(row, period_key) for row in selection["sectors"]]
     industries = [flatten_market_row(row, period_key) for row in selection["industries"]]
 
-    # The market workbook has no "YTD thru Last Q End" block, so its YTD runs
-    # to the export date rather than to quarter end. Manager YTD and market YTD
-    # therefore cover different windows; say so in the data, not just the log.
+    # Where the market export's YTD block is configured to run to the export
+    # date rather than quarter end, manager YTD and market YTD cover different
+    # windows. Say so in the data, not just the log, so the commentary can tell
+    # them apart. An export set to last year end -> last quarter end aligns, and
+    # the note is then empty.
     aligned = period_block is not None and period_block.end_date == quarter_end
     note = ""
     if period_block is not None and not aligned:
