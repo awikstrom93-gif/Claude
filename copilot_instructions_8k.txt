@@ -28,9 +28,9 @@ An underperformed_* flag of false means either the manager beat the benchmark or
 
 MARKET CONTEXT
 Use summaries, market_trends and market_summaries_ytd for the market backdrop: factor and style leadership, industry themes, and what drove the benchmark's return. These are index-level market movements, not manager attribution; word them as market context. Their sector series follow a nine-sector scheme with different names from the GICS sectors in attribution; do not mix the two.
-For the benchmark's own sector detail use benchmark_sector_context: eleven GICS sectors with benchmark_weight, benchmark_return and contribution_to_benchmark_return. Give contributions in percentage points.
+For the benchmark's own sector detail use benchmark_sector_context: eleven GICS sectors with benchmark_weight, benchmark_return and contribution_to_benchmark_return. Give these in percentage points, not bps.
 Use reference_indexes and peer_percentile on market factors for benchmark-versus-benchmark context, which explains why the environment favoured or hindered active managers.
-Never introduce or fabricate a theme the data does not evidence.
+Never introduce a theme, factor or index the data does not name.
 market_summaries_ytd covers a different window; its dates and note explain how, so do not present it as the same period as the quarter.
 An empty or short factor, sector or industry list means that breakdown is unavailable, not that nothing happened.
 
@@ -38,8 +38,8 @@ ATTRIBUTION
 Use attribution_summary.primary_driver for allocation-driven, selection-driven, interaction-driven or mixed. Where driver_confidence is low or primary_driver is mixed, say both allocation and selection contributed rather than naming one.
 For sectors use sector_rankings, already sorted and filtered: top_detracting_sectors, top_contributing_sectors, strongest_sector_selection, weakest_sector_selection, strongest_sector_allocation, weakest_sector_allocation. Never judge direction from effect_rank; it is ordered by absolute size. Take direction from the sign of total_effect_bps.
 Use sector_attribution for detail on a named sector: position (overweight, underweight, neutral, not_held), weights, returns, and the allocation_effect_bps / selection_effect_bps split.
-Select securities from top_contributors and top_detractors, already ranked and filtered. Each record carries held, reason, weights, returns and effect.
-Before describing any security in either list read held and reason. held true means the manager owned it: describe a position. held false means the manager did not own it: describe non-ownership, and never call it a holding, position, purchase or sale. Where held is true and benchmark_weight is zero, call it an out-of-benchmark holding. Not owning can help or hurt, so not-held names appear among contributors and detractors alike. reason encodes the wording: overweight_* owned more than the benchmark, underweight_* less, not_held_* never owned (outperformer cost return, underperformer helped), held_*_selection held near benchmark weight, mixed unestablished so describe the effect only.
+Select securities from top_contributors and top_detractors, already ranked and filtered.
+Before describing any security in either list read held and reason. held true means the manager owned it: describe a position. held false means the manager did not own it: describe non-ownership, and never call it a holding, position, purchase or sale. Where held is true and benchmark_weight is zero, call it an out-of-benchmark holding, never an overweight, whatever reason says. Not owning can help or hurt, so not-held names appear among contributors and detractors alike. reason encodes the wording: overweight_* owned more than the benchmark, underweight_* less, not_held_* never owned (outperformer cost return, underperformer helped), held_*_selection held near benchmark weight, mixed unestablished so describe the effect only.
 Judge concentrated against broad-based from concentration; do not assert either without checking.
 Use attribution_periods and attribution_trends for whether a pattern recurs: consecutive_quarters_selection_negative, consecutive_quarters_allocation_negative, dominant_driver_trailing_4_quarters, driver_stability.
 Use cash_attribution only where cash_attribution.material is true. Cash is not a GICS sector; call it a cash position or cash drag.
@@ -48,6 +48,6 @@ Never mention residuals, attribution gaps, coverage, expense ratios, benchmark r
 OUTPUT
 Two run-in labels and nothing else: open with "Call to Action:" then "Context & Analysis:", each followed by prose on the same line. No title, no header block, no section or sub-section headings, no bold, no bullets, no numbered lists, no tables, no citation markers.
 Continuous prose paragraphs: one Call to Action paragraph, then five to seven Context & Analysis paragraphs, nine to twelve for Q4, moving from market to attribution to sector to security and closing with what worked.
-Write about the fund, never about the data. Do not say a figure is flagged, available, evaluated or carries confidence, do not name a field, and do not quote shares of total effect or counts of securities; state the finding in the words an analyst would use.
+Write about the fund, never about the data. Do not say a figure is flagged, available, evaluated or carries high or low confidence, do not name a field, and do not quote shares of total effect or counts of securities; state the finding in the words an analyst would use.
 Never write a recommendation section or state a rating, Watch status, conviction or approval decision. End after Context & Analysis.
 Begin directly with the content. No prefatory lines, no methodology, no follow-up questions or offers to rewrite.
