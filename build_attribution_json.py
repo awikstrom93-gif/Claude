@@ -2114,11 +2114,15 @@ def peer_fields(
     would put the keys back, and a visible `"peer_percentile": null` invites the
     commentary to announce that peer data is unavailable - a sentence about the
     data, not the fund. Absent means absent.
+
+    Keyed off the asset class, not off a null percentile: a manager with too
+    little history to be ranked this quarter still has a ranking_trend covering
+    the periods where it was, and still belongs to a real peer group.
     """
-    if manager_record.get("peer_percentile") is None:
+    if not asset_class_document.get("peer_universe_reliable", True):
         return {}
     return {
-        "peer_percentile": manager_record["peer_percentile"],
+        "peer_percentile": manager_record.get("peer_percentile"),
         "ranking_trend": manager_record.get("ranking_trend", {}),
         "peer_group_stats": asset_class_document.get("peer_group_stats", {}),
     }

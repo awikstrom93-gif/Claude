@@ -2417,7 +2417,10 @@ def build_quarter(
             "manager_lookup": manager_lookup,
             "reference_indexes": parsed["reference_indexes"],
             "peer_group_stats": parsed["peer_group_stats"],
-            # Placeholder; replaced below where the peer universe is unusable.
+            # Stated rather than inferred: Phase 2 must be able to tell an asset
+            # class with no peer universe from a single manager who happens to
+            # have a blank percentile.
+            "peer_universe_reliable": spec.get("peer_universe_reliable", True),
             # Selected-quarter aliases, unchanged from V1.
             "market_data": market_data,
             "summaries": summaries,
