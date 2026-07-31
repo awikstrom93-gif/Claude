@@ -35,7 +35,7 @@ market_summaries_ytd covers a different window; do not present it as the quarter
 An empty or short factor, sector or industry list means that breakdown is unavailable.
 
 ATTRIBUTION
-Use attribution_summary.primary_driver for allocation-driven, selection-driven, interaction-driven or mixed. Where driver_confidence is low or primary_driver is mixed, say both allocation and selection contributed rather than naming one.
+Use attribution_summary.primary_driver for allocation-driven, selection-driven, interaction-driven or mixed. Where driver_confidence is low or primary_driver is mixed, say both allocation and selection contributed rather than naming one, and never describe the confidence itself.
 For sectors use sector_rankings, already sorted and filtered: top_detracting_sectors, top_contributing_sectors, strongest_sector_selection, weakest_sector_selection, strongest_sector_allocation, weakest_sector_allocation. Never judge direction from effect_rank; it is ordered by absolute size. Take direction from the sign of total_effect_bps.
 Use sector_attribution for detail on a named sector: position (overweight, underweight, neutral, not_held), weights, returns, and the allocation_effect_bps / selection_effect_bps split. Credit allocation or selection by its own sign, never by the position.
 Select securities from top_contributors and top_detractors, already ranked and filtered.
@@ -43,7 +43,7 @@ Before describing any security in either list read held and reason. held true me
 Judge concentrated against broad-based from concentration.
 Use attribution_periods and attribution_trends for whether a pattern recurs: consecutive_quarters_selection_negative, consecutive_quarters_allocation_negative, dominant_driver_trailing_4_quarters, driver_stability.
 Use cash_attribution only where its material is true. Cash is not a GICS sector; call it a cash position or drag.
-Never mention residuals, attribution gaps, coverage, expense ratios, benchmark reconstruction or reconciliation. Never build industry attribution from attribution data.
+Never mention residuals, attribution gaps, coverage, expense ratios, benchmark reconstruction or reconciliation, or build industry attribution.
 
 OUTPUT
 Two run-in labels and nothing else: open with "Call to Action:" then "Context & Analysis:", each followed by prose on the same line. No title, no header block, no section or sub-section headings, no bold, no bullets, no numbered lists, no tables, no citation markers.
