@@ -2006,6 +2006,44 @@ def enrich_movers(
     return enriched
 
 
+def strip_active_return_total(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Drop the Brinson total from anything the agent reads.
+
+    The pack already carries excess_return_cumulative, the performance excess.
+    total_active_return is the attribution model's own total and differs from it
+    - 967 bps against 926.5 for Fidelity Q2 2026 - because attribution covers
+    the securities it can classify. Both figures are correct and neither needs
+    explaining, but a draft that quotes both leaves a consultant staring at a
+    40 bps discrepancy. Instructing the agent to prefer one held on 4.8 and
+    failed on 4.7, so the competing figure goes instead. It stays in the full
+    attribution JSON and the debug report, which are the audit artifacts.
+    """
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in ("total_active_return", "total_active_return_bps")
+    }
+
+
+def material_cash_only(cash: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Put cash_attribution in the pack only when it is worth writing about.
+
+    Shipping it with material=false invited "the cash position was not
+    material" - a sentence about the data rather than the fund, and one that
+    echoes a field name. Absent the key entirely there is nothing to report,
+    and `material` itself never reaches the agent's vocabulary.
+    """
+    if not cash.get("material"):
+        return {}
+    return {
+        "cash_attribution": {
+            key: value for key, value in cash.items() if key != "material"
+        }
+    }
+
+
 def build_pack(
     manager_record: Dict[str, Any],
     asset_class_document: Dict[str, Any],
@@ -2073,9 +2111,11 @@ def build_pack(
         **extra_market,
         # --- attribution ------------------------------------------------------
         "benchmark_sector_context": attribution.get("benchmark_sector_context", {}),
-        "attribution_summary": attribution.get("attribution_summary", {}),
+        "attribution_summary": strip_active_return_total(
+            attribution.get("attribution_summary", {})
+        ),
         "sector_attribution": attribution.get("sector_attribution", []),
-        "cash_attribution": attribution.get("cash_attribution", {}),
+        **material_cash_only(attribution.get("cash_attribution", {})),
         "sector_rankings": attribution.get("sector_rankings", {}),
         "top_contributors": enrich_movers(
             attribution.get("top_contributors", []),
@@ -2085,7 +2125,10 @@ def build_pack(
             attribution.get("top_detractors", []),
             attribution.get("security_attribution", []),
         ),
-        "attribution_periods": attribution.get("attribution_periods", {}),
+        "attribution_periods": {
+            key: strip_active_return_total(record)
+            for key, record in attribution.get("attribution_periods", {}).items()
+        },
         "attribution_trends": attribution.get("attribution_trends", {}),
         "concentration": attribution.get("concentration", {}),
     }
