@@ -918,6 +918,19 @@ def resolve_position(
     return "overweight" if active_weight > 0 else "underweight"
 
 
+def resolve_driver_label(driver: str, confidence: str) -> str:
+    """
+    What drove the result, as a phrase the agent can only copy.
+
+    Where the leading factor is not clearly dominant, the honest statement is
+    that both contributed - so say that, rather than naming one and hedging it
+    with a confidence qualifier the commentary is not allowed to mention.
+    """
+    if driver == "mixed" or confidence == "low":
+        return "both allocation and selection"
+    return driver
+
+
 def resolve_position_label(
     held: bool,
     benchmark_weight: Optional[float],
@@ -1003,7 +1016,12 @@ def build_attribution_summary(total_values: Dict[str, Optional[float]]) -> Dict[
         "total_active_return": total_active,
         "total_active_return_bps": to_bps(total_active),
         "primary_driver": driver,
-        "driver_confidence": confidence,
+        # driver_label collapses primary_driver and the confidence behind it
+        # into the phrase to use. driver_confidence itself is deliberately not
+        # emitted: with the value visible, four of five drafts wrote something
+        # like "selection at high confidence" despite an explicit ban in two
+        # places. Removing the value removes the temptation.
+        "driver_label": resolve_driver_label(driver, confidence),
     }
 
 
