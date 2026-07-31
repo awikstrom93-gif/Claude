@@ -289,6 +289,10 @@ MATERIALITY_THRESHOLD_PP = 0.05
 TOP_N_SECURITIES = 10
 TOP_N_SECTORS = 5
 CONCENTRATION_TOP_N = 5
+# Five names out of several hundred producing this share of one side's effect is
+# concentrated by any reasonable reading. Precomputed so the agent never has to
+# form an impression of breadth from the numbers.
+CONCENTRATION_SHARE_THRESHOLD = 0.40
 
 # --- Classification thresholds ------------------------------------------------
 # Active weight (pp) within this band counts as neutral rather than over/under.
@@ -914,6 +918,30 @@ def resolve_position(
     return "overweight" if active_weight > 0 else "underweight"
 
 
+def resolve_position_label(
+    held: bool,
+    benchmark_weight: Optional[float],
+    active_weight: Optional[float],
+) -> str:
+    """
+    The phrase the commentary agent should use for this security, precomputed.
+
+    `reason` below encodes ownership and relative performance together, which
+    makes it read like a position label when it is not: a name carrying
+    "overweight_outperformer" with a zero benchmark weight is an out-of-benchmark
+    holding, not an overweight. Instructing an agent to prefer benchmark_weight
+    over reason proved unreliable across three wordings, so the judgement is made
+    here instead and the agent is given a phrase it can only copy.
+    """
+    if not held:
+        return "not held"
+    if benchmark_weight is None or benchmark_weight <= HELD_WEIGHT_EPSILON:
+        return "out-of-benchmark holding"
+    if active_weight is None or abs(active_weight) < NEUTRAL_ACTIVE_WEIGHT_PP:
+        return "in line with the benchmark"
+    return "overweight" if active_weight > 0 else "underweight"
+
+
 def resolve_security_reason(
     held: bool,
     active_weight: Optional[float],
@@ -1164,6 +1192,9 @@ def build_security_records(
                 "selection_effect_bps": to_bps(selection),
                 "total_effect": total,
                 "total_effect_bps": to_bps(total),
+                "position_label": resolve_position_label(
+                    held, benchmark_weight, active_weight
+                ),
                 "reason": resolve_security_reason(
                     held, active_weight, security_return, benchmark_total_return, total
                 ),
@@ -1220,7 +1251,10 @@ def build_top_movers(
                 "active_weight": record["active_weight"],
                 "portfolio_return": record["portfolio_return"],
                 "benchmark_return": record["benchmark_return"],
-                "reason": record["reason"],
+                # position_label replaces reason in the agent-facing lists on
+                # purpose: carrying both put a correct phrase next to one that
+                # contradicts it, and the contradicting one kept winning.
+                "position_label": record["position_label"],
             }
         )
     return movers
@@ -1426,13 +1460,26 @@ def build_concentration(
         s["total_effect"] for s in sectors if s.get("total_effect") is not None
     ]
 
+    contributors_share = share(sum(positives[:CONCENTRATION_TOP_N]), sum(positives))
+    detractors_share = share(
+        abs(sum(negatives[:CONCENTRATION_TOP_N])), abs(sum(negatives))
+    )
+
+    def character(value: Optional[float]) -> Optional[str]:
+        """Concentrated or broad-based, decided here rather than by the agent."""
+        if value is None:
+            return None
+        return (
+            "concentrated"
+            if value >= CONCENTRATION_SHARE_THRESHOLD
+            else "broad_based"
+        )
+
     return {
-        "top_5_contributors_share_of_positive_effect": share(
-            sum(positives[:CONCENTRATION_TOP_N]), sum(positives)
-        ),
-        "top_5_detractors_share_of_negative_effect": share(
-            abs(sum(negatives[:CONCENTRATION_TOP_N])), abs(sum(negatives))
-        ),
+        "top_5_contributors_share_of_positive_effect": contributors_share,
+        "top_5_detractors_share_of_negative_effect": detractors_share,
+        "contributors_character": character(contributors_share),
+        "detractors_character": character(detractors_share),
         "top_5_absolute_effect_share": share(
             sum(absolutes[:CONCENTRATION_TOP_N]), sum(absolutes)
         ),

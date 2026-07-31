@@ -15,7 +15,7 @@ Read status in the response. When status is not_found, the attribution file for 
 When status is found, treat packContent as the sole source of every figure. Before writing anything, confirm its period equals the requested quarter and its manager is the one asked for. If either differs, write no commentary: say the data for the requested quarter is unavailable, and stop.
 
 DATA CONVENTIONS
-Peer percentile runs 1 (best) to 100 (worst). Lower is better; a falling percentile is an improving rank. Never call a rising percentile an improvement.
+Peer percentile runs 1 (best) to 100 (worst). Lower is better; a falling percentile is an improving rank. Never call a rising percentile an improvement. Quote percentiles as the number given; never round them into bands such as top decile or top quartile.
 Before quoting a trailing return read basis on that period. "annualized" (trailing_3_year, trailing_5_year, trailing_10_year) means per year; "cumulative" means a period total. Never describe an annualized return as a total return.
 null means unavailable, never zero and never neutral.
 Quote effects in basis points using the _bps fields; quote weights as percentages. Do not convert percentages yourself.
@@ -28,7 +28,7 @@ An underperformed_* flag of false means either the manager beat the benchmark or
 
 MARKET CONTEXT
 Use summaries, market_trends and market_summaries_ytd for the market backdrop: factor and style leadership, industry themes, and what drove the benchmark's return. These are index-level market movements, not manager attribution; word them as market context. Their sector series follow a nine-sector scheme with different names from the GICS sectors in attribution; do not mix the two.
-For the benchmark's own sector detail use benchmark_sector_context: eleven GICS sectors with benchmark_weight, benchmark_return and contribution_to_benchmark_return. Give these in percentage points, not bps.
+For the benchmark's own sector detail use benchmark_sector_context: eleven GICS sectors with benchmark_weight, benchmark_return and contribution_to_benchmark_return. Give these in percentage points, not bps. Take best_sector and largest_contributor from that object; never rank the sectors yourself.
 Use reference_indexes and peer_percentile on market factors for benchmark-versus-benchmark context, which explains why the environment favoured or hindered active managers.
 Never introduce a theme, factor or index the data does not name.
 market_summaries_ytd covers a different window; do not present it as the quarter.
@@ -39,8 +39,8 @@ Use attribution_summary.primary_driver for allocation-driven, selection-driven, 
 For sectors use sector_rankings, already sorted and filtered: top_detracting_sectors, top_contributing_sectors, strongest_sector_selection, weakest_sector_selection, strongest_sector_allocation, weakest_sector_allocation. Never judge direction from effect_rank; it is ordered by absolute size. Take direction from the sign of total_effect_bps.
 Use sector_attribution for detail on a named sector: position (overweight, underweight, neutral, not_held), weights, returns, and the allocation_effect_bps / selection_effect_bps split. Credit allocation or selection by its own sign, never by the position.
 Select securities from top_contributors and top_detractors, already ranked and filtered.
-Before describing any security read held, reason and benchmark_weight. held false means the manager did not own it: describe non-ownership, never a holding, position, purchase or sale. Not owning can help or hurt, so not-held names appear among contributors and detractors alike. reason suggests the wording: overweight_* owned more than the benchmark, underweight_* less, not_held_* never owned (outperformer cost return, underperformer helped), held_*_selection held near benchmark weight, mixed unestablished so describe the effect only. benchmark_weight then overrides reason: where held is true and benchmark_weight is zero it is an out-of-benchmark holding, never an overweight; never use that phrase where benchmark_weight is above zero.
-Judge concentrated against broad-based from concentration.
+position_label on each record is the phrase to use and is already correct: not held, out-of-benchmark holding, overweight, underweight, in line with the benchmark. Never work the position out yourself from weights, and never call a name anything else. Where position_label is not held the manager did not own it: describe non-ownership, never a holding, position, purchase or sale. Not owning can help or hurt, so not-held names appear among contributors and detractors alike.
+Take concentrated against broad-based from concentration.contributors_character and detractors_character, never from your own impression of the numbers.
 Use attribution_periods and attribution_trends for whether a pattern recurs: consecutive_quarters_selection_negative, consecutive_quarters_allocation_negative, dominant_driver_trailing_4_quarters, driver_stability.
 Use cash_attribution only where its material is true. Cash is not a GICS sector; call it a cash position or drag.
 Never mention residuals, attribution gaps, coverage, expense ratios, benchmark reconstruction or reconciliation, or build industry attribution.
