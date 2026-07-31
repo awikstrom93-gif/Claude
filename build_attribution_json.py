@@ -2027,6 +2027,33 @@ def enrich_movers(
 
 
 PRIOR_RUN_QUARTERS = ("two_quarters_ago", "three_quarters_ago", "four_quarters_ago")
+QUARTER_LABEL_KEYS = PRIOR_RUN_QUARTERS + ("selected_quarter",)
+
+
+def with_quarter_labels(periods: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Name each quarter block by its calendar quarter.
+
+    Phase 1 labels them by distance - "3 Quarters Ago" - and leaves the calendar
+    quarter implicit in the dates. Asked which quarters had been strong, the
+    agent worked back from the labels and named "Q3 and Q4 2025" when the strong
+    ones were Q4 2025 and Q1 2026. The arithmetic is trivial and the dates were
+    right there, which is exactly the kind of derivation that keeps going wrong.
+    """
+    labelled = dict(periods)
+    for key in QUARTER_LABEL_KEYS:
+        record = labelled.get(key)
+        if not isinstance(record, dict):
+            continue
+        end = record.get("period_end_date")
+        if not end:
+            continue
+        try:
+            year, month = int(end[:4]), int(end[5:7])
+        except (TypeError, ValueError):
+            continue
+        labelled[key] = {**record, "quarter": f"{year} Q{(month - 1) // 3 + 1}"}
+    return labelled
 
 
 def with_prior_run(
@@ -2169,7 +2196,9 @@ def build_pack(
         "peer_percentile": manager_record.get("peer_percentile"),
         "excess_return_cumulative": manager_record.get("excess_return_cumulative"),
         # --- history ---------------------------------------------------------
-        "performance_periods": manager_record.get("performance_periods", {}),
+        "performance_periods": with_quarter_labels(
+            manager_record.get("performance_periods", {})
+        ),
         "performance_trends": with_prior_run(
             manager_record.get("performance_trends", {}),
             manager_record.get("performance_periods", {}),
