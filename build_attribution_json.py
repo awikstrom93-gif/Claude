@@ -2163,11 +2163,40 @@ def strip_share_class(name: Any) -> str:
     return current
 
 
+PUNCTUATION_VARIANT_RE = re.compile(r"[-/]")
+
+
+def punctuation_variants(normalized: str) -> List[str]:
+    """
+    Spellings of a normalized name a user is likely to type instead.
+
+    The lookup key strips periods and collapses spaces but leaves hyphens and
+    slashes intact, so Morningstar's "T. Rowe Price Mid-Cap Growth" resolves
+    only for someone who types the hyphen. Asking for "mid cap growth" returned
+    not_found on a manager whose pack was sitting in the folder. Both the
+    spaced and the joined form are generated, since "Mid Cap" and "MidCap" are
+    equally plausible typings.
+    """
+    if not PUNCTUATION_VARIANT_RE.search(normalized):
+        return []
+    spaced = re.sub(
+        r"\s+", " ", PUNCTUATION_VARIANT_RE.sub(" ", normalized)
+    ).strip()
+    joined = PUNCTUATION_VARIANT_RE.sub("", normalized)
+    return sorted({spaced, joined} - {normalized, ""})
+
+
 def build_share_class_aliases(
     phase1: "Phase1Index",
 ) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """
-    Map suffix-stripped fund names onto the one manager they can mean.
+    Map alternative spellings of a fund name onto the one manager they can mean.
+
+    Covers two kinds: share-class suffixes stripped off ("Fidelity Blue Chip
+    Growth" for the K shares) and punctuation the user is unlikely to reproduce
+    ("mid cap" for "Mid-Cap"). Both are generated for the suffix-stripped form
+    too, so "t rowe price mid cap growth" resolves even when the fund carries a
+    share class.
 
     The check runs across every manager in every asset class, not just those
     with a pack, so an alias is only created when it is unambiguous in the whole
@@ -2183,9 +2212,15 @@ def build_share_class_aliases(
                 continue
             full = normalize_lookup_name(name)
             exact.add(full)
+            forms = {full}
             stripped = strip_share_class(name)
-            if stripped and stripped != full:
-                candidates.setdefault(stripped, []).append(full)
+            if stripped:
+                forms.add(stripped)
+            for form in list(forms):
+                forms.update(punctuation_variants(form))
+            for form in forms:
+                if form and form != full:
+                    candidates.setdefault(form, []).append(full)
 
     aliases: Dict[str, str] = {}
     ambiguous: Dict[str, List[str]] = {}
