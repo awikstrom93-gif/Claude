@@ -174,6 +174,7 @@ ASSET_CLASS_FILES: Tuple[Tuple[str, str], ...] = (
     ("large_growth", "large_growth.json"),
     ("mid_growth", "mid_growth.json"),
     ("small_growth", "small_growth.json"),
+    ("smid_growth", "smid_growth.json"),
 )
 
 # --- Worksheet names ----------------------------------------------------------
@@ -2102,6 +2103,27 @@ def with_prior_run(
     return enriched
 
 
+def peer_fields(
+    manager_record: Dict[str, Any], asset_class_document: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Carry peer-relative figures only where the universe supports them.
+
+    Phase 1 deletes every percentile-derived field for an asset class whose peer
+    group is too thin to rank against. Copying them here with a null default
+    would put the keys back, and a visible `"peer_percentile": null` invites the
+    commentary to announce that peer data is unavailable - a sentence about the
+    data, not the fund. Absent means absent.
+    """
+    if manager_record.get("peer_percentile") is None:
+        return {}
+    return {
+        "peer_percentile": manager_record["peer_percentile"],
+        "ranking_trend": manager_record.get("ranking_trend", {}),
+        "peer_group_stats": asset_class_document.get("peer_group_stats", {}),
+    }
+
+
 def strip_active_return_total(record: Dict[str, Any]) -> Dict[str, Any]:
     """
     Drop the Brinson total from anything the agent reads.
@@ -2193,7 +2215,7 @@ def build_pack(
         "benchmark_return_calculated": manager_record.get(
             "benchmark_return_calculated", False
         ),
-        "peer_percentile": manager_record.get("peer_percentile"),
+        **peer_fields(manager_record, asset_class_document),
         "excess_return_cumulative": manager_record.get("excess_return_cumulative"),
         # --- history ---------------------------------------------------------
         "performance_periods": with_quarter_labels(
@@ -2203,10 +2225,8 @@ def build_pack(
             manager_record.get("performance_trends", {}),
             manager_record.get("performance_periods", {}),
         ),
-        "ranking_trend": manager_record.get("ranking_trend", {}),
         # --- market backdrop --------------------------------------------------
         "reference_indexes": asset_class_document.get("reference_indexes", []),
-        "peer_group_stats": asset_class_document.get("peer_group_stats", {}),
         "summaries": asset_class_document.get("summaries", {}),
         "market_trends": asset_class_document.get("market_trends", {}),
         **extra_market,

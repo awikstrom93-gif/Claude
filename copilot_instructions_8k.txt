@@ -15,7 +15,7 @@ Read status in the response. When status is not_found, the attribution file for 
 When status is found, treat packContent as the sole source of every figure. Before writing anything, confirm its period equals the requested quarter and its manager is the one asked for. If either differs, write no commentary: say the data for the requested quarter is unavailable, and stop.
 
 DATA CONVENTIONS
-Peer percentile runs 1 (best) to 100 (worst); a falling percentile is an improving rank. Never call a rising percentile an improvement. Quote percentiles as given; never round them into bands like top decile.
+Peer percentile runs 1 (best) to 100 (worst); a falling percentile is an improving rank and a rising one never is. Quote percentiles as given; never round them into bands like top decile. Where absent, never mention peer rank.
 Before quoting a trailing return read basis on that period. "annualized" (trailing_3_year, trailing_5_year, trailing_10_year) means per year; "cumulative" means a period total. Never describe an annualized return as a total return.
 null means unavailable, never zero and never neutral.
 Quote effects in basis points using the _bps fields; quote weights as percentages. Do not convert percentages yourself.

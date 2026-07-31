@@ -64,7 +64,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 try:
     import openpyxl
@@ -110,6 +110,30 @@ QUARTER_FOLDER_TEMPLATE = "{year} Q{quarter}"
 # Matching is tolerant: filenames are normalised to lowercase alphanumerics
 # before comparison, so "US_Large_Growth.xlsx" and "US Large Growth.xlsx" both
 # resolve. Every token in `tokens` must appear in the normalised filename.
+def strip_peer_universe(payload: Dict[str, Any]) -> None:
+    """
+    Remove every percentile-derived field from an asset-class document.
+
+    Used where Morningstar's peer group is too thin to rank against. It still
+    returns numbers - the SMID universe holds six funds - and a number that is
+    present but meaningless is the worst case: the commentary agent has no way
+    to tell it apart from a real one and will quote it. Deleting the fields is
+    the only reliable answer, and it matches how the pack handles every other
+    figure the commentary must not use.
+
+    Peer-relative context for these managers comes from eVestment by hand.
+    """
+    for manager in payload.get("managers", []):
+        manager.pop("peer_percentile", None)
+        manager.pop("ranking_trend", None)
+        for period in (manager.get("performance_periods") or {}).values():
+            if isinstance(period, dict):
+                period.pop("peer_percentile", None)
+    for index in payload.get("reference_indexes", []):
+        index.pop("peer_percentile", None)
+    payload["peer_group_stats"] = {}
+
+
 ASSET_CLASSES: Tuple[Dict[str, Any], ...] = (
     {
         "key": "large_growth",
@@ -125,6 +149,8 @@ ASSET_CLASSES: Tuple[Dict[str, Any], ...] = (
         "asset_class": "US Mid Growth",
         "output_file": "mid_growth.json",
         "expected_file": "US Mid Growth.xlsx",
+        # "smid" is a separate word, not a variant of "mid": whole-word matching
+        # in filename_words is what keeps US SMID Growth.xlsx out of here.
         "tokens": ("us", "mid", "growth"),
         "exclude_tokens": ("sector", "industry", "factor"),
         "default_benchmark": "Russell Mid Cap Growth TR USD",
@@ -137,6 +163,19 @@ ASSET_CLASSES: Tuple[Dict[str, Any], ...] = (
         "tokens": ("us", "small", "growth"),
         "exclude_tokens": ("sector", "industry", "factor"),
         "default_benchmark": "Russell 2000 Growth TR USD",
+    },
+    {
+        "key": "smid_growth",
+        "asset_class": "US SMID Growth",
+        "output_file": "smid_growth.json",
+        "expected_file": "US SMID Growth.xlsx",
+        "tokens": ("us", "smid", "growth"),
+        "exclude_tokens": ("sector", "industry", "factor"),
+        "default_benchmark": "Russell 2500 Growth TR USD",
+        # Morningstar populates peer percentiles for this universe but it is too
+        # thin to rank against, and a plausible-looking number is worse than no
+        # number: every percentile-derived field is stripped from the output.
+        "peer_universe_reliable": False,
     },
 )
 
@@ -309,6 +348,19 @@ MARKET_SECTION_PREFERENCES: Dict[str, Dict[str, Tuple[str, ...]]] = {
         # scoped to the category a section was selected for.
         "industries": ("Russell 2000 Sectors", "S&P 600 Sectors"),
     },
+    "smid_growth": {
+        # The export carries no Russell 2500 factor or industry block. Sectors
+        # are genuinely SMID; factors and industries are borrowed from the mid-
+        # and small-cap blocks either side of the range, and every series keeps
+        # its `section` so the commentary can say which universe it came from.
+        "factors": ("S&P MidCap 400 Factors", "Small Cap Factors"),
+        "sectors": ("Russell 2500 Growth Sectors", "Russell 2500 Sectors"),
+        "industries": (
+            "S&P MidCap 400 Sub-Industries",
+            "Russell 2000 Sectors",
+            "S&P 600 Sectors",
+        ),
+    },
 }
 
 # How many preferred sections to harvest per category. 1 = strictly the first
@@ -318,6 +370,10 @@ MARKET_SECTIONS_PER_CATEGORY = 1
 MARKET_SECTIONS_PER_CATEGORY_OVERRIDES: Dict[Tuple[str, str], int] = {
     # Small-cap industry coverage is sparse; sweep both small-cap sections.
     ("small_growth", "industries"): 2,
+    # SMID has no factor or industry block of its own, so both flanking
+    # universes are swept rather than one arbitrarily winning.
+    ("smid_growth", "factors"): 2,
+    ("smid_growth", "industries"): 3,
 }
 
 # Section-title -> category classification, evaluated in order.
@@ -466,6 +522,23 @@ def normalize_lookup_name(value: Any) -> str:
 def normalize_filename(name: str) -> str:
     """Lowercase alphanumeric-only form of a filename stem, for tolerant matching."""
     return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def filename_words(name: str) -> Set[str]:
+    """
+    A filename stem split into words, for whole-word token matching.
+
+    normalize_filename strips separators entirely, which is tolerant but cannot
+    tell "US Mid Growth" from "US SMID Growth": both collapse to a form
+    containing "mid" AND "smid", so each file satisfies the other's tokens and
+    the SMID workbook can be written out as mid_growth.json - or the reverse.
+    No choice of substring token separates them; the word boundary is the only
+    thing that does. Separators and camelCase both split, so US_SMID_Growth,
+    "US SMID Growth" and USSmidGrowth all resolve.
+    """
+    spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", name)
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", spaced)
+    return set(re.sub(r"[^a-z0-9]+", " ", spaced.lower()).split())
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -668,9 +741,9 @@ def find_workbook(folder: Path, spec: Dict[str, Any]) -> Optional[Path]:
     for path in sorted(folder.glob("*.xls*")):
         if path.name.startswith("~$"):  # Excel lock file
             continue
-        stem = normalize_filename(path.stem)
-        if all(token in stem for token in tokens) and not any(
-            token in stem for token in excluded
+        words = filename_words(path.stem)
+        if all(token in words for token in tokens) and not any(
+            token in words for token in excluded
         ):
             candidates.append(path)
 
@@ -2344,6 +2417,7 @@ def build_quarter(
             "manager_lookup": manager_lookup,
             "reference_indexes": parsed["reference_indexes"],
             "peer_group_stats": parsed["peer_group_stats"],
+            # Placeholder; replaced below where the peer universe is unusable.
             # Selected-quarter aliases, unchanged from V1.
             "market_data": market_data,
             "summaries": summaries,
@@ -2352,6 +2426,9 @@ def build_quarter(
             "market_trends": market_trends,
             "warnings": file_warnings,
         }
+
+        if not spec.get("peer_universe_reliable", True):
+            strip_peer_universe(payload)
 
         write_json(output_folder / spec["output_file"], payload)
         files_written.append(spec["output_file"])
