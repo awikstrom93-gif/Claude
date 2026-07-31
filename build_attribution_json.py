@@ -170,11 +170,14 @@ SHARE_CLASS_STRIP_ROUNDS = 3
 # did not own a company it does in fact own. Merging the lines restores the real
 # active bet: one Alphabet holding, underweight.
 #
-# The table is explicit rather than name-matched on purpose. A shared base name
-# is not proof of shared exposure - tracking stocks share a name and do not
-# share an economic exposure - and nothing else in this file guesses at
-# identity. A pair that is not listed is reported as a warning instead, so a
-# missing entry surfaces as one line to add and never as a silent bad merge.
+# This is an exception list, not a rule. Only the tickers named here are ever
+# combined; every other security - including other dual-class lines - parses
+# exactly as it did before and passes through untouched. Alphabet is the one
+# case that has actually shown up and changed a book, so it is the one case
+# handled, and a second name is a deliberate line to add rather than something
+# inferred. Matching on names instead would reach every security in every file
+# for no proven benefit, and a shared base name is not proof of shared exposure:
+# tracking stocks share a name and do not share an economic exposure.
 DUAL_SHARE_CLASS_GROUPS: Tuple[Dict[str, Any], ...] = (
     {"name": "Alphabet Inc", "ticker": "GOOGL", "tickers": ("GOOGL", "GOOG")},
 )
@@ -183,14 +186,6 @@ DUAL_SHARE_CLASS_BY_TICKER: Dict[str, Dict[str, Any]] = {
     for group in DUAL_SHARE_CLASS_GROUPS
     for ticker in group["tickers"]
 }
-
-# Trailing share-class wording on a *security* line. Used only by the
-# unmerged-pair detector below, never to decide a merge.
-SECURITY_SHARE_CLASS_RE = re.compile(
-    r"\s+(?:(?:ordinary|registered|common|subordinate\s+voting|voting)\s+shares?\s*"
-    r"(?:[-–]\s*)?)?class\s+[a-z0-9]{1,3}\s*$",
-    re.IGNORECASE,
-)
 
 # Weights, contributions and all three Brinson effects are additive across the
 # classes of one company, so a merged row is exact and no reconciliation total
@@ -1247,25 +1242,6 @@ def build_benchmark_sector_context(
     }
 
 
-def dedupe_preserving_order(messages: Sequence[str]) -> List[str]:
-    """Unique messages, first occurrence first."""
-    seen: Dict[str, None] = {}
-    for message in messages:
-        seen.setdefault(message, None)
-    return list(seen)
-
-
-def security_base_name(name: Optional[str]) -> str:
-    """A security name with any trailing share-class wording removed."""
-    text = (name or "").strip()
-    for _ in range(2):
-        stripped = SECURITY_SHARE_CLASS_RE.sub("", text).strip(" -–")
-        if stripped == text:
-            break
-        text = stripped
-    return normalize_lookup_name(text)
-
-
 def merge_share_class_rows(
     security_rows: Sequence[RawRow],
 ) -> Tuple[List[RawRow], List[str]]:
@@ -1355,33 +1331,6 @@ def merge_share_class_rows(
         )
 
     return merged, warnings
-
-
-def detect_unmerged_share_classes(security_rows: Sequence[RawRow]) -> List[str]:
-    """Name-alike lines inside one sector that the merge table does not cover."""
-    candidates: Dict[Tuple[str, str], List[RawRow]] = {}
-    for raw in security_rows:
-        if (raw.ticker or "").strip().upper() in DUAL_SHARE_CLASS_BY_TICKER:
-            continue
-        if not SECURITY_SHARE_CLASS_RE.search(raw.security_name or ""):
-            continue
-        base = security_base_name(raw.security_name)
-        if not base:
-            continue
-        key = (base, normalize_header(raw.section_label or ""))
-        candidates.setdefault(key, []).append(raw)
-
-    messages: List[str] = []
-    for (_base, _sector), members in sorted(candidates.items()):
-        if len(members) < 2:
-            continue
-        tickers = ", ".join(sorted((member.ticker or "?") for member in members))
-        names = " / ".join(member.security_name or "?" for member in members)
-        messages.append(
-            f"{names} ({tickers}) look like share classes of one company but are "
-            f"not in DUAL_SHARE_CLASS_GROUPS; they were left as separate holdings."
-        )
-    return messages
 
 
 def build_security_records(
@@ -2097,7 +2046,6 @@ def build_attribution_document(
         parsed["security_rows_in_sectors"]
     )
     warnings.extend(share_class_warnings)
-    warnings.extend(detect_unmerged_share_classes(security_rows))
     all_securities = build_security_records(security_rows, benchmark_total_return)
 
     top_contributors = build_top_movers(all_securities, contributors=True)
@@ -2920,12 +2868,7 @@ def build_attribution(
         "asset_class_patch_summary": patch_summary,
         "phase1_patched": patch_phase1,
         "workbooks": workbook_reports,
-        # Deduplicated: a benchmark-level observation - an unmerged share-class
-        # pair above all - otherwise repeats once per manager in the asset
-        # class and buries the one-off warnings that need acting on. Every
-        # workbook keeps its own full list in workbooks[].warnings, and the
-        # run-level messages are unique by construction, so nothing is lost.
-        "warnings": dedupe_preserving_order(global_warnings),
+        "warnings": global_warnings,
     }
     write_json(output_folder / DEBUG_REPORT_FILENAME, report)
     return report
