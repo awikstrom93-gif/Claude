@@ -1472,7 +1472,6 @@ def build_concentration(
     ]
     positives = sorted((e for e in effects if e > 0), reverse=True)
     negatives = sorted((e for e in effects if e < 0))
-    absolutes = sorted((abs(e) for e in effects), reverse=True)
 
     def share(part: float, whole: float) -> Optional[float]:
         return round_share(part / whole) if whole else None
@@ -1496,16 +1495,16 @@ def build_concentration(
             else "broad_based"
         )
 
+    # Only the verdicts ship. The underlying shares and security counts are
+    # precisely what OUTPUT forbids quoting - "do not quote shares of total
+    # effect or counts of securities" - and leaving them visible produced
+    # "the top five detractors accounting for roughly 31% of negative effect"
+    # twice in one draft. The share is what the character label is FOR; the
+    # agent never needs both. Sector counts stay: those are legitimate
+    # commentary material and have been used correctly.
     return {
-        "top_5_contributors_share_of_positive_effect": contributors_share,
-        "top_5_detractors_share_of_negative_effect": detractors_share,
         "contributors_character": character(contributors_share),
         "detractors_character": character(detractors_share),
-        "top_5_absolute_effect_share": share(
-            sum(absolutes[:CONCENTRATION_TOP_N]), sum(absolutes)
-        ),
-        "number_of_positive_securities": len(positives),
-        "number_of_negative_securities": len(negatives),
         "number_of_sectors_positive": sum(1 for e in sector_effects if e > 0),
         "number_of_sectors_negative": sum(1 for e in sector_effects if e < 0),
     }
