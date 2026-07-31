@@ -1116,8 +1116,11 @@ def build_benchmark_sector_context(
                 ),
                 "benchmark_weight": round_pct(values.get("benchmark_weight")),
                 "benchmark_return": round_pct(values.get("benchmark_return")),
+                # No _bps twin on purpose. House style quotes index sector
+                # contributions in percentage points, but the general "use the
+                # _bps fields" convention kept pulling the agent to basis points
+                # whenever one was available. Removing it settles the conflict.
                 "contribution_to_benchmark_return": contribution,
-                "contribution_to_benchmark_return_bps": to_bps(contribution),
             }
         )
 
