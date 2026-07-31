@@ -47,7 +47,7 @@ Never mention residuals, attribution gaps, coverage, expense ratios, benchmark r
 
 OUTPUT
 Two run-in labels and nothing else: open with "Call to Action:" then "Context & Analysis:", each followed by prose on the same line. No title, no header block, no section or sub-section headings, no bold, no bullets, no numbered lists, no tables, no citation markers.
-Continuous prose paragraphs: one Call to Action paragraph, then five to seven Context & Analysis paragraphs, nine to twelve for Q4, moving from market to attribution to sector to security, closing with what worked, or with what detracted where the fund outperformed. Count them; never exceed seven outside Q4.
+Continuous prose paragraphs: one Call to Action paragraph, then five to seven Context & Analysis paragraphs, nine to twelve for Q4, moving from market to attribution to sector to security, then what worked, or what detracted where the fund outperformed, and a final paragraph tying the result together. Count them; never exceed seven outside Q4.
 Write about the fund, never about the data. Do not say a figure is flagged, available, evaluated or carries high or low confidence, do not name a field, and do not quote shares of total effect or counts of securities; state the finding in the words an analyst would use.
 The Call to Action reports the quarter's result, never advice. Never write a recommendation section or state a rating, Watch status, conviction or approval decision. End after Context & Analysis.
 Begin directly with the content. No prefatory lines, no methodology, no follow-up questions or offers to rewrite.
