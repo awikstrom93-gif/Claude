@@ -1,18 +1,25 @@
 {
   "period": "2026 Q2",
-  "generated_at": "2026-07-30T22:30:53+00:00",
+  "generated_at": "2026-07-31T00:48:16+00:00",
   "pack_count": 3,
   "packs": {
+    "edgewood growth": "packs/edgewood_growth_instl.json",
     "edgewood growth instl": "packs/edgewood_growth_instl.json",
     "edgewood mgt lg-cap gr": "packs/edgewood_growth_instl.json",
     "egfix": "packs/edgewood_growth_instl.json",
     "fbgkx": "packs/fidelity_blue_chip_growth_k.json",
+    "fidelity blue chip growth": "packs/fidelity_blue_chip_growth_k.json",
     "fidelity blue chip growth cmmngld pool": "packs/fidelity_blue_chip_growth_k.json",
     "fidelity blue chip growth k": "packs/fidelity_blue_chip_growth_k.json",
     "t rowe price blue chip growth": "packs/t_rowe_price_blue_chip_growth.json",
     "t rowe price us large cap core growth equity": "packs/t_rowe_price_blue_chip_growth.json",
     "trbcx": "packs/t_rowe_price_blue_chip_growth.json"
   },
+  "share_class_aliases": {
+    "edgewood growth": "edgewood growth instl",
+    "fidelity blue chip growth": "fidelity blue chip growth k"
+  },
+  "ambiguous_names": {},
   "managers": [
     {
       "manager": "Edgewood Growth Instl",
@@ -46,5 +53,5 @@
     }
   ],
   "key_collisions": [],
-  "note": "Normalise the requested manager name (lowercase, remove periods, collapse repeated spaces, trim) and look it up in `packs`. Do not rebuild the filename from the manager name; slugs strip characters that normalisation keeps."
+  "note": "Normalise the requested manager name (lowercase, remove periods, collapse repeated spaces, trim) and look it up in `packs`. Do not rebuild the filename from the manager name; slugs strip characters that normalisation keeps. `packs` also accepts fund names without their share-class suffix where that is unambiguous; names listed in `ambiguous_names` are deliberately absent and should be asked about."
 }

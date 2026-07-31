@@ -148,6 +148,20 @@ PACK_SIZE_WARN_KB = 60
 # resolves.
 PACK_MANIFEST_FILENAME = "_manifest.json"
 
+# Morningstar fund names carry a share-class suffix that nobody says out loud:
+# a request for "Fidelity Blue Chip Growth" means "Fidelity Blue Chip Growth K".
+# Stripping these produces an extra manifest key, but only when the stripped
+# name resolves to exactly one manager in the whole universe. Anything that
+# would become ambiguous is rejected rather than guessed, so the failure mode is
+# the agent asking which fund was meant - never quietly serving the wrong one.
+SHARE_CLASS_SUFFIX_RE = re.compile(
+    r"\s+(?:class\s+)?(?:a|c|i|is|k|k5|k6|m|n|r|r3|r4|r5|r6|s|y|z|i2|i3|"
+    r"inst|instl|institutional|inv|investor|adm|admiral|adv|advisor|premier|"
+    r"retail|svc|service|shares?)$",
+    re.IGNORECASE,
+)
+SHARE_CLASS_STRIP_ROUNDS = 3
+
 # --- Quarter folder naming ----------------------------------------------------
 QUARTER_FOLDER_PATTERNS = (
     re.compile(r"^\s*(?P<year>\d{4})\s*[-_ ]?\s*[Qq](?P<quarter>[1-4])\s*$"),
@@ -2028,8 +2042,62 @@ def collect_lookup_keys(
     return sorted(set(keys))
 
 
+def strip_share_class(name: Any) -> str:
+    """Normalised fund name with its share-class suffix removed."""
+    current = normalize_lookup_name(name)
+    for _ in range(SHARE_CLASS_STRIP_ROUNDS):
+        stripped = SHARE_CLASS_SUFFIX_RE.sub("", current).strip()
+        if not stripped or stripped == current:
+            break
+        current = stripped
+    return current
+
+
+def build_share_class_aliases(
+    phase1: "Phase1Index",
+) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """
+    Map suffix-stripped fund names onto the one manager they can mean.
+
+    The check runs across every manager in every asset class, not just those
+    with a pack, so an alias is only created when it is unambiguous in the whole
+    universe. Returns (safe aliases, rejected ambiguous names).
+    """
+    candidates: Dict[str, List[str]] = {}
+    exact: set = set()
+
+    for document in phase1.documents.values():
+        for manager in document.get("managers", []):
+            name = manager.get("manager")
+            if not name:
+                continue
+            full = normalize_lookup_name(name)
+            exact.add(full)
+            stripped = strip_share_class(name)
+            if stripped and stripped != full:
+                candidates.setdefault(stripped, []).append(full)
+
+    aliases: Dict[str, str] = {}
+    ambiguous: Dict[str, List[str]] = {}
+    for stripped, owners in candidates.items():
+        unique = sorted(set(owners))
+        if len(unique) > 1:
+            ambiguous[stripped] = unique
+        elif stripped in exact:
+            # The stripped form is itself another fund's full name; leave it
+            # pointing at that fund.
+            continue
+        else:
+            aliases[stripped] = unique[0]
+    return aliases, ambiguous
+
+
 def build_pack_manifest(
-    entries: Sequence[Dict[str, Any]], quarter: Quarter, generated_at: str
+    entries: Sequence[Dict[str, Any]],
+    quarter: Quarter,
+    generated_at: str,
+    share_class_aliases: Optional[Dict[str, str]] = None,
+    ambiguous_names: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     """
     Resolve any normalised manager key to a pack path.
@@ -2048,11 +2116,25 @@ def build_pack_manifest(
                 continue
             packs[key] = entry["path"]
 
+    # Suffix-stripped names, added only where they resolve to one manager and do
+    # not overwrite a key that already resolves exactly.
+    derived: Dict[str, str] = {}
+    by_full_name = {
+        normalize_lookup_name(entry["manager"]): entry["path"] for entry in entries
+    }
+    for alias, full_name in (share_class_aliases or {}).items():
+        path = by_full_name.get(full_name)
+        if path and alias not in packs:
+            packs[alias] = path
+            derived[alias] = full_name
+
     return {
         "period": quarter.label,
         "generated_at": generated_at,
         "pack_count": len(entries),
         "packs": dict(sorted(packs.items())),
+        "share_class_aliases": dict(sorted(derived.items())),
+        "ambiguous_names": dict(sorted((ambiguous_names or {}).items())),
         "managers": [
             {
                 "manager": entry["manager"],
@@ -2067,7 +2149,9 @@ def build_pack_manifest(
             "Normalise the requested manager name (lowercase, remove periods, "
             "collapse repeated spaces, trim) and look it up in `packs`. Do not "
             "rebuild the filename from the manager name; slugs strip characters "
-            "that normalisation keeps."
+            "that normalisation keeps. `packs` also accepts fund names without "
+            "their share-class suffix where that is unambiguous; names listed in "
+            "`ambiguous_names` are deliberately absent and should be asked about."
         ),
     }
 
@@ -2318,7 +2402,18 @@ def build_attribution(
     # were produced, so it can never describe a stale set.
     manifest_relative = ""
     if pack_entries:
-        manifest = build_pack_manifest(pack_entries, quarter, generated_at)
+        share_class_aliases, ambiguous_names = build_share_class_aliases(phase1)
+        manifest = build_pack_manifest(
+            pack_entries, quarter, generated_at, share_class_aliases, ambiguous_names
+        )
+        if ambiguous_names:
+            message = (
+                f"Share-class aliases not created for ambiguous names "
+                f"{sorted(ambiguous_names)}; those funds must be asked for by "
+                f"their full name."
+            )
+            LOG.warning(message)
+            global_warnings.append(message)
         write_json(pack_folder / PACK_MANIFEST_FILENAME, manifest)
         manifest_relative = f"{PACK_OUTPUT_SUBFOLDER}/{PACK_MANIFEST_FILENAME}"
         if manifest["key_collisions"]:
