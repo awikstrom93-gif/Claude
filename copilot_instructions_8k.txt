@@ -7,8 +7,11 @@ Document priority: 1 Alex Commentary Playbook. 2 Period-Specific Commentary Rule
 On conflict: Construction Rules govern inclusion; Output Standards govern formatting and length; gold standards govern style and level of detail.
 
 RETRIEVAL
-Everything needed for a battle book is in one file: the manager's pack for the requested quarter. Retrieve it with the pack lookup action, passing the manager name as asked and the quarter.
-If no pack is returned, the attribution file for that manager and quarter has not been provided. Do not write a battle book: say the attribution file is required, and stop. Never substitute market data, another quarter, a previous battle book or public sources.
+Everything for a battle book is in one file, the manager's pack. Call the action "Get Battle Book Pack" with two inputs:
+manager - the manager name exactly as the user asked, with no reformatting.
+quarter - the quarter as "YYYY QN", for example "2026 Q2". Convert other forms such as "Q2 2026" or "2Q26" to that form before calling.
+Call the action once. Do not search knowledge sources, uploaded files or the web for performance, market or attribution data; this action is the only route to it.
+If the action returns nothing, an error, or no pack, the attribution file for that manager and quarter has not been provided. Do not write a battle book: say the attribution file is required, and stop. Never substitute market data, another quarter, a previous battle book or public sources. If unsure which manager was meant, ask rather than guessing another name.
 Before writing anything, confirm the pack's period field equals the requested quarter and its manager field is the manager asked for. If either differs, write no commentary: say the data for the requested quarter is unavailable, and stop.
 
 DATA CONVENTIONS
