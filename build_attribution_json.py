@@ -162,6 +162,56 @@ SHARE_CLASS_SUFFIX_RE = re.compile(
 )
 SHARE_CLASS_STRIP_ROUNDS = 3
 
+# --- Dual-listed share classes ------------------------------------------------
+# A benchmark can carry two lines for one company: Alphabet sits in every US
+# growth index as both GOOGL and GOOG. Managers usually own one class, so the
+# other arrives as a not-held line carrying its whole benchmark weight - and the
+# agent, reading position_label exactly as instructed, writes that the manager
+# did not own a company it does in fact own. Merging the lines restores the real
+# active bet: one Alphabet holding, underweight.
+#
+# The table is explicit rather than name-matched on purpose. A shared base name
+# is not proof of shared exposure - tracking stocks share a name and do not
+# share an economic exposure - and nothing else in this file guesses at
+# identity. A pair that is not listed is reported as a warning instead, so a
+# missing entry surfaces as one line to add and never as a silent bad merge.
+DUAL_SHARE_CLASS_GROUPS: Tuple[Dict[str, Any], ...] = (
+    {"name": "Alphabet Inc", "ticker": "GOOGL", "tickers": ("GOOGL", "GOOG")},
+)
+DUAL_SHARE_CLASS_BY_TICKER: Dict[str, Dict[str, Any]] = {
+    ticker.upper(): group
+    for group in DUAL_SHARE_CLASS_GROUPS
+    for ticker in group["tickers"]
+}
+
+# Trailing share-class wording on a *security* line. Used only by the
+# unmerged-pair detector below, never to decide a merge.
+SECURITY_SHARE_CLASS_RE = re.compile(
+    r"\s+(?:(?:ordinary|registered|common|subordinate\s+voting|voting)\s+shares?\s*"
+    r"(?:[-–]\s*)?)?class\s+[a-z0-9]{1,3}\s*$",
+    re.IGNORECASE,
+)
+
+# Weights, contributions and all three Brinson effects are additive across the
+# classes of one company, so a merged row is exact and no reconciliation total
+# moves. Only the two return columns need a weighted average.
+SHARE_CLASS_SUM_FIELDS: Tuple[str, ...] = (
+    "portfolio_weight",
+    "benchmark_weight",
+    "active_weight",
+    "contribution_portfolio",
+    "contribution_benchmark",
+    "contribution_active",
+    "allocation_effect",
+    "selection_effect",
+    "interaction_effect",
+    "total_effect",
+)
+SHARE_CLASS_WEIGHTED_FIELDS: Tuple[Tuple[str, str], ...] = (
+    ("portfolio_return", "portfolio_weight"),
+    ("benchmark_return", "benchmark_weight"),
+)
+
 # --- Quarter folder naming ----------------------------------------------------
 QUARTER_FOLDER_PATTERNS = (
     re.compile(r"^\s*(?P<year>\d{4})\s*[-_ ]?\s*[Qq](?P<quarter>[1-4])\s*$"),
@@ -1197,6 +1247,135 @@ def build_benchmark_sector_context(
     }
 
 
+def security_base_name(name: Optional[str]) -> str:
+    """A security name with any trailing share-class wording removed."""
+    text = (name or "").strip()
+    for _ in range(2):
+        stripped = SECURITY_SHARE_CLASS_RE.sub("", text).strip(" -–")
+        if stripped == text:
+            break
+        text = stripped
+    return normalize_lookup_name(text)
+
+
+def merge_share_class_rows(
+    security_rows: Sequence[RawRow],
+) -> Tuple[List[RawRow], List[str]]:
+    """
+    Collapse the listed dual-class lines into one row per company.
+
+    Merging happens here, on the raw grid row, so everything downstream -
+    held, position_label, ranking, concentration, the security reconciliation -
+    derives from the combined line with no second implementation of any rule.
+    """
+    warnings: List[str] = []
+    merged: List[RawRow] = []
+    groups: Dict[Tuple[str, str], List[RawRow]] = {}
+    slot: Dict[Tuple[str, str], int] = {}
+    sectors_seen: Dict[str, List[str]] = {}
+
+    for raw in security_rows:
+        group = DUAL_SHARE_CLASS_BY_TICKER.get((raw.ticker or "").strip().upper())
+        if group is None:
+            merged.append(raw)
+            continue
+        sector = normalize_header(raw.section_label or "")
+        # Sector is part of the key: one company's classes always share a
+        # sector, so a split means the export is not shaped as we assume.
+        key = (group["ticker"], sector)
+        if key not in groups:
+            groups[key] = []
+            slot[key] = len(merged)
+            merged.append(raw)  # placeholder, replaced below when it merges
+        groups[key].append(raw)
+        seen = sectors_seen.setdefault(group["ticker"], [])
+        if sector not in seen:
+            seen.append(sector)
+
+    for canonical, seen in sectors_seen.items():
+        if len(seen) > 1:
+            warnings.append(
+                f"Share classes of {canonical} appear in more than one sector "
+                f"({', '.join(seen)}); each sector was merged on its own."
+            )
+
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue  # only one class in this benchmark - nothing to merge
+        group = DUAL_SHARE_CLASS_BY_TICKER[key[0]]
+        values: Dict[str, Optional[float]] = {}
+
+        for field_name in SHARE_CLASS_SUM_FIELDS:
+            parts = [
+                member.values.get(field_name)
+                for member in members
+                if member.values.get(field_name) is not None
+            ]
+            values[field_name] = sum(parts) if parts else None
+
+        for field_name, weight_field in SHARE_CLASS_WEIGHTED_FIELDS:
+            usable = [
+                (member.values[field_name], member.values[weight_field])
+                for member in members
+                if member.values.get(field_name) is not None
+                and (member.values.get(weight_field) or 0) > 0
+            ]
+            total_weight = sum(weight for _, weight in usable)
+            values[field_name] = (
+                sum(value * weight for value, weight in usable) / total_weight
+                if usable and total_weight > 0
+                else None
+            )
+
+        portfolio_return = values.get("portfolio_return")
+        benchmark_return = values.get("benchmark_return")
+        values["return_differential"] = (
+            portfolio_return - benchmark_return
+            if portfolio_return is not None and benchmark_return is not None
+            else None
+        )
+
+        first = members[0]
+        merged[slot[key]] = RawRow(
+            row=first.row,
+            kind=first.kind,
+            section_label=first.section_label,
+            section_kind=first.section_kind,
+            security_name=group["name"],
+            ticker=group["ticker"],
+            values=values,
+        )
+
+    return merged, warnings
+
+
+def detect_unmerged_share_classes(security_rows: Sequence[RawRow]) -> List[str]:
+    """Name-alike lines inside one sector that the merge table does not cover."""
+    candidates: Dict[Tuple[str, str], List[RawRow]] = {}
+    for raw in security_rows:
+        if (raw.ticker or "").strip().upper() in DUAL_SHARE_CLASS_BY_TICKER:
+            continue
+        if not SECURITY_SHARE_CLASS_RE.search(raw.security_name or ""):
+            continue
+        base = security_base_name(raw.security_name)
+        if not base:
+            continue
+        key = (base, normalize_header(raw.section_label or ""))
+        candidates.setdefault(key, []).append(raw)
+
+    messages: List[str] = []
+    for (_base, _sector), members in sorted(candidates.items()):
+        if len(members) < 2:
+            continue
+        tickers = ", ".join(sorted((member.ticker or "?") for member in members))
+        names = " / ".join(member.security_name or "?" for member in members)
+        messages.append(
+            f"{names} ({tickers}) look like share classes of one company but are "
+            f"not in DUAL_SHARE_CLASS_GROUPS; they were left as separate holdings."
+        )
+    return messages
+
+
 def build_security_records(
     security_rows: Sequence[RawRow], benchmark_total_return: Optional[float]
 ) -> List[Dict[str, Any]]:
@@ -1906,9 +2085,12 @@ def build_attribution_document(
     benchmark_total_return = total_values.get("benchmark_return")
 
     sectors = build_sector_attribution(parsed["sector_rows"])
-    all_securities = build_security_records(
-        parsed["security_rows_in_sectors"], benchmark_total_return
+    security_rows, share_class_warnings = merge_share_class_rows(
+        parsed["security_rows_in_sectors"]
     )
+    warnings.extend(share_class_warnings)
+    warnings.extend(detect_unmerged_share_classes(security_rows))
+    all_securities = build_security_records(security_rows, benchmark_total_return)
 
     top_contributors = build_top_movers(all_securities, contributors=True)
     top_detractors = build_top_movers(all_securities, contributors=False)
