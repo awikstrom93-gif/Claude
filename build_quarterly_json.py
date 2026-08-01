@@ -2132,7 +2132,15 @@ def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, 
         rows = summaries.get(f"{'top' if best else 'bottom'}_10_{category}", [])
         return rows[0]["display_name"] if rows else ""
 
+    # A side can now be legitimately empty: US Small Growth carries only three
+    # industry series and in a strong quarter all three beat the benchmark, so
+    # there is no worst industry to name. Drop the key rather than ship it
+    # blank - an empty string here is a field the agent can write into a
+    # sentence, and a named laggard that outperformed is the bug this whole
+    # change exists to remove.
     return {
+        key: value
+        for key, value in {
         "best_sector_selected_quarter": pick("selected_quarter", "sectors", True),
         "worst_sector_selected_quarter": pick("selected_quarter", "sectors", False),
         "best_sector_ytd": pick("ytd", "sectors", True),
@@ -2143,6 +2151,8 @@ def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, 
         "worst_industry_selected_quarter": pick("selected_quarter", "industries", False),
         "best_sector_trailing_1_year": pick("trailing_1_year", "sectors", True),
         "worst_sector_trailing_1_year": pick("trailing_1_year", "sectors", False),
+        }.items()
+        if value
     }
 
 
@@ -2152,8 +2162,33 @@ def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, 
 
 
 def summarize_series(rows: Sequence[Dict[str, Any]], top: bool) -> List[Dict[str, Any]]:
-    """Rank market series by return, dropping rows with no return."""
-    usable = [row for row in rows if row.get("return_cumulative") is not None]
+    """
+    Market leaders and laggards: ordered by return, but selected by excess.
+
+    Selecting on the sign of excess return is what keeps a series out of the
+    wrong list. US Large Growth carries thirteen factors, so a plain top ten
+    and bottom ten shared seven of them, and S&P 500 Quality - ahead of its
+    benchmark by 5.1 points - sat in bottom_10_factors beside Russell 1000
+    Quality, which genuinely lagged. Every Large Growth book then reported that
+    quality factors lagged materially. The same overlap put Technology, up 3.5
+    points on the benchmark, among the bottom sectors.
+
+    Ordering stays on return so "led with 44.4%" still reads naturally, but
+    nothing that beat its benchmark can appear among the laggards and no series
+    appears in both lists. A series with no excess return has nothing to be
+    judged against, so it is left out of both rather than guessed into one.
+    """
+    usable = [
+        row
+        for row in rows
+        if row.get("return_cumulative") is not None
+        and row.get("excess_return_cumulative") is not None
+        and (
+            row["excess_return_cumulative"] > 0
+            if top
+            else row["excess_return_cumulative"] < 0
+        )
+    ]
     ordered = sorted(
         usable, key=lambda row: row["return_cumulative"], reverse=top
     )[:SUMMARY_TOP_N]
