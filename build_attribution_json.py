@@ -337,7 +337,12 @@ QUARTER_TREND_SEQUENCE = tuple(key for key, _ in LOGICAL_PERIODS)  # newest firs
 # A security is stored when |total_effect| reaches this many percentage points.
 # 0.05 pp == 5 bps.
 MATERIALITY_THRESHOLD_PP = 0.05
-TOP_N_SECURITIES = 10
+# Five each way, not ten. At ten names per side the commentary has room to name
+# a security and its effect but not to say why it moved, so five drafts ran to
+# nineteen names across two paragraphs and read as a list. The house rule has
+# always been the top three plus a fourth or fifth where it carries the story;
+# the list length now matches the rule instead of competing with it.
+TOP_N_SECURITIES = 5
 TOP_N_SECTORS = 5
 CONCENTRATION_TOP_N = 5
 # Five names out of several hundred producing this share of one side's effect is
@@ -924,7 +929,6 @@ def scan_rows(
 def resolve_driver(
     allocation: Optional[float],
     selection: Optional[float],
-    interaction: Optional[float],
 ) -> Tuple[str, str]:
     """
     Decide which effect drove a result, by absolute magnitude.
@@ -932,11 +936,18 @@ def resolve_driver(
     Returns (driver, confidence). When no single effect clearly dominates the
     driver is 'mixed', so the commentary agent never claims a driver the numbers
     do not support.
+
+    Interaction is deliberately not a candidate. It can be the largest of the
+    three - one draft opened its attribution paragraph with "interaction was the
+    primary driver of the shortfall at -138 basis points" because the field said
+    so - and the interaction effect is the one the commentary never explains,
+    being the least intuitive of the three for the reader. Naming it as the
+    driver hands the agent a conclusion it is not allowed to develop. The
+    magnitude stays in interaction_effect_bps for anyone who wants it.
     """
     candidates = [
         ("allocation", abs(allocation) if allocation is not None else None),
         ("selection", abs(selection) if selection is not None else None),
-        ("interaction", abs(interaction) if interaction is not None else None),
     ]
     present = [(name, value) for name, value in candidates if value is not None]
     if not present:
@@ -1075,7 +1086,7 @@ def build_attribution_summary(total_values: Dict[str, Optional[float]]) -> Dict[
     selection = round_pct(total_values.get("selection_effect"))
     interaction = round_pct(total_values.get("interaction_effect"))
     total_active = round_pct(total_values.get("total_effect"))
-    driver, confidence = resolve_driver(allocation, selection, interaction)
+    driver, confidence = resolve_driver(allocation, selection)
     return {
         "allocation_effect": allocation,
         "allocation_effect_bps": to_bps(allocation),
@@ -1085,12 +1096,13 @@ def build_attribution_summary(total_values: Dict[str, Optional[float]]) -> Dict[
         "interaction_effect_bps": to_bps(interaction),
         "total_active_return": total_active,
         "total_active_return_bps": to_bps(total_active),
-        "primary_driver": driver,
-        # driver_label collapses primary_driver and the confidence behind it
-        # into the phrase to use. driver_confidence itself is deliberately not
-        # emitted: with the value visible, four of five drafts wrote something
-        # like "selection at high confidence" despite an explicit ban in two
-        # places. Removing the value removes the temptation.
+        # driver_label collapses the driver and the confidence behind it into
+        # the phrase to use. driver_confidence is deliberately not emitted: with
+        # the value visible, four of five drafts wrote something like "selection
+        # at high confidence" despite an explicit ban in two places. Removing
+        # the value removes the temptation. primary_driver is gone for the same
+        # reason - it carried the same judgement in a rawer form, and a draft
+        # that had driver_label available still wrote "the primary driver".
         "driver_label": resolve_driver_label(driver, confidence),
     }
 
@@ -1106,7 +1118,7 @@ def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, An
         total = round_pct(values.get("total_effect"))
         portfolio_weight = round_pct(values.get("portfolio_weight"))
         active_weight = round_pct(values.get("active_weight"))
-        driver, _ = resolve_driver(allocation, selection, interaction)
+        driver, _ = resolve_driver(allocation, selection)
 
         records.append(
             {
@@ -1193,7 +1205,7 @@ def build_benchmark_sector_context(
     Real Estate), plus each sector's index weight and its contribution to the
     index return.
     """
-    benchmark_return = round_pct(total_values.get("benchmark_return"))
+    sector_contribution_total = round_pct(total_values.get("benchmark_return"))
     sectors: List[Dict[str, Any]] = []
 
     for raw in sector_rows:
@@ -1226,7 +1238,15 @@ def build_benchmark_sector_context(
     )
 
     return {
-        "benchmark_return": benchmark_return,
+        # Named for what it is: the sum of the eleven sector contributions in
+        # this workbook. It is NOT the index return. The two differ - 27.44
+        # against 25.71 for the Russell 2000 Growth in one quarter - because the
+        # performance export and the attribution export do not measure the
+        # benchmark the same way. Emitted as "benchmark_return" it read as the
+        # index's return, and five drafts out of five quoted both figures in the
+        # same battle book, so a reader saw one index returning two numbers a
+        # page apart. The headline benchmark_return is the only index return.
+        "sector_contribution_total": sector_contribution_total,
         "sectors_positive": sum(
             1 for s in sectors if (s["benchmark_return"] or 0) > 0
         ),
@@ -1574,7 +1594,6 @@ def build_attribution_trends(periods: Dict[str, Dict[str, Any]]) -> Dict[str, An
         driver, _ = resolve_driver(
             record.get("allocation_effect"),
             record.get("selection_effect"),
-            record.get("interaction_effect"),
         )
         drivers[period_key] = driver
 
@@ -1593,19 +1612,9 @@ def build_attribution_trends(periods: Dict[str, Dict[str, Any]]) -> Dict[str, An
                 totals[name] += abs(value)
 
     if drivers:
-        trailing_driver, _ = resolve_driver(
-            totals["allocation"], totals["selection"], totals["interaction"]
-        )
+        trailing_driver, _ = resolve_driver(totals["allocation"], totals["selection"])
     else:
         trailing_driver = "mixed"
-
-    distinct = {d for d in drivers.values() if d != "mixed"}
-    if len(drivers) < 2:
-        stability = "insufficient_data"
-    elif len(distinct) <= 1:
-        stability = "consistent"
-    else:
-        stability = "variable"
 
     return {
         "consecutive_quarters_selection_negative": streak("selection_effect", True),
@@ -1614,7 +1623,12 @@ def build_attribution_trends(periods: Dict[str, Dict[str, Any]]) -> Dict[str, An
         "consecutive_quarters_allocation_positive": streak("allocation_effect", False),
         "dominant_driver_selected_quarter": drivers.get("selected_quarter", "mixed"),
         "dominant_driver_trailing_4_quarters": trailing_driver,
-        "driver_stability": stability,
+        # driver_stability is not emitted. It described the data rather than the
+        # fund, and every draft that reached for it produced a sentence that
+        # told the reader nothing: "quarter-to-quarter behavior has been
+        # variable", and worse, "driver behavior has been consistent even as the
+        # sign has varied". The streak counts below carry the same information
+        # in terms an analyst would actually write.
         "quarters_available": len(drivers),
     }
 
