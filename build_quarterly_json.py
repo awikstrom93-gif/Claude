@@ -1377,7 +1377,13 @@ def compute_performance_trends(
     for key in UNDERPERFORMANCE_FLAG_PERIODS:
         value = excess_of(key)
         trends[f"underperformed_{key}"] = value is not None and value < 0
-    trends["trend_direction"] = trend_direction
+    # Named for what it measures: the direction of the quarterly excess-return
+    # series, not the fund's standing. One pack carried "improving" for a fund
+    # that trailed its benchmark over every period shown and had just posted the
+    # worst of its four quarters - true of the series, indefensible as a verdict,
+    # and the instructions tell the agent to base improvement claims on this
+    # field. No draft has written it up yet; the name is why that was luck.
+    trends["quarterly_excess_direction"] = trend_direction
     # An `underperformed_*` flag is False both when the manager beat the
     # benchmark and when the period is missing. This lists what was actually
     # evaluable so the agent can tell the two apart.

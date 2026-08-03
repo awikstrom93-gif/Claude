@@ -968,6 +968,47 @@ def resolve_driver(
     return "mixed", "low"
 
 
+def resolve_effect_credit(
+    allocation: Optional[float],
+    selection: Optional[float],
+    total: Optional[float],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Which effect a sector's result should be credited to, and which fought it.
+
+    Returns (credit, worked_against). `credit` is the effect whose sign matches
+    the sector's total, the larger one where both match. `worked_against` is the
+    opposite-signed effect where it is material.
+
+    This exists for the same reason position_label does. Securities carry the
+    phrase to use and have not been mislabelled since; sectors carried the raw
+    fields and kept being written up by their position, because `position` is
+    the natural subject of an English sentence: "the Health Care overweight
+    added 18 basis points" when the overweight cost 41 and selection added 46.
+    Assembling the judgement here removes the assembly step that was going
+    wrong. Interaction is not a candidate, matching resolve_driver.
+    """
+    if total is None or abs(total) < MATERIALITY_THRESHOLD_PP:
+        return None, None
+
+    positive_total = total > 0
+    matching: List[Tuple[str, float]] = []
+    opposing: List[Tuple[str, float]] = []
+    for name, value in (("allocation", allocation), ("selection", selection)):
+        if value is None or abs(value) < MATERIALITY_THRESHOLD_PP:
+            continue
+        (matching if (value > 0) == positive_total else opposing).append(
+            (name, abs(value))
+        )
+
+    matching.sort(key=lambda item: item[1], reverse=True)
+    opposing.sort(key=lambda item: item[1], reverse=True)
+    return (
+        matching[0][0] if matching else None,
+        opposing[0][0] if opposing else None,
+    )
+
+
 def resolve_position(
     portfolio_weight: Optional[float], active_weight: Optional[float]
 ) -> str:
@@ -1118,7 +1159,7 @@ def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, An
         total = round_pct(values.get("total_effect"))
         portfolio_weight = round_pct(values.get("portfolio_weight"))
         active_weight = round_pct(values.get("active_weight"))
-        driver, _ = resolve_driver(allocation, selection)
+        credit, worked_against = resolve_effect_credit(allocation, selection, total)
 
         records.append(
             {
@@ -1142,7 +1183,15 @@ def build_sector_attribution(sector_rows: Sequence[RawRow]) -> List[Dict[str, An
                 "total_effect": total,
                 "total_effect_bps": to_bps(total),
                 "position": resolve_position(portfolio_weight, active_weight),
-                "driver": driver,
+                # credit / worked_against replace the old `driver`, which named
+                # the largest effect by absolute size. Largest is not the same
+                # question as which one produced the result: a sector can finish
+                # positive on selection while its allocation detracted, and
+                # `driver` had no way to say so. Two fields that can disagree
+                # about what drove a sector is the competing-field problem this
+                # pack keeps running into, so there is now only one.
+                "credit": credit,
+                "worked_against": worked_against,
                 "effect_rank": 0,
             }
         )
@@ -1481,23 +1530,22 @@ def build_sector_rankings(sectors: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "position": record["position"],
         }
 
-    contributing = [
-        {
+    def ranked_entry(s: Dict[str, Any]) -> Dict[str, Any]:
+        return {
             "sector": s["sector"],
             "total_effect_bps": s["total_effect_bps"],
-            "driver": s["driver"],
+            "credit": s["credit"],
+            "worked_against": s["worked_against"],
             "position": s["position"],
         }
+
+    contributing = [
+        ranked_entry(s)
         for s in by("total_effect_bps", True)[:TOP_N_SECTORS]
         if (s["total_effect_bps"] or 0) > 0
     ]
     detracting = [
-        {
-            "sector": s["sector"],
-            "total_effect_bps": s["total_effect_bps"],
-            "driver": s["driver"],
-            "position": s["position"],
-        }
+        ranked_entry(s)
         for s in by("total_effect_bps", False)[:TOP_N_SECTORS]
         if (s["total_effect_bps"] or 0) < 0
     ]
