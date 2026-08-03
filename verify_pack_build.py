@@ -23,8 +23,12 @@ CODE_CHECKS = (
      "benchmark sector total renamed"),
     ("build_attribution_json.py", "Interaction is deliberately not a candidate",
      "interaction cannot be the driver"),
+    ("build_attribution_json.py", "def resolve_effect_credit",
+     "sector credit / worked_against"),
     ("build_quarterly_json.py", "selected by excess",
      "market lists filtered by excess"),
+    ("build_quarterly_json.py", "quarterly_excess_direction",
+     "trend field renamed"),
 )
 
 
@@ -63,6 +67,11 @@ def check_pack(path: Path) -> bool:
         problems.append("benchmark_sector_context.benchmark_return present")
     if summary.get("driver_label") == "interaction":
         problems.append("driver_label is interaction")
+    sectors = doc.get("sector_attribution", [])
+    if sectors and "credit" not in sectors[0]:
+        problems.append("sector credit missing")
+    if "trend_direction" in doc.get("performance_trends", {}):
+        problems.append("trend_direction present")
 
     print(f"  {'OK   ' if not problems else 'STALE'}  {name[:44]:44s} "
           f"{'; '.join(problems)}")
