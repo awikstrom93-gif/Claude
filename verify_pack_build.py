@@ -3,8 +3,8 @@ Confirm a build ran on the current code.
 
 Two checks, either or both:
 
-    python verify_pack_build.py                     # check the source files
-    python verify_pack_build.py "2026 Q2/packs"     # also check the built packs
+    python verify_pack_build.py                     # find the packs and check them
+    python verify_pack_build.py "2026 Q2/packs"     # or point it at them
 
 Every line prints OK or STALE. A STALE pack was written by an older
 build_attribution_json.py whatever the source files now say, so rebuild.
@@ -44,8 +44,8 @@ def check_code(root: Path) -> bool:
 
 
 def check_pack(path: Path) -> bool:
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    name = doc.get("manager") or doc.get("strategy_name") or path.stem
+    doc = json.loads(path.read_text(encoding="utf-8-sig"))
+    name = path.name
     summary = doc.get("attribution_summary", {})
     trends = doc.get("attribution_trends", {})
     context = doc.get("benchmark_sector_context", {})
@@ -64,9 +64,23 @@ def check_pack(path: Path) -> bool:
     if summary.get("driver_label") == "interaction":
         problems.append("driver_label is interaction")
 
-    print(f"  {'OK   ' if not problems else 'STALE'}  {str(name)[:38]:38s} "
+    print(f"  {'OK   ' if not problems else 'STALE'}  {name[:44]:44s} "
           f"{'; '.join(problems)}")
     return not problems
+
+
+def find_pack_dirs(root: Path) -> list:
+    """Any directory named packs within three levels of the script."""
+    found = set()
+    for pattern in ("packs", "*/packs", "*/*/packs"):
+        found.update(p for p in root.glob(pattern) if p.is_dir())
+    return sorted(found)
+
+
+def packs_in(directory: Path) -> list:
+    return [
+        p for p in sorted(directory.glob("*.json")) if not p.name.startswith("_")
+    ]
 
 
 def main() -> int:
@@ -75,14 +89,40 @@ def main() -> int:
 
     if len(sys.argv) > 1:
         target = Path(sys.argv[1])
-        packs = sorted(target.glob("*.json")) if target.is_dir() else [target]
-        packs = [p for p in packs if not p.name.startswith("_")]
-        print(f"\nPACKS ({len(packs)} under {target})")
-        if not packs:
-            print("  none found - check the path")
+        if not target.exists():
+            print(f"\nPACKS\n  {target} does not exist.")
+            candidates = find_pack_dirs(root)
+            if candidates:
+                print("  Pack directories found under this folder:")
+                for directory in candidates:
+                    count = len(packs_in(directory))
+                    print(f"    {directory.relative_to(root)}  ({count} packs)")
+            else:
+                print("  No directory named 'packs' found under this folder either.")
+                print("  Phase 2 may not have written any - check the build output.")
+            return 1
+        directories = [target] if target.is_dir() else []
+        singles = [] if target.is_dir() else [target]
+    else:
+        directories = find_pack_dirs(root)
+        singles = []
+        if not directories:
+            print("\nPACKS\n  No directory named 'packs' found under this folder.")
+            print("  Phase 2 may not have written any - check the build output.")
+            return 1
+
+    for directory in directories:
+        found = packs_in(directory)
+        print(f"\nPACKS ({len(found)} in {directory})")
+        if not found:
+            print("  directory is empty")
             ok = False
-        for pack in packs:
+        for pack in found:
             ok = check_pack(pack) and ok
+
+    for pack in singles:
+        print(f"\nPACKS (1 file)")
+        ok = check_pack(pack) and ok
 
     print("\n" + ("All current." if ok else "Something is stale - see above."))
     return 0 if ok else 1
