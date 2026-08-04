@@ -2372,12 +2372,122 @@ def material_cash_only(cash: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# --- Manager profiles ---------------------------------------------------------
+# How each strategy is built, so the commentary can say whether a quarter's
+# result was consistent with the process. The file is optional; a manager
+# without an entry simply gets no process context, which is the correct
+# outcome - inferring a philosophy from one quarter of attribution is the
+# error this whole pipeline exists to prevent.
+PROFILE_FILENAMES: Tuple[str, ...] = (
+    "Manager Profiles.txt",
+    "Manager_Profiles.txt",
+)
+PROFILE_BODY_MARKER = "PROFILES"
+PROFILE_ALIAS_PREFIX = "applies to:"
+# A line beginning with one of these continues the current entry. Anything else
+# starts a new one, which is what lets a heading be any manager name at all.
+PROFILE_SECTION_LABELS: Tuple[str, ...] = (
+    "PHILOSOPHY",
+    "BUY CRITERIA",
+    "PORTFOLIO CONSTRUCTION",
+    "CONSTRUCTION",
+    "SELF-IMPOSED PARAMETERS",
+    "WILL NOT OWN",
+    "SELL DISCIPLINE",
+    "BENCHMARK",
+)
+
+
+def find_profile_file(quarter_folder: Path, input_root: Path) -> Optional[Path]:
+    """The quarter folder wins, so one quarter can be rebuilt with older text."""
+    for folder in (quarter_folder, input_root):
+        for name in PROFILE_FILENAMES:
+            candidate = folder / name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def parse_manager_profiles(
+    path: Path,
+) -> Tuple[Dict[str, str], List[Tuple[str, List[str]]]]:
+    """
+    Read the profiles file into {lookup key: entry text}.
+
+    Returns that map and the raw (heading, keys) pairs so the caller can report
+    entries that matched nothing - a profile with a misspelled heading is
+    invisible at read time and silently absent at write time, which is exactly
+    the failure this project keeps designing out.
+
+    Matching is exact on the normalised name, never fuzzy. A strategy written
+    once but held through several share classes lists them on an "Applies to:"
+    line; nothing is inferred from a shared prefix.
+    """
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    lines = text.splitlines()
+
+    start = 0
+    for index, line in enumerate(lines):
+        if line.strip().upper() == PROFILE_BODY_MARKER:
+            start = index + 1
+    body = lines[start:]
+
+    entries_full: List[Tuple[str, List[str], str]] = []
+    heading: Optional[str] = None
+    aliases: List[str] = []
+    buffer: List[str] = []
+
+    def commit() -> None:
+        nonlocal heading, aliases, buffer
+        if heading is not None:
+            entry = "\n".join(buffer).strip()
+            if entry:
+                entries_full.append((heading, aliases.copy(), entry))
+        heading, aliases, buffer = None, [], []
+
+    for raw in body:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if heading is not None:
+                buffer.append("")
+            continue
+        if stripped.startswith("<"):
+            continue
+        upper = stripped.upper()
+        if any(upper.startswith(label) for label in PROFILE_SECTION_LABELS):
+            if heading is not None:
+                buffer.append(line)
+            continue
+        if stripped.lower().startswith(PROFILE_ALIAS_PREFIX):
+            names = stripped.split(":", 1)[1]
+            aliases.extend(
+                part.strip() for part in names.replace(";", ",").split(",") if part.strip()
+            )
+            continue
+        commit()
+        heading = stripped
+        buffer = [stripped]
+
+    commit()
+
+    lookup: Dict[str, str] = {}
+    reported: List[Tuple[str, List[str]]] = []
+    for name, alias_list, entry in entries_full:
+        keys = [normalize_lookup_name(n) for n in [name, *alias_list] if n]
+        for key in keys:
+            lookup.setdefault(key, entry)
+        reported.append((name, keys))
+    return lookup, reported
+
+
 def build_pack(
     manager_record: Dict[str, Any],
     asset_class_document: Dict[str, Any],
     attribution: Dict[str, Any],
     quarter: Quarter,
     generated_at: str,
+    manager_profiles: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Assemble the single file a battle book is written from."""
     market_periods = asset_class_document.get("market_data_periods", {})
@@ -2402,6 +2512,20 @@ def build_pack(
         "pack_version": SCRIPT_VERSION,
         "manager": manager_record.get("manager", ""),
         "manager_lookup_key": normalize_lookup_name(manager_record.get("manager")),
+        # The profile is embedded rather than retrieved so only this manager's
+        # entry ever reaches the agent: no name matching at write time, no
+        # neighbouring strategy to pick up by mistake, and no cost for the
+        # eleven profiles this book does not need. Absent where there is no
+        # entry, which the agent reads as "write without process context".
+        **(
+            {"manager_profile": (manager_profiles or {})[
+                normalize_lookup_name(manager_record.get("manager"))
+            ]}
+            if (manager_profiles or {}).get(
+                normalize_lookup_name(manager_record.get("manager"))
+            )
+            else {}
+        ),
         "strategy_name": manager_record.get("strategy_name", ""),
         "ticker": manager_record.get("ticker", ""),
         "portfolio_managers": manager_record.get("portfolio_managers", []),
@@ -2712,6 +2836,22 @@ def build_attribution(
     pack_folder = output_folder / PACK_OUTPUT_SUBFOLDER
     input_folder = quarter_folder / ATTRIBUTION_INPUT_SUBFOLDER
 
+    manager_profiles: Dict[str, str] = {}
+    profile_entries: List[Tuple[str, List[str]]] = []
+    profiles_used: set = set()
+    profile_path = find_profile_file(quarter_folder, input_root)
+    if profile_path is not None:
+        manager_profiles, profile_entries = parse_manager_profiles(profile_path)
+        LOG.info(
+            "Loaded %d manager profile(s) from %s",
+            len(profile_entries),
+            profile_path.name,
+        )
+    else:
+        LOG.info(
+            "No manager profiles file found; packs will carry no process context."
+        )
+
     phase1 = load_phase1_index(output_folder)
     LOG.info(
         "Loaded Phase 1 index: %d managers across %d asset classes",
@@ -2792,12 +2932,20 @@ def build_attribution(
         asset_class_document = phase1.documents.get(manager_ref.asset_class_key, {})
         manager_record = asset_class_document.get("managers", [])[manager_ref.index]
         pack = build_pack(
-            manager_record, asset_class_document, document, quarter, generated_at
+            manager_record,
+            asset_class_document,
+            document,
+            quarter,
+            generated_at,
+            manager_profiles,
         )
         pack_path = pack_folder / f"{slug}.json"
         write_json(pack_path, pack, compact=True)
         pack_relative = f"{PACK_OUTPUT_SUBFOLDER}/{slug}.json"
         packs_written.append(pack_relative)
+
+        if pack.get("manager_profile"):
+            profiles_used.add(normalize_lookup_name(manager_ref.manager))
 
         pack_entries.append({
             "manager": manager_ref.manager,
@@ -2901,6 +3049,30 @@ def build_attribution(
             LOG.warning(message)
             global_warnings.append(message)
 
+    # A profile whose heading is misspelled matches nothing and is invisible
+    # unless it is named here: the pack is written without it and the battle
+    # book simply carries no process context, which looks exactly like a
+    # manager that was never profiled.
+    unmatched_profiles = [
+        name
+        for name, keys in profile_entries
+        if not any(key in profiles_used for key in keys)
+    ]
+    if unmatched_profiles:
+        message = (
+            f"Manager profile(s) matched no manager built this quarter: "
+            f"{', '.join(unmatched_profiles)}. Check the heading against the "
+            f"manager name in the pack, or add an 'Applies to:' line."
+        )
+        LOG.warning(message)
+        global_warnings.append(message)
+
+    profiled = len(profiles_used)
+    if profile_entries:
+        LOG.info(
+            "%d of %d pack(s) carry a manager profile.", profiled, len(packs_written)
+        )
+
     patch_summary: Dict[str, Any] = {}
     if patch_phase1:
         patch_summary = patch_asset_class_files(phase1, linked, output_folder)
@@ -2930,6 +3102,12 @@ def build_attribution(
         "asset_class_patch_summary": patch_summary,
         "phase1_patched": patch_phase1,
         "workbooks": workbook_reports,
+        "manager_profiles": {
+            "file": profile_path.name if profile_path else None,
+            "entries": len(profile_entries),
+            "packs_with_profile": profiled,
+            "unmatched_entries": unmatched_profiles,
+        },
         "warnings": global_warnings,
     }
     write_json(output_folder / DEBUG_REPORT_FILENAME, report)
