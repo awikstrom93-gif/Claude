@@ -31,6 +31,8 @@ CODE_CHECKS = (
      "market lists filtered by excess"),
     ("build_quarterly_json.py", "quarterly_excess_direction",
      "trend field renamed"),
+    ("build_quarterly_json.py", "Factors and industries only",
+     "nine-sector market series dropped"),
 )
 
 
@@ -74,6 +76,13 @@ def check_pack(path: Path) -> bool:
         problems.append("second_highest_returning_sector missing")
     if "contributors_character" in doc.get("concentration", {}):
         problems.append("concentration character labels present")
+    # Two sector taxonomies in one pack put Energy at 1.64% in the market
+    # paragraph and -1.85% in the next. GICS is the only one left.
+    if "top_10_sectors" in doc.get("summaries", {}):
+        problems.append("nine-sector market series present")
+    if any(k.endswith("_sector_selected_quarter") or k.endswith("_sector_ytd")
+           for k in doc.get("market_trends", {})):
+        problems.append("market_trends names a non-GICS sector")
     if summary.get("driver_label") == "interaction":
         problems.append("driver_label is interaction")
     sectors = doc.get("sector_attribution", [])

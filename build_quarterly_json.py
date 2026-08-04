@@ -2147,16 +2147,12 @@ def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, 
     return {
         key: value
         for key, value in {
-        "best_sector_selected_quarter": pick("selected_quarter", "sectors", True),
-        "worst_sector_selected_quarter": pick("selected_quarter", "sectors", False),
-        "best_sector_ytd": pick("ytd", "sectors", True),
-        "worst_sector_ytd": pick("ytd", "sectors", False),
+        # No sector entries: those named the nine-sector Russell scheme, and a
+        # sector named in a battle book must be a GICS one. See build_summaries.
         "best_factor_selected_quarter": pick("selected_quarter", "factors", True),
         "worst_factor_selected_quarter": pick("selected_quarter", "factors", False),
         "best_industry_selected_quarter": pick("selected_quarter", "industries", True),
         "worst_industry_selected_quarter": pick("selected_quarter", "industries", False),
-        "best_sector_trailing_1_year": pick("trailing_1_year", "sectors", True),
-        "worst_sector_trailing_1_year": pick("trailing_1_year", "sectors", False),
         }.items()
         if value
     }
@@ -2211,11 +2207,21 @@ def summarize_series(rows: Sequence[Dict[str, Any]], top: bool) -> List[Dict[str
 
 
 def build_summaries(market_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Factors and industries only. The market export's sector series follows a
+    nine-sector Russell scheme - Technology, Basic Materials, no Communication
+    Services, no Real Estate - and attribution is GICS. A battle book that names
+    a sector must name a GICS one, so shipping a second taxonomy only ever
+    produced collisions: one book gave Energy at 1.64% in its market paragraph
+    and -1.85% in the next, and another gave Consumer Staples and Energy the
+    same -2.27% one paragraph apart, from the two schemes. The two cannot be
+    reconciled - they do not even carve the market into the same sectors - so
+    the GICS series in benchmark_sector_context is the only sector data the
+    pack now carries.
+    """
     return {
         "top_10_factors": summarize_series(market_data["factors"], top=True),
         "bottom_10_factors": summarize_series(market_data["factors"], top=False),
-        "top_10_sectors": summarize_series(market_data["sectors"], top=True),
-        "bottom_10_sectors": summarize_series(market_data["sectors"], top=False),
         "top_10_industries": summarize_series(market_data["industries"], top=True),
         "bottom_10_industries": summarize_series(market_data["industries"], top=False),
     }
