@@ -1231,9 +1231,7 @@ def build_cash_attribution(bucket_rows: Sequence[RawRow]) -> Dict[str, Any]:
     }
 
 
-def build_benchmark_sector_context(
-    sector_rows: Sequence[RawRow], total_values: Dict[str, Optional[float]]
-) -> Dict[str, Any]:
+def build_benchmark_sector_context(sector_rows: Sequence[RawRow]) -> Dict[str, Any]:
     """
     The benchmark's own GICS sector composition, for the market backdrop.
 
@@ -1244,7 +1242,6 @@ def build_benchmark_sector_context(
     Real Estate), plus each sector's index weight and its contribution to the
     index return.
     """
-    sector_contribution_total = round_pct(total_values.get("benchmark_return"))
     sectors: List[Dict[str, Any]] = []
 
     for raw in sector_rows:
@@ -1276,16 +1273,19 @@ def build_benchmark_sector_context(
         reverse=True,
     )
 
+    # The sum of the eleven sector contributions used to ship here, first as
+    # "benchmark_return" and then, when that name made five drafts out of five
+    # quote two different returns for one index, as "sector_contribution_total".
+    # The rename fixed the label and not the problem. It is not the index return
+    # - the two differ, 27.44 against 25.71 for the Russell 2000 Growth in one
+    # quarter, because the performance and attribution exports do not measure
+    # the benchmark the same way - and the difference is the residual, which the
+    # agent is forbidden to mention. So the figure could only ever reach the page
+    # unexplained: "more than ten points of the 15.27 points the eleven benchmark
+    # sectors contributed in aggregate", sitting beside an index that returned
+    # 16.74%. A denominator no reader can reconcile is worse than no denominator.
+    # The headline benchmark_return is the only index return.
     return {
-        # Named for what it is: the sum of the eleven sector contributions in
-        # this workbook. It is NOT the index return. The two differ - 27.44
-        # against 25.71 for the Russell 2000 Growth in one quarter - because the
-        # performance export and the attribution export do not measure the
-        # benchmark the same way. Emitted as "benchmark_return" it read as the
-        # index's return, and five drafts out of five quoted both figures in the
-        # same battle book, so a reader saw one index returning two numbers a
-        # page apart. The headline benchmark_return is the only index return.
-        "sector_contribution_total": sector_contribution_total,
         "sectors_positive": sum(
             1 for s in sectors if (s["benchmark_return"] or 0) > 0
         ),
@@ -2126,7 +2126,7 @@ def build_attribution_document(
         # Placed before the manager's attribution because commentary runs
         # market -> attribution -> sector -> security.
         "benchmark_sector_context": build_benchmark_sector_context(
-            parsed["sector_rows"], total_values
+            parsed["sector_rows"]
         ),
         "attribution_summary": build_attribution_summary(total_values),
         "sector_attribution": sectors,

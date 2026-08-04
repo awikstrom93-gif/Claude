@@ -19,8 +19,10 @@ from pathlib import Path
 CODE_CHECKS = (
     ("build_attribution_json.py", "TOP_N_SECURITIES = 5",
      "five movers a side"),
-    ("build_attribution_json.py", "sector_contribution_total",
-     "benchmark sector total renamed"),
+    ("build_attribution_json.py", "A denominator no reader can reconcile",
+     "benchmark sector total removed"),
+    ("build_attribution_json.py", "second_highest_returning_sector",
+     "two winning benchmark sectors named"),
     ("build_attribution_json.py", "Interaction is deliberately not a candidate",
      "interaction cannot be the driver"),
     ("build_attribution_json.py", "def resolve_effect_credit",
@@ -63,8 +65,15 @@ def check_pack(path: Path) -> bool:
         problems.append("primary_driver present")
     if "driver_stability" in trends:
         problems.append("driver_stability present")
-    if "benchmark_return" in context:
-        problems.append("benchmark_sector_context.benchmark_return present")
+    for key in ("benchmark_return", "sector_contribution_total"):
+        if key in context:
+            problems.append(f"benchmark_sector_context.{key} present")
+    if "best_sector" in context:
+        problems.append("best_sector present")
+    if context and "second_highest_returning_sector" not in context:
+        problems.append("second_highest_returning_sector missing")
+    if "contributors_character" in doc.get("concentration", {}):
+        problems.append("concentration character labels present")
     if summary.get("driver_label") == "interaction":
         problems.append("driver_label is interaction")
     sectors = doc.get("sector_attribution", [])
