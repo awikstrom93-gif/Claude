@@ -2538,7 +2538,6 @@ def build_pack(
         # --- market backdrop --------------------------------------------------
         "reference_indexes": asset_class_document.get("reference_indexes", []),
         "summaries": asset_class_document.get("summaries", {}),
-        "market_trends": asset_class_document.get("market_trends", {}),
         **extra_market,
         # --- attribution ------------------------------------------------------
         "benchmark_sector_context": attribution.get("benchmark_sector_context", {}),

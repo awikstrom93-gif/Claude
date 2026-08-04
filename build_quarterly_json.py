@@ -2130,32 +2130,16 @@ def build_market_period_view(
     return view
 
 
-def build_market_trends(market_periods: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Headline best/worst movers, pre-computed so the agent need not sort."""
-
-    def pick(period_key: str, category: str, best: bool) -> str:
-        summaries = market_periods.get(period_key, {}).get("summaries", {})
-        rows = summaries.get(f"{'top' if best else 'bottom'}_10_{category}", [])
-        return rows[0]["display_name"] if rows else ""
-
-    # A side can now be legitimately empty: US Small Growth carries only three
-    # industry series and in a strong quarter all three beat the benchmark, so
-    # there is no worst industry to name. Drop the key rather than ship it
-    # blank - an empty string here is a field the agent can write into a
-    # sentence, and a named laggard that outperformed is the bug this whole
-    # change exists to remove.
-    return {
-        key: value
-        for key, value in {
-        # No sector entries: those named the nine-sector Russell scheme, and a
-        # sector named in a battle book must be a GICS one. See build_summaries.
-        "best_factor_selected_quarter": pick("selected_quarter", "factors", True),
-        "worst_factor_selected_quarter": pick("selected_quarter", "factors", False),
-        "best_industry_selected_quarter": pick("selected_quarter", "industries", True),
-        "worst_industry_selected_quarter": pick("selected_quarter", "industries", False),
-        }.items()
-        if value
-    }
+# market_trends used to sit here: best and worst factor and industry for the
+# quarter, pre-picked so the agent need not sort. It named the leader and
+# nothing else, and every one of those names was already summaries[0] of a list
+# that carries the return beside it. Given both, the agent reached for the
+# shorter field and wrote figure-less prose - "momentum led among small-cap
+# factors, with the S&P SmallCap 600 Momentum index the strongest performer" -
+# in book after book, while quoting a return for every security in the same
+# draft. A rule requiring the figure did not shift it, because the field it was
+# reading has no figure to give. Removed: the ranked lists are already sorted,
+# so summaries.top_10_factors[0] is the leader and its return comes with it.
 
 
 # =============================================================================
@@ -2449,7 +2433,6 @@ def build_quarter(
             "industries": selected_view["industries"],
         }
         summaries = selected_view["summaries"]
-        market_trends = build_market_trends(market_data_periods)
 
         manager_lookup = build_manager_lookup(parsed["managers"], file_warnings)
 
@@ -2473,9 +2456,8 @@ def build_quarter(
             # Selected-quarter aliases, unchanged from V1.
             "market_data": market_data,
             "summaries": summaries,
-            # Multi-period market context and pre-computed headline movers.
+            # Multi-period market context.
             "market_data_periods": market_data_periods,
-            "market_trends": market_trends,
             "warnings": file_warnings,
         }
 

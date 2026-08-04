@@ -33,6 +33,8 @@ CODE_CHECKS = (
      "trend field renamed"),
     ("build_quarterly_json.py", "Factors and industries only",
      "nine-sector market series dropped"),
+    ("build_quarterly_json.py", "market_trends used to sit here",
+     "name-only movers dropped"),
 )
 
 
@@ -80,9 +82,10 @@ def check_pack(path: Path) -> bool:
     # paragraph and -1.85% in the next. GICS is the only one left.
     if "top_10_sectors" in doc.get("summaries", {}):
         problems.append("nine-sector market series present")
-    if any(k.endswith("_sector_selected_quarter") or k.endswith("_sector_ytd")
-           for k in doc.get("market_trends", {})):
-        problems.append("market_trends names a non-GICS sector")
+    # market_trends named the leaders without their returns, and the agent
+    # preferred it to the ranked lists that carry both.
+    if "market_trends" in doc:
+        problems.append("market_trends present")
     if summary.get("driver_label") == "interaction":
         problems.append("driver_label is interaction")
     sectors = doc.get("sector_attribution", [])
