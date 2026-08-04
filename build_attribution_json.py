@@ -344,11 +344,6 @@ MATERIALITY_THRESHOLD_PP = 0.05
 # the list length now matches the rule instead of competing with it.
 TOP_N_SECURITIES = 5
 TOP_N_SECTORS = 5
-CONCENTRATION_TOP_N = 5
-# Five names out of several hundred producing this share of one side's effect is
-# concentrated by any reasonable reading. Precomputed so the agent never has to
-# form an impression of breadth from the numbers.
-CONCENTRATION_SHARE_THRESHOLD = 0.40
 
 # --- Classification thresholds ------------------------------------------------
 # Active weight (pp) within this band counts as neutral rather than over/under.
@@ -362,7 +357,6 @@ DRIVER_MIN_DOMINANCE_RATIO = 1.25
 # --- Output shaping -----------------------------------------------------------
 ROUND_PCT_DECIMALS = 4
 ROUND_BPS_DECIMALS = 1
-ROUND_SHARE_DECIMALS = 4
 
 # --- Reconciliation tolerances (debug only) -----------------------------------
 RECONCILE_TOLERANCE_PP = 0.05
@@ -438,10 +432,6 @@ def to_bps(percent_value: Optional[float]) -> Optional[float]:
     if percent_value is None:
         return None
     return round(percent_value * 100, ROUND_BPS_DECIMALS)
-
-
-def round_share(value: Optional[float]) -> Optional[float]:
-    return None if value is None else round(value, ROUND_SHARE_DECIMALS)
 
 
 def cell_text(worksheet: Worksheet, row: int, column: int) -> Optional[str]:
@@ -1681,55 +1671,29 @@ def build_attribution_trends(periods: Dict[str, Dict[str, Any]]) -> Dict[str, An
     }
 
 
-def build_concentration(
-    securities: Sequence[Dict[str, Any]], sectors: Sequence[Dict[str, Any]]
-) -> Dict[str, Any]:
+def build_concentration(sectors: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Concentrated or broad-based?
+    How many GICS sectors helped and how many hurt.
 
-    Computed over the FULL security universe inside GICS sectors, before
-    materiality filtering, so the denominators are honest.
+    Counted over the FULL sector list, before materiality filtering, so the
+    two numbers add to the sector count.
     """
-    effects = [
-        record["total_effect"]
-        for record in securities
-        if record.get("total_effect") is not None
-    ]
-    positives = sorted((e for e in effects if e > 0), reverse=True)
-    negatives = sorted((e for e in effects if e < 0))
-
-    def share(part: float, whole: float) -> Optional[float]:
-        return round_share(part / whole) if whole else None
-
     sector_effects = [
         s["total_effect"] for s in sectors if s.get("total_effect") is not None
     ]
 
-    contributors_share = share(sum(positives[:CONCENTRATION_TOP_N]), sum(positives))
-    detractors_share = share(
-        abs(sum(negatives[:CONCENTRATION_TOP_N])), abs(sum(negatives))
-    )
-
-    def character(value: Optional[float]) -> Optional[str]:
-        """Concentrated or broad-based, decided here rather than by the agent."""
-        if value is None:
-            return None
-        return (
-            "concentrated"
-            if value >= CONCENTRATION_SHARE_THRESHOLD
-            else "broad_based"
-        )
-
-    # Only the verdicts ship. The underlying shares and security counts are
-    # precisely what OUTPUT forbids quoting - "do not quote shares of total
-    # effect or counts of securities" - and leaving them visible produced
-    # "the top five detractors accounting for roughly 31% of negative effect"
-    # twice in one draft. The share is what the character label is FOR; the
-    # agent never needs both. Sector counts stay: those are legitimate
-    # commentary material and have been used correctly.
+    # The shares themselves never shipped: they are what OUTPUT forbids quoting -
+    # "do not quote shares of total effect or counts of securities" - and leaving
+    # them visible produced "the top five detractors accounting for roughly 31%
+    # of negative effect" twice in one draft. The character verdicts that
+    # replaced them fared no better. Given "concentrated" and "broad_based" the
+    # agent wrote "the detractors were concentrated, clustered heavily in a
+    # single sector, while the contributors were more broadly spread across the
+    # portfolio" - a sentence carrying no figure, in a book where the sector
+    # rankings had already said it with numbers. A label the agent can only
+    # restate is a label worth removing. Sector counts stay: those are
+    # legitimate commentary material and have been used correctly.
     return {
-        "contributors_character": character(contributors_share),
-        "detractors_character": character(detractors_share),
         "number_of_sectors_positive": sum(1 for e in sector_effects if e > 0),
         "number_of_sectors_negative": sum(1 for e in sector_effects if e < 0),
     }
@@ -2174,7 +2138,7 @@ def build_attribution_document(
         "sector_rankings": build_sector_rankings(sectors),
         "attribution_periods": periods,
         "attribution_trends": build_attribution_trends(periods),
-        "concentration": build_concentration(all_securities, sectors),
+        "concentration": build_concentration(sectors),
     }
 
     # Benchmark agreement is a linkage check, not commentary material.
