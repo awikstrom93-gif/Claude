@@ -1293,8 +1293,20 @@ def build_benchmark_sector_context(
             1 for s in sectors if (s["benchmark_return"] or 0) < 0
         ),
         "sector_count": len(sectors),
-        "best_sector": ranked[0]["sector"] if ranked else None,
-        "worst_sector": ranked[-1]["sector"] if ranked else None,
+        # Three drafts running, the agent named the second-best sector as the
+        # best: "Industrials was the strongest benchmark sector at 19.54%" with
+        # Information Technology at 19.68% two sentences earlier, in the same
+        # table, with best_sector saying so outright. Banning the ranking did
+        # not stop it, because the impulse is sound - a market paragraph names
+        # the top performers, and IT had already been spent as the largest
+        # contributor, so the runner-up got written up as the leader. The pack
+        # named one winner where the commentary wanted two. So name two, and
+        # say in the key which is which.
+        "highest_returning_sector": ranked[0]["sector"] if ranked else None,
+        "second_highest_returning_sector": (
+            ranked[1]["sector"] if len(ranked) > 1 else None
+        ),
+        "lowest_returning_sector": ranked[-1]["sector"] if ranked else None,
         "largest_contributor": contributors[0]["sector"] if contributors else None,
         "largest_detractor": contributors[-1]["sector"] if contributors else None,
         "sectors": sectors,
